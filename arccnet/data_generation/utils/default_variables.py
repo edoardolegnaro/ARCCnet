@@ -5,7 +5,13 @@ from datetime import datetime
 # ---- JSOC
 JSOC_DEFAULT_EMAIL = "pjwright@stanford.edu"
 JSOC_DATE_FORMAT = "%Y.%m.%d_%H:%M:%S"
-JSOC_BASE_URL = "http://jsoc.stanford.edu/"
+JSOC_BASE_URL = "http://jsoc.stanford.edu"
+
+# -- Magnetograms
+MDI_DATE_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
+MDI_SEG_COL = "data"
+HMI_DATE_FORMAT = "%Y-%m-%dT%H:%M:%S.%fZ"
+HMI_SEG_COL = "magnetogram"
 
 # ---- Observation Dates
 DATA_START_TIME = datetime(1995, 1, 1, 0, 0, 0)
@@ -129,6 +135,10 @@ NOAA_SRS_INTERMEDIATE_DATA_CSV = os.path.join(NOAA_SRS_INTERMEDIATE_DIR, "clean_
 
 HMI_MAG_DIR = os.path.join(DATA_DIR_RAW, "hmi_mag")
 MDI_MAG_DIR = os.path.join(DATA_DIR_RAW, "mdi_mag")
+
+MAG_INTERMEDIATE_DIR = os.path.join(DATA_DIR_INTERMEDIATE, "mag")
+MAG_INTERMEDIATE_DATA_CSV = os.path.join(MAG_INTERMEDIATE_DIR, "clean_catalog.csv")
+MAG_INTERMEDIATE_DATA_DIR = os.path.join(MAG_INTERMEDIATE_DIR, "data")
 
 
 if __name__ == "__main__":
