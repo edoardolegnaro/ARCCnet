@@ -4,7 +4,7 @@ import arccnet.data_generation.utils.default_variables as dv
 from arccnet.data_generation.magnetograms.base_magnetogram import BaseMagnetogram
 from arccnet.data_generation.magnetograms.utils import datetime_to_jsoc
 
-__all__ = ["HMIMagnetogram"]
+__all__ = ["HMIMagnetogram", "HMIContinuum"]
 
 
 class HMIMagnetogram(BaseMagnetogram):
@@ -62,4 +62,39 @@ class HMIMagnetogram(BaseMagnetogram):
         str:
             HMI directory path
         """
-        return dv.HMI_MAG_DIR
+        return dv.HMI_MAG_RAW_CSV
+
+
+class HMIContinuum(HMIMagnetogram):
+    def __init__(self):
+        super().__init__()
+
+    @property
+    def series_name(self) -> str:
+        """
+        Returns
+        -------
+        str:
+            JSOC series name
+        """
+        return "hmi.Ic_720s"
+
+    @property
+    def segment_column_name(self) -> str:
+        """
+        Returns
+        -------
+        str:
+            Name of the HMI data segment
+        """
+        return "continuum"
+
+    @property
+    def metadata_save_location(self) -> str:
+        """
+        Returns
+        -------
+        str:
+            HMI directory path
+        """
+        return dv.HMI_IC_RAW_CSV
