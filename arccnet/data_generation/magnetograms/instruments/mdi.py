@@ -63,4 +63,4 @@ class MDIMagnetogram(BaseMagnetogram):
         str:
             MDI directory path
         """
-        return dv.MDI_MAG_RAW_CSV
+        return dv.MDI_MAG_DIR

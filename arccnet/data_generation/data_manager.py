@@ -32,17 +32,19 @@ class DataManager:
 
         # instantiate classes
         self.swpc = SWPCCatalog()
+        # !TODO change this into an iterable
         self.hmi = HMIMagnetogram()
         self.mdi = MDIMagnetogram()
 
         # 1. fetch metadata
-        logger.info(">> Fetching Metadata")
+        logger.info(">> Fetching NOAA SRS Metadata")
         self.fetch_metadata()
         logger.info(f"\n{self.srs_raw}")
 
         # 2. clean metadata
-        logger.info(">> Cleaning Metadata")
-        self.clean_metadata()
+        logger.info(">> Cleaning NOAA SRS Metadata")
+        # self.clean_metadata()
+        self.srs_clean = self.swpc.clean_catalog()
         logger.info(f"\n{self.srs_clean}")
 
         # 3. merge metadata sources
@@ -50,10 +52,11 @@ class DataManager:
         self.merge_metadata_sources(tolerance=merge_tolerance)
 
         # 4a. check if image data exists
-        # !TODO implement this
+        # !TODO implement this checking if each file that is expected exists.
 
         # # 4b. download image data
         _ = self.fetch_magnetograms(self.merged_df)
+        # !TODO handle the output... want a csv with the filepaths
 
         logger.info(">> Execution completed successfully")
 
@@ -79,13 +82,13 @@ class DataManager:
             f"MDI Keys: \n{self.mdi_k[['T_REC','T_OBS','DATE-OBS','DATE__OBS','datetime','magnetogram_fits', 'url']]}"
         )  # the date-obs or date-avg
 
-    def clean_metadata(self):
-        """
-        clean data from each instrument
-        """
-
-        # clean the raw SRS catalog
-        self.srs_clean = self.swpc.clean_catalog()
+    # def clean_metadata(self):
+    #     """
+    #     clean metadata from each instrument
+    #     """
+    #
+    #     # clean the raw SRS catalog
+    #     self.srs_clean = self.swpc.clean_catalog()
 
     def merge_metadata_sources(
         self,
@@ -155,7 +158,7 @@ class DataManager:
 
         self.merged_df.to_csv(dv.MAG_INTERMEDIATE_DATA_CSV)
 
-    def fetch_magnetograms(self, mag_df):
+    def fetch_magnetograms(self, mag_df, max_retries=5):
         """
         download the magnetograms using parfive (with one connection),
         and return the list of files
@@ -165,7 +168,7 @@ class DataManager:
         results : List[str]
             List of filepaths (strings) for the downloaded files
         """
-        base_directory_path = Path(dv.MAG_INTERMEDIATE_DATA_DIR)
+        base_directory_path = Path(dv.MAG_RAW_DATA_DIR)
         if not base_directory_path.exists():
             base_directory_path.mkdir(parents=True)
 
@@ -194,9 +197,18 @@ class DataManager:
 
         if len(results.errors) != 0:
             logger.warn(f"results.errors: {results.errors}")
+            # attempt a retry
+            retry_count = 0
+            while len(results.errors) != 0 and retry_count < max_retries:
+                logger.info("retrying...")
+                downloader.retry(results)
+                retry_count += 1
+            if len(results.errors) != 0:
+                logger.error("Failed after maximum retries.")
+            else:
+                logger.info("Errors resolved after retry.")
         else:
             logger.info("No errors reported by parfive")
-            # !TODO may want to retry
 
         return results
 
