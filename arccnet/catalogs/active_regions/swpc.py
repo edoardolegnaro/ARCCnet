@@ -430,8 +430,12 @@ class SWPCCatalog:
                     f"Error parsing file parsed columns: {srs_table.colnames} "
                     f"do not match expected columns: {expected_colnames}."
                 )
-            srs_table.rename_columns(expected_colnames, [name.lower().replace(" ", "_") for name in expected_colnames])
-            srs_table.rename_columns(["z", "mag_type"], ["mcintosh_class", "magnetic_class"])
+                srs_table = False
+            else:
+                srs_table.rename_columns(
+                    expected_colnames, [name.lower().replace(" ", "_") for name in expected_colnames]
+                )
+                srs_table.rename_columns(["z", "mag_type"], ["mcintosh_class", "magnetic_class"])
 
             # Seems can't serialise SkyCoords with different frames or something
             # pos = [SkyCoord(row['longitude'], row['latitude'],  frame=HeliographicStonyhurst,
