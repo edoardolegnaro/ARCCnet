@@ -115,23 +115,31 @@ class BaseMagnetogram(ABC):
 
         # extract the `record` and strip the square brackets to return a T_REC-like time (in TAI)
         self.r_urls = export_response.urls.copy()
+        # `self.r_urls["record"].str.extract(r"\[(.*?)\]")`` will only extract the HARP num from:
+        #   `hmi.sharp_720s[318][2011.01.01_00:00:00_TAI]`
+        # so using r"\[([^\[\]]*?(?=\]))\][^\[\]]*$" to extract last one.
         self.r_urls["extracted_record_timestamp"] = self.r_urls["record"].str.extract(r"\[(.*?)\]")
         # merge on keys['T_REC'] so that there we can later get the files.
         # !TODO add testing for this merge
+
+        # This doesn't work on SHARP data
         keys = pd.merge(
             left=keys, right=self.r_urls, left_on="T_REC", right_on="extracted_record_timestamp", how="left"
         )
 
         # keys["datetime"] = [datetime.datetime.strptime(date, "%Y-%m-%dT%H:%M:%S.%fZ") for date in keys["DATE-OBS"]]
-        keys["datetime"] = [
-            pd.to_datetime(date, format=self.date_format, errors="coerce")
-            for date in keys["DATE-OBS"]  # ensure we want errors="coerce"
-        ]  # According to JSOC: [DATE-OBS] DATE_OBS = T_OBS - EXPTIME/2.0
+        # keys["datetime"] = [
+        #     pd.to_datetime(date, format=self.date_format, errors="coerce")
+        #     for date in keys["DATE-OBS"]  # ensure we want errors="coerce"
+        # ]  # According to JSOC: [DATE-OBS] DATE_OBS = T_OBS - EXPTIME/2.0
+        keys["datetime"] = pd.to_datetime(keys["DATE-OBS"], format=self.date_format, errors="coerce")
 
-        directory_path = Path(self.metadata_save_location)
+        file = Path(self.metadata_save_location)
+        directory_path = file.parent
+        print(file, directory_path)
         if not directory_path.exists():
             directory_path.mkdir(parents=True)
 
-        keys.to_csv(directory_path / "raw.csv")
+        keys.to_csv(file)
 
         return keys

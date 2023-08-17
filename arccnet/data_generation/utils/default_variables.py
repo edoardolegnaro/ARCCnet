@@ -15,7 +15,7 @@ HMI_SEG_COL = "magnetogram"
 
 # ---- Observation Dates
 DATA_START_TIME = datetime(2010, 1, 1, 0, 0, 0)
-DATA_END_TIME = datetime(2010, 12, 31, 0, 0, 0)
+DATA_END_TIME = datetime(2022, 12, 31, 0, 0, 0)
 # SRS data is given at 00:30, valid at 00:00
 
 # -- Valid Classes
@@ -29,6 +29,9 @@ HALE_CLASSES = [
     "Beta-Gamma-Delta",
     "Gamma-Delta",
 ]
+
+X_EXTENT = 800
+Y_EXTENT = 400
 
 MCINTOSH_CLASSES = [
     "Axx",
@@ -116,6 +119,9 @@ BASE_DIR = (
 DATA_DIR = os.path.join(BASE_DIR, "data")
 DATA_DIR_RAW = os.path.join(DATA_DIR, "01_raw")
 DATA_DIR_INTERMEDIATE = os.path.join(DATA_DIR, "02_intermediate")
+DATA_DIR_PROCESSED = os.path.join(DATA_DIR, "03_processed")
+DATA_DIR_FINAL = os.path.join(DATA_DIR, "04_final")
+
 DATA_DIR_LOGS = os.path.join(DATA_DIR, "logs")
 
 DATA_LOGFILE = os.path.join(
@@ -138,19 +144,30 @@ NOAA_SRS_INTERMEDIATE_DATA_CSV = os.path.join(NOAA_SRS_INTERMEDIATE_DIR, "clean_
 MAG_RAW_DIR = os.path.join(DATA_DIR_RAW, "mag")
 
 HMI_MAG_DIR = os.path.join(MAG_RAW_DIR, "hmi")
-# HMI_MAG_RAW_CSV = os.path.join(HMI_MAG_DIR, "raw.csv")
+HMI_MAG_RAW_CSV = os.path.join(HMI_MAG_DIR, "raw.csv")
 
 HMI_IC_DIR = os.path.join(MAG_RAW_DIR, "continuum")
-# HMI_IC_RAW_CSV = os.path.join(HMI_IC_DIR, "raw.csv")
+HMI_IC_RAW_CSV = os.path.join(HMI_IC_DIR, "raw.csv")
+
+HMI_SHARPS_DIR = os.path.join(MAG_RAW_DIR, "sharps")
+HMI_SHARPS_RAW_CSV = os.path.join(HMI_SHARPS_DIR, "raw.csv")
 
 MDI_MAG_DIR = os.path.join(MAG_RAW_DIR, "mdi")
-# MDI_MAG_RAW_CSV = os.path.join(MDI_MAG_DIR, "raw.csv")
+MDI_MAG_RAW_CSV = os.path.join(MDI_MAG_DIR, "raw.csv")
 MAG_RAW_DATA_DIR = os.path.join(MAG_RAW_DIR, "fits")
+MAG_RAW_SHARP_DATA_DIR = os.path.join(MAG_RAW_DIR, "sharp_fits")
 
 MAG_INTERMEDIATE_DIR = os.path.join(DATA_DIR_INTERMEDIATE, "mag")
+MAG_PROCESSED_DIR = os.path.join(DATA_DIR_PROCESSED, "mag")
+MAG_PROCESSED_FITS_DIR = os.path.join(MAG_PROCESSED_DIR, "fits")
+MAG_PROCESSED_SUMMARYPLOTS_DIR = os.path.join(MAG_PROCESSED_DIR, "summary_plots")
+MAG_PROCESSED_QSSUMMARYPLOTS_DIR = os.path.join(MAG_PROCESSED_DIR, "qs_summary_plots")
+MAG_PROCESSED_QSFITS_DIR = os.path.join(MAG_PROCESSED_DIR, "qs_fits")
+
+MAG_INTERMEDIATE_DATA_DIR = os.path.join(MAG_INTERMEDIATE_DIR, "fits")
 
 MAG_INTERMEDIATE_DATA_CSV = os.path.join(MAG_INTERMEDIATE_DIR, "clean_catalog.csv")
-MAG_INTERMEDIATE_DATA_DIR = os.path.join(MAG_INTERMEDIATE_DIR, "data")
+# MAG_INTERMEDIATE_DATA_DIR = os.path.join(MAG_INTERMEDIATE_DIR, "data")
 
 
 if __name__ == "__main__":
