@@ -14,7 +14,7 @@ HMI_DATE_FORMAT = "%Y-%m-%dT%H:%M:%S.%fZ"
 HMI_SEG_COL = "magnetogram"
 
 # ---- Observation Dates
-DATA_START_TIME = datetime(2010, 1, 1, 0, 0, 0)
+DATA_START_TIME = datetime(1995, 1, 1, 0, 0, 0)
 DATA_END_TIME = datetime(2022, 12, 31, 0, 0, 0)
 # SRS data is given at 00:30, valid at 00:00
 
@@ -152,6 +152,9 @@ HMI_IC_RAW_CSV = os.path.join(HMI_IC_DIR, "raw.csv")
 HMI_SHARPS_DIR = os.path.join(MAG_RAW_DIR, "sharps")
 HMI_SHARPS_RAW_CSV = os.path.join(HMI_SHARPS_DIR, "raw.csv")
 
+MDI_SMARPS_DIR = os.path.join(MAG_RAW_DIR, "smarps")
+MDI_SMARPS_RAW_CSV = os.path.join(MDI_SMARPS_DIR, "raw.csv")
+
 MDI_MAG_DIR = os.path.join(MAG_RAW_DIR, "mdi")
 MDI_MAG_RAW_CSV = os.path.join(MDI_MAG_DIR, "raw.csv")
 MAG_RAW_DATA_DIR = os.path.join(MAG_RAW_DIR, "fits")
@@ -166,7 +169,10 @@ MAG_PROCESSED_QSFITS_DIR = os.path.join(MAG_PROCESSED_DIR, "qs_fits")
 
 MAG_INTERMEDIATE_DATA_DIR = os.path.join(MAG_INTERMEDIATE_DIR, "fits")
 
-MAG_INTERMEDIATE_DATA_CSV = os.path.join(MAG_INTERMEDIATE_DIR, "clean_catalog.csv")
+MAG_INTERMEDIATE_HMIMDI_DATA_CSV = os.path.join(MAG_INTERMEDIATE_DIR, "clean_catalog_hmimdi.csv")
+MAG_INTERMEDIATE_HMIMDI_PROCESSED_DATA_CSV = os.path.join(MAG_INTERMEDIATE_DIR, "clean_catalog_hmimdi_processed.csv")
+MAG_INTERMEDIATE_HMISHARPS_DATA_CSV = os.path.join(MAG_INTERMEDIATE_DIR, "clean_catalog_hmisharp.csv")
+MAG_INTERMEDIATE_MDISMARPS_DATA_CSV = os.path.join(MAG_INTERMEDIATE_DIR, "clean_catalog_mdismarp.csv")
 # MAG_INTERMEDIATE_DATA_DIR = os.path.join(MAG_INTERMEDIATE_DIR, "data")
 
 

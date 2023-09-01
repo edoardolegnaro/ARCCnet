@@ -1,18 +1,20 @@
 import random
+import multiprocessing
 from pathlib import Path
 
 import matplotlib
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 import sunpy.map
 from tqdm import tqdm
 
-import astropy.io
 import astropy.units as u
 from astropy.coordinates import SkyCoord
 
 import arccnet.data_generation.utils.default_variables as dv
 from arccnet.data_generation.utils.data_logger import logger
+from arccnet.data_generation.utils.utils import make_relative, save_compressed_map
 
 matplotlib.use("Agg")
 
@@ -21,70 +23,219 @@ __all__ = ["MagnetogramProcessor", "ARExtractor", "QSExtractor"]  # , "ARDetecti
 
 class MagnetogramProcessor:
     """
-    Process Magnetograms
+    Process Magnetograms.
+
+    This class provides methods to process magnetogram data using multiprocessing.
     """
 
-    def __init__(self) -> None:
-        filename = Path(dv.MAG_INTERMEDIATE_DATA_CSV)
+    def __init__(
+        self,
+        csv_in_file: Path = Path(dv.MAG_INTERMEDIATE_HMIMDI_DATA_CSV),
+        csv_out_file: Path = Path(dv.MAG_INTERMEDIATE_HMIMDI_PROCESSED_DATA_CSV),
+        columns: list[str] = None,
+        processed_data_dir: Path = Path(dv.MAG_INTERMEDIATE_DATA_DIR),
+        process_data: bool = True,
+        use_multiprocessing: bool = False,
+    ) -> None:
+        """
+        Reads data paths, processes and saves the data.
+        """
+        logger.info("Instantiated `MagnetogramProcessor`")
+        if columns is None:
+            columns = ["download_path_hmi", "download_path_mdi"]
+        self.processed_data_dir = processed_data_dir
+        self.paths, self.loaded_csv = self._read_columns(columns=columns, csv_file=csv_in_file)
 
-        if filename.exists():
-            self.loaded_data = pd.read_csv(filename)
-            file_list = list(self.loaded_data.url_hmi.dropna().unique()) + list(
-                self.loaded_data.url_mdi.dropna().unique()
+        if process_data:
+            self.processed_paths = self.process_data(
+                use_multiprocessing=use_multiprocessing,
+                paths=self.paths,
+                save_path=self.processed_data_dir,
             )
-            paths = []
-            for url in file_list:
-                filename = Path(url).name  # Extract the filename from the URL
-                file_path = Path(dv.MAG_RAW_DATA_DIR) / filename  # Join the path and filename
-                paths.append(file_path)
-        else:
-            raise FileNotFoundError(f"{filename} does not exist.")
 
-        base_directory_path = Path(dv.MAG_INTERMEDIATE_DATA_DIR)
+            # Map processed paths to original DataFrame using Path.name
+            processed_path_mapping = {path.name: path for path in self.processed_paths}
+            for column in columns:
+                self.loaded_csv[f"processed_{column}"] = self.loaded_csv.apply(
+                    lambda row: processed_path_mapping.get(Path(row[column]).name, np.nan)
+                    if pd.notna(row[column])
+                    else np.nan,
+                    axis=1,
+                )
+
+            # should probably allow to csv to be a value
+            self.loaded_csv.to_csv(csv_out_file, index=False)
+
+    def _read_columns(
+        self,
+        columns: list[str] = ["download_path_hmi", "download_path_mdi"],
+        csv_file=Path(dv.MAG_INTERMEDIATE_HMIMDI_DATA_CSV),
+    ):
+        """
+        Read and prepare data paths from CSV file.
+
+        Parameters
+        ----------
+        url_columns: list[str]
+            list of column names (str).
+
+        csv_file: Path
+            location of the csv file to read.
+
+        Returns
+        -------
+        paths: list[Path]
+            List of data file paths.
+        """
+
+        if csv_file.exists():
+            loaded_data = pd.read_csv(csv_file)
+            file_list = [column for col in columns for column in loaded_data[col].dropna().unique()]
+            paths = [Path(path) if isinstance(path, str) else np.nan for path in file_list]
+
+            existing_paths = [path for path in paths if path.exists()]  # check if the raw files exist
+            if len(existing_paths) < len(paths):
+                missing_paths = [str(path) for path in paths if path not in existing_paths]
+                raise FileNotFoundError(f"The following paths do not exist: {', '.join(missing_paths)}")
+        else:
+            raise FileNotFoundError(f"{csv_file} does not exist.")
+
+        return paths, loaded_data
+
+    def process_data(self, use_multiprocessing: bool = True, paths=None, save_path=None):
+        """
+        Process data using multiprocessing.
+        """
+        # if paths is None:
+        #     paths = self.paths
+
+        if save_path is None:
+            base_directory_path = self.processed_data_dir
+        else:
+            base_directory_path = save_path
+
         if not base_directory_path.exists():
             base_directory_path.mkdir(parents=True)
 
-        self._process_and_save_data(paths, dir=Path(dv.MAG_INTERMEDIATE_DATA_DIR))
+        processed_paths = []  # list of processed filepaths
 
-        return
+        logger.info(f"processing of {len(paths)} paths with multiprocessing = {use_multiprocessing}")
+        if use_multiprocessing:
+            # Use tqdm to create a progress bar for multiprocessing
+            with multiprocessing.Pool() as pool:
+                for processed_path in tqdm(
+                    pool.imap_unordered(
+                        self._multiprocess_and_save_data_wrapper, [(path, base_directory_path) for path in paths]
+                    ),
+                    total=len(paths),
+                    desc="Processing",
+                ):
+                    processed_paths.append(processed_path)
+                    # pass
+        else:
+            for path in tqdm(self.paths, desc="Processing"):
+                processed_path = self._process_and_save_data(path, base_directory_path)
+                processed_paths.append(processed_path)
 
-    def _process_and_save_data(self, files, dir: Path) -> None:
-        # !TODO find a good way to deal with the paths
+        return processed_paths
 
-        for file in tqdm(files, desc="Processing data", unit="file"):
-            if not Path(dir / file.name).exists():
-                processed_data = self._process_datum(file)
-                # !TODO probably append the name with something
+    def _multiprocess_and_save_data_wrapper(self, args):
+        """
+        Wrapper method to process and save data using `_process_and_save_data`.
 
-                save_compressed_map(processed_data, path=dir / file.name, overwrite=True)
+        This method takes a tuple of arguments containing the file path and the output directory,
+        and then calls the `_process_and_save_data` method with the provided arguments.
 
-    def _process_datum(self, file) -> None:
-        # 1. Load & Rotate
-        map = sunpy.map.Map(file)
+        Parameters
+        ----------
+        args : tuple
+            A tuple containing the file path and output directory.
 
+        Returns
+        -------
+        Path
+            A path for the processed file
+
+        See Also:
+        --------
+        _process_and_save_data, _process_data
+        """
+        file, output_dir = args
+        return self._process_and_save_data(file, output_dir)
+
+    def _process_and_save_data(self, file: Path, output_dir: Path) -> Path:
+        """
+        Process data and save compressed map.
+
+        Parameters
+        ----------
+        file : Path
+            Data file path.
+
+        output_dir : Path
+            Directory to save processed data.
+
+        Returns
+        -------
+        None
+        """
+        output_file = output_dir / file.name  # !TODO prefix the file.name?
+        processed_data = self._process_datum(file)
+        save_compressed_map(processed_data, path=output_file, overwrite=True)
+        return output_file
+
+    def _process_datum(self, file) -> sunpy.map.Map:
+        """
+        Process a single data file.
+
+        Processing Steps:
+            1. Load and rotate
+            2. Set off-disk data to 0
+            # !TODO
+            3. Normalise radius to a fixed value
+            4. Project to a certain location in space
+
+        Parameters
+        ----------
+        file : Path
+            Data file path.
+
+        Returns
+        -------
+        rotated_map : sunpy.map.Map
+            Processed sunpy map.
+        """
         #!TODO remove 'BLANK' keyword
         # v3925 WARNING: VerifyWarning: Invalid 'BLANK' keyword in header.
         # The 'BLANK' keyword is only applicable to integer data, and will be ignored in this HDU.
         # [astropy.io.fits.hdu.image]
-        r_map = self._rotate_datum(map)
-
+        # 1. Load & Rotate
+        single_map = sunpy.map.Map(file)
+        rotated_map = self._rotate_datum(single_map)
         # 2. set data off-disk to 0 (np.nan would be ideal, but deep learning)
-        r_map.data[~sunpy.map.coordinate_is_on_solar_disk(sunpy.map.all_coordinates_from_map(r_map))] = 0.0
-        # !TODO understand why this isn't working with MDI (leaves a white ring around the disk)
-
-        # !TODO
-        # 3. normalise radius to fixed value
-        # 4. project to a certain location in space
-
-        return r_map
+        rotated_map.data[~sunpy.map.coordinate_is_on_solar_disk(sunpy.map.all_coordinates_from_map(rotated_map))] = 0.0
+        # !TODO understand why this isn't working correctly with MDI (leaves a white ring around the disk)
+        # 3. !TODO normalise radius to fixed value
+        # 4. !TODO project to a certain location in space
+        return rotated_map
 
     def _rotate_datum(self, amap: sunpy.map.Map) -> sunpy.map.Map:
         """
-        rotate a list of maps according to metadata
+        Rotate a map according to metadata.
 
-        e.g. before rotation a HMI map may have: `crota2 = 180.082565`
+        Args:
+        amap : sunpy.map.Map
+            An input sunpy map.
+
+        Parameters
+        ----------
+        rotated_map : sunpy.map.Map
+            Rotated sunpy map.
+
+        Notes
+        -----
+        before rotation a HMI map may have: `crota2 = 180.082565`, for example.
         """
-
         return amap.rotate()
 
 
@@ -381,7 +532,7 @@ class QSExtractor:
 
 
 def load_filename():
-    filename = Path(dv.MAG_INTERMEDIATE_DATA_CSV)
+    filename = Path(dv.MAG_INTERMEDIATE_HMIMDI_DATA_CSV)
 
     if filename.exists():
         loaded_data = pd.read_csv(filename)
@@ -400,38 +551,6 @@ def load_filename():
         )
 
     return loaded_data
-
-
-def make_relative(base_path, path):
-    return Path(path).relative_to(Path(base_path))
-
-
-def save_compressed_map(amap: sunpy.map.Map, path: Path, **kwargs) -> None:
-    """
-    Save a compressed map.
-
-    If "bscale" and "bzero" exist in the metadata, remove before saving.
-    See: https://github.com/sunpy/sunpy/issues/7139
-
-    Parameters
-    ----------
-    amap : sunpy.map.Map
-        the sunpy map object to be saved
-
-    path : Path
-        the path to save the file to
-
-    Returns
-    -------
-    None
-    """
-    if "bscale" in amap.meta:
-        del amap.meta["bscale"]
-
-    if "bzero" in amap.meta:
-        del amap.meta["bzero"]
-
-    amap.save(path, hdu_type=astropy.io.fits.CompImageHDU, **kwargs)
 
 
 def extract_submaps(map, time, coords, xsize=dv.X_EXTENT, ysize=dv.Y_EXTENT) -> sunpy.map.Map:
@@ -489,12 +608,14 @@ if __name__ == "__main__":
     logger.info(f"Executing {__file__} as main program")
 
     mag_process = True
-    ar_classification = True
+    ar_classification = False
     # ar_detection = True
 
     # 1. Process full-disk magnetograms
     if mag_process:
-        MagnetogramProcessor()
+        mp = MagnetogramProcessor()
+        mp.process_data(use_multiprocessing=True)
+        logger.info(">> processed data")
 
     # 2. Extract NOAA ARs and QS regions
     if ar_classification:
