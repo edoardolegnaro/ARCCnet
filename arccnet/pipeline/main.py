@@ -4,14 +4,15 @@ import pandas as pd
 
 import arccnet.data_generation.utils.default_variables as dv
 from arccnet.data_generation.data_manager import DataManager
-from arccnet.data_generation.mag_processing import MagnetogramProcessor
+from arccnet.data_generation.mag_processing import MagnetogramProcessor, RegionExtractor
 from arccnet.data_generation.utils.data_logger import logger
 
 if __name__ == "__main__":
     logger.info(f"Executing {__file__} as main program")
 
-    data_download = True
-    mag_process = True
+    data_download = False
+    mag_process = False
+    region_extraction = True
 
     if data_download:
         data_manager = DataManager(
@@ -32,3 +33,52 @@ if __name__ == "__main__":
             process_data=True,
             use_multiprocessing=True,
         )
+
+    # Build 03_processed directory
+    paths_03 = [
+        Path(dv.MAG_PROCESSED_FITS_DIR),
+        Path(dv.MAG_PROCESSED_QSSUMMARYPLOTS_DIR),
+        Path(dv.MAG_PROCESSED_QSFITS_DIR),
+    ]
+    for path in paths_03:
+        if not path.exists():
+            path.mkdir(parents=True)
+
+    if region_extraction:
+        region_extractor = RegionExtractor(
+            dataframe=Path(dv.MAG_INTERMEDIATE_HMIMDI_PROCESSED_DATA_CSV),
+            out_fnames=["mdi", "hmi"],
+            datetimes=["datetime_mdi", "datetime_hmi"],
+            data_cols=["processed_download_path_mdi", "processed_download_path_hmi"],
+            # new_cols=["cutout_mdi", "cutout_hmi"],
+            cutout_sizes=[
+                (int(dv.X_EXTENT / 4), int(dv.Y_EXTENT / 4)),
+                (int(dv.X_EXTENT), int(dv.Y_EXTENT)),
+            ],
+            common_datetime_col="datetime_srs",
+            num_random_attempts=10,
+        )
+
+        # Save the AR Classification dataset
+        region_extractor.activeregion_classification_df.to_csv(
+            Path(dv.MAG_PROCESSED_DIR) / Path("ARExtraction.csv"), index=False
+        )
+        # Drop SRS-related rows (minus "datetime_srs")
+        region_extractor.quietsun_df.drop(
+            columns=[
+                "ID",
+                "Number",
+                "Carrington Longitude",
+                "Area",
+                "Z",
+                "Longitudinal Extent",
+                "Number of Sunspots",
+                "Mag Type",
+                "Latitude",
+                "Longitude",
+                "filepath_srs",
+                "filename_srs",
+                "loaded_successfully_srs",
+                "catalog_created_on_srs",
+            ]
+        ).to_csv(Path(dv.MAG_PROCESSED_DIR) / Path("QSExtraction.csv"), index=False)

@@ -1,4 +1,5 @@
 from pathlib import Path
+from datetime import datetime, timedelta
 
 import numpy as np
 import pandas as pd
@@ -9,7 +10,19 @@ import astropy.io
 
 from arccnet.data_generation.utils.data_logger import logger
 
-__all__ = ["make_relative", "save_compressed_map", "save_df_to_html", "check_column_values", "grouped_stratified_split"]
+__all__ = [
+    "is_point_far_from_point",
+    "make_relative",
+    "save_compressed_map",
+    "round_to_midnight",
+    "save_df_to_html",
+    "check_column_values",
+    "grouped_stratified_split",
+]
+
+
+def is_point_far_from_point(x, y, x1, y1, threshold_x, threshold_y):
+    return abs(x - x1) > abs(threshold_x) or abs(y - y1) > abs(threshold_y)
 
 
 def make_relative(base_path, path):
@@ -19,7 +32,6 @@ def make_relative(base_path, path):
 def save_compressed_map(amap: sunpy.map.Map, path: Path, **kwargs) -> None:
     """
     Save a compressed map.
-
     If "bscale" and "bzero" exist in the metadata, remove before saving.
     See: https://github.com/sunpy/sunpy/issues/7139
 
@@ -27,7 +39,6 @@ def save_compressed_map(amap: sunpy.map.Map, path: Path, **kwargs) -> None:
     ----------
     amap : sunpy.map.Map
         the sunpy map object to be saved
-
     path : Path
         the path to save the file to
 
@@ -42,6 +53,24 @@ def save_compressed_map(amap: sunpy.map.Map, path: Path, **kwargs) -> None:
         del amap.meta["bzero"]
 
     amap.save(path, hdu_type=astropy.io.fits.CompImageHDU, **kwargs)
+
+
+def round_to_midnight(dt: datetime):
+    # Calculate the next midnight
+    next_midnight = dt.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+
+    # Calculate the previous midnight
+    previous_midnight = dt.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    # Calculate time differences
+    time_to_next_midnight = next_midnight - dt
+    time_to_previous_midnight = dt - previous_midnight
+
+    # Compare time differences and round to the closest midnight
+    if time_to_next_midnight < time_to_previous_midnight:
+        return next_midnight
+    else:
+        return previous_midnight
 
 
 def save_df_to_html(df: pd.DataFrame, filename: str) -> None:
