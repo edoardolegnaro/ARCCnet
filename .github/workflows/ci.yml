@@ -49,5 +49,9 @@ jobs:
       default_python: '3.9'
       submodules: false
       pytest: false
+      libraries: |
+        apt:
+          - libopenjp2-7
+          - graphviz
       envs: |
         - linux: build_docs

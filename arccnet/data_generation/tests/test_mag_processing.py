@@ -31,6 +31,7 @@ def temp_path_fixture(request):
     return (Path(temp_dir), Path(raw_data_dir), Path(processed_data_dir))
 
 
+@pytest.mark.remote_data
 @pytest.fixture
 def sunpy_hmi_copies(temp_path_fixture):
     n = 10
@@ -62,6 +63,7 @@ def pd_dataframe(sunpy_hmi_copies):
     return df
 
 
+@pytest.mark.remote_data  # downloads sample data
 def test_read_datapaths(pd_dataframe, temp_path_fixture):
     # test the reading of datapaths
     temp_dir_path, _, process_data_path = temp_path_fixture
@@ -82,6 +84,7 @@ def test_read_datapaths(pd_dataframe, temp_path_fixture):
     assert all(isinstance(item, Path) for item in mp.paths)
 
 
+@pytest.mark.remote_data  # downloads sample data
 @pytest.mark.parametrize("use_multiprocessing", [True, False])
 def test_process_data(pd_dataframe, temp_path_fixture, use_multiprocessing):
     """

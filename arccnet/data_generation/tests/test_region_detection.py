@@ -94,11 +94,13 @@ def region_detection_fixture(temp_path_fixture, pd_dataframe):
 
 
 # Test methods using the fixture
+@pytest.mark.remote_data
 def test_initialization(region_detection_fixture):
     # Test if RegionDetection initializes correctly
     assert region_detection_fixture.loaded_data is not None
 
 
+@pytest.mark.remote_data
 def test_get_bboxes(region_detection_fixture, pd_dataframe):
     # Test the get_bboxes method using the fixture
     bboxes = region_detection_fixture.get_bboxes(

@@ -1,10 +1,9 @@
 from abc import ABC, abstractmethod
-
-__all__ = ["BaseCatalog"]
-
 from pathlib import Path
 
 from astropy.table import Table  # type: ignore
+
+__all__ = ["BaseCatalog"]
 
 
 class BaseCatalog(ABC):

@@ -25,7 +25,7 @@ class HMILOSMagnetogram(BaseMagnetogram):
         end_time : datetime.datetime
             A datetime object representing the end time of the requested observations.
 
-        frequency : str, optional
+        frequency : `str`, optional
             A string representing the frequency of observations. Default is "1d" (1 day).
             Valid frequency strings can be specified, such as "1h" for 1 hour, "15T" for 15 minutes,
             "1M" for 1 month, "1Y" for 1 year, and more. Refer to the pandas documentation for a complete
@@ -224,7 +224,7 @@ class HMISHARPs(HMILOSMagnetogram):
         end_time : datetime.datetime
             A datetime object representing the end time of the requested observations.
 
-        frequency : str, optional
+        frequency : `str`, optional
             A string representing the frequency of observations. Default is "1d" (1 day).
             Valid frequency strings can be specified, such as "1h" for 1 hour, "15T" for 15 minutes,
             "1M" for 1 month, "1Y" for 1 year, and more. Refer to the pandas documentation for a complete

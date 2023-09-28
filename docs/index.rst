@@ -4,9 +4,13 @@ ARCCnet Documentation
 This is the documentation for ARCCnet.
 
 .. toctree::
-    :maxdepth: 2
+   :maxdepth: 1
+   :caption: Contents:
 
-    reports/arcnet-dataset
+   tutorial/index
+   how_to/index
+   topic/index
+   reference/index
 
 Indices and tables
 ==================
