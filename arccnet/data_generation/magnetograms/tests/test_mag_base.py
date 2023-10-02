@@ -3,6 +3,7 @@ import tempfile
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from arccnet.data_generation.magnetograms.base_magnetogram import BaseMagnetogram
 
@@ -34,6 +35,7 @@ class MockMagnetogram(BaseMagnetogram):
         pass
 
 
+@pytest.mark.remote_data
 def test_base_magnetogram_generate_drms_query():
     # Test the generate_drms_query method of BaseMagnetogram
     mock_magnetogram = MockMagnetogram()
@@ -41,6 +43,7 @@ def test_base_magnetogram_generate_drms_query():
     assert query == "Mock query: 2023-01-01 00:00:00 - 2023-01-05 00:00:00 @ 1d"
 
 
+@pytest.mark.remote_data
 def test_save_metadata_to_csv_with_temporary_file():
     mock_instance = MockMagnetogram()
     keys_data = {"key1": [1, 2, 3], "key2": [4, 5, 6]}

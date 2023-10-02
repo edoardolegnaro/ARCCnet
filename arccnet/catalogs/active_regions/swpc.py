@@ -25,14 +25,14 @@ from arccnet.data_generation.utils.default_variables import HALE_CLASSES, MCINTO
 logger = get_logger(__name__, logging.DEBUG)
 
 
-__all__ = ["SWPCCatalog"]
+__all__ = ["Query", "Result", "ClassificationCatalog", "SWPCCatalog", "filter_srs"]
 
 
 class Query(QTable):
     r"""
-    Query object define both the query and results.
+    Query object defines both the query and results.
 
-    The query is defined by a row with 'start_time', 'end_time' and 'url'. 'url' is `MaskedColum` and where the
+    The query is defined by a row with 'start_time', 'end_time' and 'url'. 'Url' is `MaskedColum` and where the
     mask is `True` can be interpreted as missing data.
 
     Notes

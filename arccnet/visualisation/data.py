@@ -9,6 +9,15 @@ from astropy.coordinates import SkyCoord
 
 rng = np.random.RandomState(1338)
 
+__all__ = [
+    "visualise_groups_classes",
+    "visualise_data_split",
+    "plot_set_distributions",
+    "plot_srs_coverage",
+    "plot_srs_map",
+    "plot_filtered_srs_trace",
+]
+
 
 def visualise_groups_classes(df, *, class_col, group_col, axes=None):
     r"""
@@ -123,12 +132,13 @@ def plot_set_distributions(df, *, train_idxs, test_idxs, class_col):
         Train indices
     test_idxs : `list` or `np.ndarray[int]`
         Test indices
-    class_col : `str:
+    class_col : `str`:
         Name of column containing classes
 
     Returns
     -------
-    Axes containing the plots of the distributions
+    `Axes`
+        Axes containing the plots of the distributions
 
     """
     dists_df = pd.concat(

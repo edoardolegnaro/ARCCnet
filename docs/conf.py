@@ -37,7 +37,7 @@ extensions = [
 
 myst_enable_extensions = [
     "amsmath",
-    "attrs_inline",
+    # "attrs_inline",
     "colon_fence",
     "deflist",
     "dollarmath",
@@ -71,7 +71,37 @@ master_doc = "index"
 # -- Options for intersphinx extension ---------------------------------------
 
 # Example configuration for intersphinx: refer to the Python standard library.
-intersphinx_mapping = {"python": ("https://docs.python.org/", None)}
+intersphinx_mapping = {
+    "python": (
+        "https://docs.python.org/3/",
+        (None, "http://www.astropy.org/astropy-data/intersphinx/python3.inv"),
+    ),
+    "numpy": (
+        "https://numpy.org/doc/stable/",
+        (None, "http://www.astropy.org/astropy-data/intersphinx/numpy.inv"),
+    ),
+    "scipy": (
+        "https://docs.scipy.org/doc/scipy/reference/",
+        (None, "http://www.astropy.org/astropy-data/intersphinx/scipy.inv"),
+    ),
+    "aiapy": ("https://aiapy.readthedocs.io/en/stable/", None),
+    "asdf": ("https://asdf.readthedocs.io/en/stable/", None),
+    "astropy": ("https://docs.astropy.org/en/stable/", None),
+    "astroquery": ("https://astroquery.readthedocs.io/en/latest/", None),
+    "drms": ("https://docs.sunpy.org/projects/drms/en/stable/", None),
+    "hvpy": ("https://hvpy.readthedocs.io/en/latest/", None),
+    "matplotlib": ("https://matplotlib.org/stable", None),
+    "mpl_animators": ("https://docs.sunpy.org/projects/mpl-animators/en/stable/", None),
+    "pandas": ("https://pandas.pydata.org/pandas-docs/stable/", None),
+    "parfive": ("https://parfive.readthedocs.io/en/stable/", None),
+    "reproject": ("https://reproject.readthedocs.io/en/stable/", None),
+    "skimage": ("https://scikit-image.org/docs/stable/", None),
+    "sqlalchemy": ("https://docs.sqlalchemy.org/en/latest/", None),
+    "sunkit_image": ("https://docs.sunpy.org/projects/sunkit-image/en/stable/", None),
+    "sunkit_instruments": ("https://docs.sunpy.org/projects/sunkit-instruments/en/stable/", None),
+    "zeep": ("https://docs.python-zeep.org/en/stable/", None),
+}
+
 
 # -- Options for HTML output -------------------------------------------------
 

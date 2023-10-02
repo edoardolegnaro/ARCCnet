@@ -12,6 +12,7 @@ from arccnet.data_generation.magnetograms.instruments.hmi import HMILOSMagnetogr
 from arccnet.data_generation.magnetograms.instruments.mdi import MDILOSMagnetogram, MDISMARPs
 
 
+@pytest.mark.remote_data
 @pytest.mark.parametrize(
     ("magnetogram_class", "expected_query", "frequency"),
     [
@@ -32,6 +33,7 @@ def test_generate_drms_query(magnetogram_class, expected_query, frequency):
     assert query == expected_query
 
 
+@pytest.mark.remote_data
 @pytest.mark.parametrize("magnetogram_class", [HMILOSMagnetogram, MDILOSMagnetogram])
 def test_fulldisk_get_matching_info_from_record(magnetogram_class):
     # Test the _get_matching_info_from_record method of HMILOSMagnetogram and MDILOSMagnetogram
@@ -61,6 +63,7 @@ def test_fulldisk_get_matching_info_from_record(magnetogram_class):
     )
 
 
+@pytest.mark.remote_data
 @pytest.mark.parametrize(
     ("magnetogram_class", "expected_columns"),
     [
@@ -115,6 +118,7 @@ def test_cutout_get_matching_info_from_record(magnetogram_class, expected_column
     pd.testing.assert_frame_equal(extracted_values, expected_values)
 
 
+@pytest.mark.remote_data
 @pytest.mark.parametrize(
     ("magnetogram_class", "batch_frequency", "start_date", "end_date"),
     [
@@ -149,6 +153,7 @@ def test_fetch_metadata_v_batch(magnetogram_class, batch_frequency, start_date, 
 
 # Probably not really needed...
 # HMI
+@pytest.mark.remote_data
 class TestHMILOSProperties:
     @pytest.fixture
     def hmi_instance(self):
@@ -170,6 +175,7 @@ class TestHMILOSProperties:
         assert hmi_instance._type == hmi_instance.__class__.__name__
 
 
+@pytest.mark.remote_data
 class TestHMISHARPsProperties:
     @pytest.fixture
     def sharp_instance(self):
@@ -192,6 +198,7 @@ class TestHMISHARPsProperties:
 
 
 # MDI
+@pytest.mark.remote_data
 class TestMDILOSProperties:
     @pytest.fixture
     def mdi_instance(self):
@@ -213,6 +220,7 @@ class TestMDILOSProperties:
         assert mdi_instance._type == mdi_instance.__class__.__name__
 
 
+@pytest.mark.remote_data
 class TestMDISMARPsProperties:
     @pytest.fixture
     def smarp_instance(self):

@@ -3,6 +3,7 @@ from dataclasses import dataclass
 
 import pandas as pd
 import sunpy.map
+from pandas import DataFrame
 from tqdm import tqdm
 
 import arccnet.data_generation.utils.default_variables as dv
@@ -45,7 +46,7 @@ class RegionDetection:
 
     def get_bboxes(
         self,
-        df: pd.DataFrame,
+        df: DataFrame,
         col_group: str,
         col_cutout: str,
     ) -> list[DetectionBox]:
@@ -54,18 +55,18 @@ class RegionDetection:
 
         Parameters
         ----------
-        df : pd.DataFrame
+        df : `DataFrame`
             Input DataFrame
 
-        col_group : str
+        col_group : `str`
             Column name for group
 
-        col_cutout : str
+        col_cutout : `str`
             Column name for cutout URLs
 
         Returns
         -------
-        list[DetectionBox]
+        `list[DetectionBox]`
             List of DetectionBox instances
         """
         grouped_data = df.groupby(col_group)
@@ -103,31 +104,31 @@ class RegionDetection:
 
     def update_loaded_data(
         self,
-        df: pd.DataFrame,
+        df: DataFrame,
         col_group: str,
         col_cutout: str,
         bboxes: list[DetectionBox],
-    ) -> pd.DataFrame:
+    ) -> DataFrame:
         """
         Update the loaded DataFrame with detection box information.
 
         Parameters
         ----------
-        df : pd.DataFrame
+        df : `DataFrame`
             Input DataFrame
 
-        col_group : str
+        col_group : `str`
             Column name for the group
 
-        col_cutout : str
+        col_cutout : `str`
             Column name for cutout
 
-        bboxes : list[DetectionBox]
+        bboxes : `list[DetectionBox]`
             List of DetectionBox instances
 
         Returns
         -------
-        pd.DataFrame
+        `DataFrame`
             Updated DataFrame with coordinates
         """
         updated_df = df.copy()

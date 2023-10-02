@@ -3,6 +3,7 @@ from datetime import datetime
 
 import numpy as np
 import pandas as pd
+from pandas import DataFrame, Timedelta
 from sunpy.util.parfive_helpers import Downloader
 
 import arccnet.data_generation.utils.default_variables as dv
@@ -29,7 +30,7 @@ class DataManager:
         self,
         start_date: datetime = dv.DATA_START_TIME,
         end_date: datetime = dv.DATA_END_TIME,
-        merge_tolerance: pd.Timedelta = pd.Timedelta("30m"),
+        merge_tolerance: Timedelta = pd.Timedelta("30m"),
         download_fits: bool = True,
         overwrite_fits: bool = False,
         save_to_csv: bool = True,
@@ -214,22 +215,22 @@ class DataManager:
         self,
         full_disk_data,
         cutout_data,
-    ) -> pd.DataFrame:
+    ) -> DataFrame:
         """
         Merge active region patch data.
 
         Parameters
         ----------
-        full_disk_data : pd.DataFrame
+        full_disk_data : `DataFrame`
             Data from full disk observations with columns;
             ["datetime", "url"]
 
-        cutout_data : pd.DataFrame
+        cutout_data : `DataFrame`
             Data from active region cutouts. The pd.DataFrame must contain a "datetime" column.
 
         Returns
         -------
-        pd.DataFrame
+        `DataFrame`
             Merged DataFrame of active region patch data.
         """
         expected_columns = ["datetime", "url"]
@@ -261,11 +262,11 @@ class DataManager:
 
     def merge_hmimdi_metadata(
         self,
-        srs_keys: pd.DataFrame,
-        hmi_keys: pd.DataFrame,
-        mdi_keys: pd.DataFrame,
-        tolerance: pd.Timedelta = pd.Timedelta("30m"),
-    ) -> tuple[pd.DataFrame, pd.DataFrame]:
+        srs_keys: DataFrame,
+        hmi_keys: DataFrame,
+        mdi_keys: DataFrame,
+        tolerance: Timedelta = pd.Timedelta("30m"),
+    ) -> tuple[DataFrame, DataFrame]:
         """
         Merge SRS, HMI, and MDI metadata.
 
@@ -274,24 +275,24 @@ class DataManager:
 
         Parameters
         ----------
-        srs_keys : pd.DataFrame
+        srs_keys : `DataFrame`
             DataFrame containing SRS metadata.
 
-        hmi_keys : pd.DataFrame
+        hmi_keys : `DataFrame`
             DataFrame containing HMI metadata.
 
-        mdi_keys : pd.DataFrame
+        mdi_keys : `DataFrame`
             DataFrame containing MDI metadata.
 
-        tolerance : pd.Timedelta, optional
+        tolerance : `Timedelta`, optional
             Time tolerance for merging operations. Default is pd.Timedelta("30m").
 
         Returns
         -------
-        pd.DataFrame
+        `DataFrame`
             Merged DataFrame of SRS, HMI, and MDI metadata.
 
-        pd.DataFrame
+        `DataFrame`
             DataFrame of dropped rows after merging.
         """
         srs_keys = srs_keys.copy(deep=True)
@@ -363,31 +364,31 @@ class DataManager:
 
     def fetch_fits(
         self,
-        urls_df: pd.DataFrame = None,
+        urls_df: DataFrame = None,
         column_name="url",
         suffix="",
         base_directory_path: Path = Path(dv.MAG_RAW_DATA_DIR),
         max_retries: int = 5,
         overwrite: bool = False,
-    ) -> pd.DataFrame:
+    ) -> DataFrame:
         """
         Download data from URLs in a DataFrame using parfive.
 
         Parameters
         ----------
-        urls_df : pd.DataFrame
+        urls_df : `DataFrame`
             DataFrame containing a "url" column with URLs to download.
 
-        base_directory_path : Path, optional
+        base_directory_path : `Path`, optional
             Base directory path to save downloaded files. Default is `arccnet.data_generation.utils.default_variables.MAG_RAW_DATA_DIR`.
 
-        max_retries : int, optional
+        max_retries : `int`, optional
             Maximum number of download retries. Default is 5.
 
         Returns
         -------
-        urls_df
-             DataFrame containing "download_path" and "downloaded_successfully" columns
+        `DataFrame`
+            New data frame containing "download_path" and "downloaded_successfully" columns
         """
         if urls_df is None or not isinstance(urls_df, pd.DataFrame) or column_name not in urls_df.columns:
             logger.warning(f"Invalid DataFrame format. Expected a DataFrame with a '{column_name}' column.")

@@ -31,7 +31,7 @@ class BaseMagnetogram(ABC):
         end_time : datetime.datetime
             A datetime object representing the end time of the requested observations.
 
-        frequency : str, optional
+        frequency : `str`, optional
             A string representing the frequency of observations. Default is "1d" (1 day).
             Valid frequency strings can be specified, such as "1h" for 1 hour, "15T" for 15 minutes,
             "1M" for 1 month, "1Y" for 1 year, and more. Refer to the pandas documentation for a complete
@@ -168,10 +168,10 @@ class BaseMagnetogram(ABC):
         segments : pd.Series
             A Series containing filenames of JSOC series segments.
 
-        url : str, optional
+        url : `str`, optional
             The base URL for constructing the magnetogram URLs from the segments.
 
-        column_name : str, optional
+        column_name : `str`, optional
             The name of the column to store the magnetogram URLs. This must not already exist in the DataFrame.
 
         Returns
@@ -206,10 +206,10 @@ class BaseMagnetogram(ABC):
         query : str
             The JSOC query string.
 
-        max_retries : int, optional
+        max_retries : `int`, optional
             The maximum number of retries before raising an exception (default is 3).
 
-        retry_delay : int, optional
+        retry_delay : `int`, optional
             The delay (in seconds) between retries (default is 60).
 
         **kwargs
@@ -306,7 +306,7 @@ class BaseMagnetogram(ABC):
         keys : pd.DataFrame
             A DataFrame containing metadata keys.
 
-        filepath : str, optional
+        filepath : `str`, optional
             Filepath for saving the CSV file. If not provided, the default location is used
             (refer to `metadata_save_location` attribute).
 
@@ -345,7 +345,7 @@ class BaseMagnetogram(ABC):
         df : pd.DataFrame
             The DataFrame to which extracted information will be added.
 
-        df_colname : str, optional
+        df_colname : `str`, optional
             The name of the source column containing the data to extract from.
             Defaults to "record".
 
@@ -402,16 +402,16 @@ class BaseMagnetogram(ABC):
         end_date : datetime.datetime
             The end datetime for the desired time range of observations.
 
-        batch_frequency : int, optional
+        batch_frequency : `int`, optional
             The frequency for each batch.
             Default is 3 (3 months), empirically determined based on the density of files seen in SHARPs queries.
 
-        to_csv : bool, optional
+        to_csv : `bool`, optional
             Whether to save the fetched metadata to a CSV file. Defaults to True.
 
         Returns
         -------
-        pd.DataFrame or None
+        `DataFrame` or None
             A pandas DataFrame containing metadata and URLs for requested data segments.
             Returns None if there is no metadata.
 
@@ -492,12 +492,12 @@ class BaseMagnetogram(ABC):
         end_date : datetime.datetime
             The end datetime for the desired time range of observations.
 
-        to_csv : bool, optional
+        to_csv : `bool`, optional
             Whether to save the fetched metadata to a CSV file. Defaults to True.
 
         Returns
         -------
-        pd.DataFrame or None
+        `DataFrame` or None
             A pandas DataFrame containing metadata and URLs for requested data segments.
             The DataFrame has columns corresponding to metadata keys, URLs, and additional extracted information.
             If no results are returned from the JSOC query, `None` is returned.
