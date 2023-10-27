@@ -1,6 +1,9 @@
+from datetime import datetime
+
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from matplotlib.dates import DateFormatter, YearLocator
 from sunpy.coordinates import HeliographicStonyhurst, Helioprojective, transform_with_sun_center
 from sunpy.map import Map, make_fitswcs_header
 
@@ -304,3 +307,159 @@ def plot_filtered_srs_trace(processed_catalog, numbers=None, figsize=(6, 4), dpi
     ax.legend(fontsize=6, frameon=False, markerscale=2, loc="upper right")
 
     return fig, ax
+
+
+def plot_hmi_mdi_availability(
+    hmi_table: pd.DataFrame,
+    mdi_table: pd.DataFrame,
+    start_time: datetime = datetime(1995, 1, 1),
+    end_time: datetime = datetime.now(),
+    **kwargs,
+):
+    """
+    given HMI and MDI `DataFrame` objects, plot availability from `start_time` until `end_time`.
+    """
+
+    hmi_availability = hmi_table[["target_time", "url"]]
+    mdi_availability = mdi_table[["target_time", "url"]]
+
+    fig, ax = plt.subplots(figsize=(8, 2), **kwargs)
+
+    # Decide where to plot the line in y space, here: "1"
+    hmis = [0.8 if not pd.isna(url) else np.nan for url in hmi_availability["url"]]
+    mdis = [1.2 if not pd.isna(url) else np.nan for url in mdi_availability["url"]]
+
+    ax.scatter(mdi_availability["target_time"], mdis, s=10**2, marker="|", color="red", label="SoHO/MDI")
+    ax.scatter(hmi_availability["target_time"], hmis, s=10**2, marker="|", color="blue", label="SDO/HMI")
+
+    # Set some limits on the y-axis
+    ax.set_ylim(0, 2)
+    ax.set_xlim(start_time, end_time)
+
+    # Remove y-axis ticks and labels
+    ax.set_yticks([])
+    ax.set_yticklabels([])
+
+    # Set a fixed locator for the x-axis (yearly ticks)
+    years = plt.matplotlib.dates.YearLocator(base=1)
+    ax.xaxis.set_major_locator(years)
+
+    # Use a fixed formatter for the x-axis
+    ax.xaxis.set_major_formatter(plt.matplotlib.dates.DateFormatter("%Y"))
+
+    # Rotate x-axis labels for better readability
+    for label in ax.get_xticklabels():
+        label.set_ha("center")
+        label.set_rotation(40)
+
+    # Add a legend
+    ax.legend()
+
+    return fig, ax
+
+
+def plot_col_scatter(
+    df_list: list[pd.DataFrame],
+    column: str,
+    start_time: datetime = datetime(1995, 1, 1),
+    end_time: datetime = datetime.now(),
+    colors: list = ["red", "blue"],
+):
+    fig, axs = plt.subplots(2, 1, figsize=(8, 4), sharex=True)  # Create 2 rows with a shared x-axis
+
+    # Create a YearLocator and DateFormatter to set x-axis ticks to every year
+    year_locator = YearLocator()
+    year_formatter = DateFormatter("%Y")
+
+    for i, df in enumerate(df_list):
+        axs[i].scatter(df["target_time"], df[column], marker=".", s=0.5, color=colors[i])
+        axs[i].set_xlim(start_time, end_time)
+
+        # Customize y-axis labels (optional)
+        axs[i].set_ylabel(f"{column}")
+
+        # Set x-axis locator and formatter
+        axs[i].xaxis.set_major_locator(year_locator)
+        axs[i].xaxis.set_major_formatter(year_formatter)
+
+        # Rotate x-axis labels for better readability
+        for label in axs[i].get_xticklabels():
+            label.set_ha("center")
+            label.set_rotation(40)
+
+    plt.subplots_adjust(hspace=0.1)  # Adjust vertical spacing between subplots
+
+    return fig, axs
+
+
+def plot_col_scatter_single(
+    df_list: list[pd.DataFrame],
+    column: str,
+    start_time: datetime = datetime(1995, 1, 1),
+    end_time: datetime = datetime.now(),
+    colors: list = ["red", "blue"],
+):
+    fig, ax = plt.subplots(figsize=(8, 2))
+
+    # Scatter plot for the first row
+    for i, df in enumerate(df_list):
+        ax.scatter(df["target_time"], df[column], marker=".", s=0.1, color=colors[i])
+
+    ax.set_ylabel(f"{column}")
+
+    # Set a fixed locator for the x-axis (yearly ticks)
+    years = plt.matplotlib.dates.YearLocator(base=1)
+    ax.xaxis.set_major_locator(years)
+
+    # Use a fixed formatter for the x-axis
+    ax.xaxis.set_major_formatter(plt.matplotlib.dates.DateFormatter("%Y"))
+
+    # Rotate x-axis labels for better readability
+    for label in ax.get_xticklabels():
+        label.set_ha("center")
+        label.set_rotation(40)
+
+    ax.set_xlim(start_time, end_time)
+
+    return fig, ax
+
+
+def plot_maps(map_one, map_two, horizontal=True):
+    fig = plt.figure(figsize=(10, 4))
+
+    ax1 = fig.add_subplot(1, 2, 1, projection=map_one)
+    map_one.plot(cmap="hmimag")
+
+    ax2 = fig.add_subplot(1, 2, 2, projection=map_two)
+    map_two.plot(cmap="hmimag")
+
+    return fig, [ax1, ax2]
+
+
+def plot_maps_regions(map_one, regions_one, map_two, regions_two, **kwargs):
+    fig = plt.figure(figsize=(10, 4))
+
+    # Assign different projections to each subplot
+    ax0 = fig.add_subplot(1, 2, 1, projection=map_one)
+    ax1 = fig.add_subplot(1, 2, 2, projection=map_two)
+
+    # Set the colormap limits for both maps
+    vmin, vmax = -1499, 1499
+    map_one.plot_settings["norm"].vmin = vmin
+    map_one.plot_settings["norm"].vmax = vmax
+    map_two.plot_settings["norm"].vmin = vmin
+    map_two.plot_settings["norm"].vmax = vmax
+
+    # Plot HMI and MDI maps on the respective subplots
+    map_one.plot(axes=ax0, cmap="hmimag")
+    map_two.plot(axes=ax1, cmap="hmimag")
+
+    # Loop through region_table and draw quadrangles for both maps
+    for row in regions_one:
+        print(row["bottom_left_cutout"])
+        map_one.draw_quadrangle(row["bottom_left_cutout"], axes=ax0, top_right=row["top_right_cutout"], **kwargs)
+    for row in regions_two:
+        print(row["bottom_left_cutout"])
+        map_two.draw_quadrangle(row["bottom_left_cutout"], axes=ax1, top_right=row["top_right_cutout"], **kwargs)
+
+    return fig, [ax0, ax1]

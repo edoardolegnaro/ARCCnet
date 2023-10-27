@@ -1,22 +1,109 @@
+import logging
 from pathlib import Path
-from datetime import datetime
+from datetime import timedelta
 
 import numpy as np
 import pandas as pd
-from pandas import DataFrame, Timedelta
+from pandas import DataFrame
 from sunpy.util.parfive_helpers import Downloader
 
-from arccnet import config
-from arccnet.catalogs.active_regions.swpc import SWPCCatalog
-from arccnet.data_generation.magnetograms.instruments import (
-    HMILOSMagnetogram,
-    HMISHARPs,
-    MDILOSMagnetogram,
-    MDISMARPs,
-)
-from arccnet.data_generation.utils.data_logger import logger
+from astropy.table import MaskedColumn, QTable
+from astropy.time import Time
+
+from arccnet.data_generation.magnetograms.base_magnetogram import BaseMagnetogram
+from arccnet.data_generation.utils.data_logger import get_logger
+
+# from arccnet.data_generation.utils.data_logger import logger # move to get_logger
+
+logger = get_logger(__name__, logging.DEBUG)
 
 __all__ = ["DataManager"]
+
+
+class Query(QTable):
+    r"""
+    Query object define both the query and results.
+
+    The query is defined by a row with 'start_time', 'end_time' and 'url'. 'url' is `MaskedColum` and where the
+    mask is `True` can be interpreted as missing data.
+
+    Notes
+    -----
+    Under the hood uses QTable and Masked columns to define if a expected result is present or missing
+
+    """
+    required_column_types = {"target_time": Time, "url": str}  # column types are not currently enforced
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        if not set(self.colnames).issuperset(set(self.required_column_types.keys())):
+            raise ValueError(
+                f"{self.__class__.__name__} must contain " f"{list(self.required_column_types.keys())} columns."
+            )
+
+    @property
+    def is_empty(self) -> bool:
+        r"""Is the query empty."""
+        return np.all(self["url"].mask == np.full(len(self), True))
+
+    @property
+    def missing(self):
+        r"""Rows which are missing."""
+        return self[self["url"].mask == True]  # noqa
+
+    @classmethod
+    def create_empty(cls, start, end, frequency: timedelta):
+        r"""
+        Create an 'empty' Query.
+
+        Parameters
+        ----------
+        start
+            Start time, any format supported by `astropy.time.Time`
+        end
+            End time, any format supported by `astropy.time.Time`
+
+        Returns
+        -------
+        Query
+            An empty Query
+        """
+        start = Time(start)
+        end = Time(end)
+        start_pydate = start.to_datetime()
+        end_pydate = end.to_datetime()
+
+        dt = int((end_pydate - start_pydate) / frequency)
+        target_times = Time([start_pydate + (i * frequency) for i in range(dt + 1)])
+
+        # set urls as a masked column
+        urls = MaskedColumn(data=[""] * len(target_times), mask=np.full(len(target_times), True))
+        empty_query = cls(data=[target_times, urls], names=["target_time", "url"])
+
+        return empty_query
+
+
+# could just import the Result object from SRS and adjust required_column_types, but this is more explicit
+class Result(QTable):
+    r"""
+    Result object define both the result and download status.
+
+    The value of the 'path' is used to encode if the corresponding file was downloaded or not.
+
+    Notes
+    -----
+    Under the hood uses QTable and Masked columns to define if a file was downloaded or not
+
+    """
+    required_column_types = {"target_time": Time, "url": str, "path": str}
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if not set(self.colnames).issuperset(set(self.required_column_types.keys())):
+            raise ValueError(
+                f"{self.__class__.__name__} must contain " f"{list(self.required_column_types.keys())} columns"
+            )
 
 
 class DataManager:
@@ -28,410 +115,284 @@ class DataManager:
 
     def __init__(
         self,
-        *,
-        start_date: datetime,
-        end_date: datetime,
-        merge_tolerance: Timedelta,
-        download_fits: bool = True,
-        overwrite_fits: bool = False,
-        save_to_csv: bool = True,
+        start_date: str,
+        end_date: str,
+        frequency: timedelta,
+        magnetograms: list[BaseMagnetogram],
     ):
         """
         Initialize the DataManager.
 
         Parameters
         ----------
-        start_date : datetime, optional
-            Start date of data acquisition period. Default is `arccnet.data_generation.utils.default_variables.DATA_START_TIME`.
+        start_date : `str`
+            Start date of data acquisition period.
 
-        end_date : datetime, optional
-            End date of data acquisition period. Default is `arccnet.data_generation.utils.default_variables.DATA_END_TIME`.
+        end_date : `str`
+            End date of data acquisition period.
 
-        merge_tolerance : pd.Timedelta, optional
-            Time tolerance for merging operations. Default is pd.Timedelta("30m").
+        frequency : `timedelta`
+            Observation frequency
 
-        download_fits : bool, optional
-            Whether to download FITS files. Default is True.
+        magnetograms : `list(BaseMagnetogram)`
+            List of classes derived from BaseMagnetogram.
         """
-        self.start_date = start_date
-        self.end_date = end_date
-        self.save_to_csv = save_to_csv
+        self._start_date = Time(start_date)
+        self._end_date = Time(end_date)
+        self._frequency = frequency
 
-        logger.info(
-            f"Instantiated `DataManager` for {self.start_date} -> {self.end_date}, "
-            + f"with save_to_csv={self.save_to_csv} "
-        )
+        # Check that all class objects are subclasses of `BaseMagnetogram`
+        for class_obj in magnetograms:
+            if not issubclass(class_obj.__class__, BaseMagnetogram):
+                raise ValueError(f"{class_obj.__name__} is not a subclass of BaseMagnetogram")
 
-        # instantiate classes
-        # SWPC Catalog
-        self.swpc = SWPCCatalog()
-        # !TODO change this into an iterable
-        # Full-disk Magnetograms
-        self.hmi = HMILOSMagnetogram()
-        self.mdi = MDILOSMagnetogram()
-        # Cutouts
-        self.sharps = HMISHARPs()
-        self.smarps = MDISMARPs()
+        self._mag_objects = magnetograms
 
-        # 1. fetch metadata
-        logger.info(">> Fetching metadata")
-        (
-            self.srs,
-            self.mdi_keys,
-            self.hmi_keys,
-            self.sharp_keys,
-            self.smarp_keys,
-        ) = self.fetch_metadata()
-        srs_raw, _ = self.srs
-        logger.info(f"\n{srs_raw}")
-
-        # 2. clean metadata
-        self.srs_clean = self.swpc.clean_catalog()
-        logger.info(f"\n{self.srs_clean}")
-
-        # 3. merge metadata sources
-        logger.info(f">> Merging full-disk metadata with tolerance {merge_tolerance}")
-        # 3a. SRS-HMI-MDI
-        self.merged_df, self.merged_df_dropped_rows = self.merge_hmimdi_metadata(
-            self.srs_clean, self.hmi_keys, self.mdi_keys, tolerance=merge_tolerance
-        )
-
-        # !TODO remove this, temporary removal of stupid column. Need to just never put this in in the first place.
-        # self.merged_df = self.merged_df.drop(columns=["magnetogram_fits_hmi", "magnetogram_fits_mdi"])
-
-        logger.info(">> Merging full-disk metadata with cutouts")
-        #  Merge the HMI and MDI components of the `merged_df` with the SHARPs and SMARPs DataFrames
-        # !TODO this is terrible, change this!
-        # 3b. HMI-SHARPs
-
-        # placeholder.
-        srs_columns = [
-            "ID",
-            "Number",
-            "Carrington Longitude",
-            "Area",
-            "Z",
-            "Longitudinal Extent",
-            "Number of Sunspots",
-            "Mag Type",
-            "Latitude",
-            "Longitude",
-            "filepath_srs",
-            "filename_srs",
-            "loaded_successfully_srs",
-            "catalog_created_on_srs",
-            "datetime_srs",
+        # Generate empty query for each provided magnetogram object
+        self._query_objects = [
+            Query.create_empty(self.start_date, self.end_date, self.frequency) for _ in self._mag_objects
         ]
 
-        # drop mdi+srs cols
-        merged_df_hs = (
-            self.merged_df.copy(deep=True).drop(columns=["datetime_mdi", "url_mdi"] + srs_columns).drop_duplicates()
-        )
-        merged_df_hs.columns = [col.rstrip("_hmi") if col.endswith("_hmi") else col for col in merged_df_hs.columns]
-        self.hmi_sharps = self.merge_activeregionpatches(merged_df_hs, self.sharp_keys[["datetime", "url", "record"]])
+    @property
+    def start_date(self):
+        return self._start_date
 
-        # 3c. MDI-SMARPs
-        merged_df_ms = (
-            self.merged_df.copy(deep=True)
-            .drop(
-                columns=["datetime_hmi", "url_hmi"]
-                + srs_columns
-                # columns=["magnetogram_fits_hmi", "datetime_hmi", "url_hmi"] + ["magnetogram_fits_hmi"]
-            )
-            .drop_duplicates()
-        )  # drop hmi columns and magnetogram_fits_mdi (this is the empty fits file)
-        merged_df_ms.columns = [col.rstrip("_mdi") if col.endswith("_mdi") else col for col in merged_df_ms.columns]
-        self.mdi_smarps = self.merge_activeregionpatches(merged_df_ms, self.smarp_keys[["datetime", "url", "record"]])
-        # ------
+    @property
+    def end_date(self):
+        return self._end_date
 
-        # 4a. check if image data exists
-        ofits = overwrite_fits  # hack to stop black formatting the lines
-        if download_fits:
-            # this is not great, but will skip if files exist
-            # adds "downloaded_successfully"+suffix and "download_path"+suffix
-            # to each dataframe.
-            self.merged_df = self.fetch_fits(self.merged_df, column_name="url_hmi", suffix="_hmi", overwrite=ofits)
-            self.merged_df = self.fetch_fits(self.merged_df, column_name="url_mdi", suffix="_mdi", overwrite=ofits)
+    @property
+    def frequency(self):
+        return self._frequency
 
-            self.hmi_sharps = self.fetch_fits(self.hmi_sharps, column_name="url", suffix="", overwrite=ofits)
-            self.hmi_sharps = self.fetch_fits(self.hmi_sharps, column_name="url_arc", suffix="_arc", overwrite=ofits)
+    @property
+    def mag_objects(self):
+        return self._mag_objects
 
-            self.mdi_sharps = self.fetch_fits(self.mdi_smarps, column_name="url", suffix="", overwrite=ofits)
-            self.mdi_sharps = self.fetch_fits(self.mdi_smarps, column_name="url_arc", suffix="_arc", overwrite=ofits)
-            logger.info("Download completed successfully")
-        else:
-            logger.info("the data has not been downloaded")
+    @property
+    def query_objects(self):
+        return self._query_objects
 
-        if self.save_to_csv:
-            base_directory_path = Path(config["paths"]["mag_intermediate_hmimdi_data_csv"]).parent
-            if not base_directory_path.exists():
-                base_directory_path.mkdir(parents=True)
-
-            self.merged_df.to_csv(Path(config["paths"]["mag_intermediate_hmimdi_data_csv"]), index=False)
-            self.hmi_sharps.to_csv(Path(config["paths"]["mag_intermediate_hmisharps_data_csv"]), index=False)
-            self.mdi_sharps.to_csv(Path(config["path"]["mag_intermediate_mdismarps_data_csv"]), index=False)
-            logger.info(
-                "saving... \n"
-                + f"\t `merged_df` to {Path(config['paths']['mag_intermediate_hmimdi_data_csv'])}\n"
-                + f"\t `hmi_sharp` to {Path(config['paths']['mag_intermediate_hmisharps_data_csv'])}\n"
-                + f"\t `mdi_sharps` to {Path(config['paths']['mag_intermediate_mdismarps_data_csv'])}\n"
-            )
-        else:
-            logger.warn("not saving merged csv files")
-
-    def fetch_metadata(self) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    def search(self, batch_frequency: int, merge_tolerance: timedelta) -> list[Query]:
         """
         Fetch and return data from various sources.
 
-        Returns
-        -------
-        tuple
-            Tuple containing data from different sources.
-        """
-        # download the txt files and create an SRS catalog
-        self.swpc.fetch_data(self.start_date, self.end_date)
-        srs = self.swpc.create_catalog()
-
-        # HMI & MDI
-        # !TODO itereate over children of `BaseMagnetogram`
-        hmi_keys = self.hmi.fetch_metadata(self.start_date, self.end_date, batch_frequency=12, to_csv=self.save_to_csv)
-        mdi_keys = self.mdi.fetch_metadata(self.start_date, self.end_date, batch_frequency=12, to_csv=self.save_to_csv)
-        sharp_k = self.sharps.fetch_metadata(self.start_date, self.end_date, batch_frequency=4, to_csv=self.save_to_csv)
-        smarp_k = self.smarps.fetch_metadata(self.start_date, self.end_date, batch_frequency=4, to_csv=self.save_to_csv)
-
-        # logging
-        for name, dataframe in {
-            "HMI Keys": hmi_keys,
-            "SHARP Keys": sharp_k,
-            "MDI Keys": mdi_keys,
-            "SMARP Keys": smarp_k,
-        }.items():
-            logger.info(
-                f"{name}: \n{dataframe[['T_REC','T_OBS','DATE-OBS','datetime', 'url']]}"
-            )  # magnetogram_fits', 'url']]}")
-
-        return srs, mdi_keys, hmi_keys, sharp_k, smarp_k
-
-    def merge_activeregionpatches(
-        self,
-        full_disk_data,
-        cutout_data,
-    ) -> DataFrame:
-        """
-        Merge active region patch data.
-
         Parameters
         ----------
-        full_disk_data : `DataFrame`
-            Data from full disk observations with columns;
-            ["datetime", "url"]
+        batch_frequency : `int`
+            integer number of months to batch search.
 
-        cutout_data : `DataFrame`
-            Data from active region cutouts. The pd.DataFrame must contain a "datetime" column.
-
-        Returns
-        -------
-        `DataFrame`
-            Merged DataFrame of active region patch data.
-        """
-        expected_columns = ["datetime", "url"]
-
-        if not set(expected_columns).issubset(full_disk_data.columns):
-            logger.warn(
-                "Currently, the columns in full_disk_data need to be ['datetime', 'url'] due to poor planning and thought."
-            )
-            raise NotImplementedError()
-
-        if not set(expected_columns).issubset(cutout_data.columns):
-            logger.warn(
-                "Currently, the columns in cutout_data need to be ['datetime', 'url'] due to poor planning and thought."
-            )
-            raise NotImplementedError()
-
-        full_disk_data_dropna = full_disk_data.dropna().reset_index(drop=True)
-
-        # !TODO can probably just do this in the merge with suffix = ...
-        cutout_data = cutout_data.add_suffix("_arc")
-        cutout_data_dropna = cutout_data.dropna().reset_index(drop=True)
-
-        # need to figure out if a left merge is what we want...
-        merged_df = pd.merge(
-            full_disk_data_dropna, cutout_data_dropna, left_on="datetime", right_on="datetime_arc"
-        )  # no tolerance as should be exact!
-
-        return merged_df
-
-    def merge_hmimdi_metadata(
-        self,
-        srs_keys: DataFrame,
-        hmi_keys: DataFrame,
-        mdi_keys: DataFrame,
-        tolerance: Timedelta = pd.Timedelta("30m"),
-    ) -> tuple[DataFrame, DataFrame]:
-        """
-        Merge SRS, HMI, and MDI metadata.
-
-        This function merges NOAA SRS, Helioseismic and Magnetic Imager (HMI),
-        and Michelson Doppler Imager (MDI) metadata based on datetime keys with a specified tolerance.
-
-        Parameters
-        ----------
-        srs_keys : `DataFrame`
-            DataFrame containing SRS metadata.
-
-        hmi_keys : `DataFrame`
-            DataFrame containing HMI metadata.
-
-        mdi_keys : `DataFrame`
-            DataFrame containing MDI metadata.
-
-        tolerance : `Timedelta`, optional
-            Time tolerance for merging operations. Default is pd.Timedelta("30m").
+        merge_tolerance : `timedelta`
+            the tolerance on observation time to target target time.
 
         Returns
         -------
-        `DataFrame`
-            Merged DataFrame of SRS, HMI, and MDI metadata.
-
-        `DataFrame`
-            DataFrame of dropped rows after merging.
+        list(Query)
+            List of Query objects
         """
-        srs_keys = srs_keys.copy(deep=True)
-        # merge srs_clean and hmi
-        mag_cols = ["datetime", "url"]
+        logger.debug("Entering search")
 
-        # !TODO do a check for certain keys (no duplicates...)
-        # extract only the relevant HMI keys, and rename
-        # (should probably do this earlier on)
-        hmi_keys = hmi_keys[mag_cols].copy(deep=True)
-        hmi_keys = hmi_keys.add_suffix("_hmi")
-        hmi_keys_dropna = hmi_keys.dropna().reset_index(drop=True)
+        # times = None # hmm...
 
-        mdi_keys = mdi_keys[mag_cols].copy(deep=True)
-        mdi_keys = mdi_keys.add_suffix("_mdi")
-        mdi_keys_dropna = mdi_keys.dropna().reset_index(drop=True)
-
-        # Rename columns in srs_clean with suffix "_srs" except for exclude_columns
-        exclude_columns = [
-            "ID",
-            "Number",
-            "Carrington Longitude",
-            "Area",
-            "Z",
-            "Longitudinal Extent",
-            "Number of Sunspots",
-            "Mag Type",
-            "Latitude",
-            "Longitude",
+        # If it's a single value, use it for all data sources
+        # !TODO consider implementing as a list (probably not needed)
+        metadata_list = [
+            data_source.fetch_metadata(
+                self.start_date.to_datetime(), self.end_date.to_datetime(), batch_frequency=batch_frequency
+            )  # understand if that conversion from astropy time to datetime is bad.
+            for data_source in self._mag_objects
         ]
-        srs_keys.columns = [f"{col}_srs" if col not in exclude_columns else col for col in srs_keys.columns]
-        #
 
-        # both `pd.DataFrame` must be sorted based on the key !
-        merged_df = pd.merge_asof(
-            left=srs_keys,
-            right=hmi_keys_dropna,
-            left_on="datetime_srs",
-            right_on="datetime_hmi",
-            suffixes=["_srs", "_hmi"],
-            tolerance=tolerance,  # HMI is at 720s (12 min) cadence
-            direction="nearest",
-        )
+        for meta in metadata_list:
+            logger.debug(f"{meta.__class__.__name__}: \n{meta[['T_REC','T_OBS','DATE-OBS','datetime', 'url']]}")
 
-        # Merge the SRS-HMI df with MDI
-        merged_df = pd.merge_asof(
-            left=merged_df,
-            right=mdi_keys_dropna,
-            left_on="datetime_srs",
-            right_on="datetime_mdi",
-            suffixes=["_srs", "_mdi"],
-            tolerance=tolerance,
-            direction="nearest",
-        )
+        results = []
+        for meta, query in zip(metadata_list, self._query_objects):
+            # do the join in pandas, and then convert to QTable?
 
-        # with a SRS-HMI-MDI df, remove NaNs
-        # Drop rows where there is no HMI or MDI match to SRS data
-        dropped_rows = merged_df.copy()
-        merged_df = merged_df.dropna(subset=["datetime_srs"])  # Don't think this is necessary
-        merged_df = merged_df.dropna(subset=["datetime_hmi", "datetime_mdi"], how="all")
-        dropped_rows = dropped_rows[~dropped_rows.index.isin(merged_df.index)].copy()
+            # removing url, but appending Query(...) without url column will complain
+            # probably a better way to deal with this
+            pd_query = query.to_pandas()  # [['target_time']]
 
-        logger.info(f"merged_df: \n{merged_df[['datetime_srs', 'datetime_hmi', 'datetime_mdi']]}")
-        logger.info(f"dropped_rows: \n{dropped_rows[['datetime_srs', 'datetime_hmi', 'datetime_mdi']]}")
-        logger.info(f"dates dropped: \n{dropped_rows['datetime_srs'].unique()}")
+            # check this dropping... how is datetime determined? are we dropping all missing?
+            meta_datetime = (
+                meta[["datetime"]].drop_duplicates().dropna().sort_values("datetime").reset_index(drop=True)
+            )  # adding sorting here... is this going to mess something up?
 
-        # return the merged dataframes with dropped indices
-        return merged_df.reset_index(drop=True), dropped_rows.reset_index(drop=True)
+            # generate a mapping between target_time to datetime with the specified tolerance.
+            merged_time = pd.merge_asof(
+                left=pd_query[["target_time"]],
+                right=meta_datetime,
+                left_on=["target_time"],
+                right_on=["datetime"],
+                tolerance=merge_tolerance,
+                direction="nearest",
+            )
 
-    def fetch_fits(
-        self,
-        urls_df: DataFrame = None,
-        column_name="url",
-        suffix="",
-        base_directory_path: Path = Path(config["paths"]["mag_raw_data_dir"]),
-        max_retries: int = 5,
-        overwrite: bool = False,
-    ) -> DataFrame:
+            merged_time = merged_time.dropna()  # can be NaT in the datetime column
+
+            # for now, ensure that there are no duplicates of the same "datetime" in the df
+            # this would happen if two `target_time` share a single `meta[datetime]`
+            if len(merged_time["datetime"].dropna().unique()) != len(merged_time["datetime"].dropna()):
+                raise ValueError("there are duplicates of datetime from the right df")
+
+            # extract the rows in the metadata which match the exact datetime
+            # which there may be multiple for cutouts at the same full-disk time, and join
+            matched_rows = meta[meta["datetime"].isin(merged_time["datetime"])]
+
+            # -- Bit hacky to stop H(T)ARPNUM becoming a float
+            #    I think Shane may have found a better way to deal with this?
+            # Convert int64 columns to Int64
+            int64_columns = matched_rows.select_dtypes(include=["int64"]).columns
+            # Create a new DataFrame with Int64 data types
+            new_df = matched_rows.copy()
+            for col in int64_columns:
+                new_df[col] = matched_rows[col].astype("Int64")
+
+            # merged_time <- this is the times that match between the query and output
+            # new_df / matched_rows are the rows in the output at the same time as the query
+            merged_df = pd.merge(merged_time, new_df, on="datetime", how="left")
+            # I hope this isn't nonsense, and keeps the `urls` as a masked column
+            # how does this work with sharps/smarps where same datetime for multiple rows
+
+            # now merge with original query (only target_time)
+            if len(pd_query.url.dropna().unique()) == 0:
+                merged_df = pd.merge(pd_query["target_time"], merged_df, on="target_time", how="left")
+            else:
+                raise NotImplementedError("pd_query.url is not empty")
+
+            # !TODO Replace NaN values in the "url" column with masked values or change this...
+            # remove columns ?
+            # rename columns ?
+            results.append(Query(QTable.from_pandas(merged_df)))
+
+        logger.debug("Exiting search")
+        return metadata_list, results
+
+    def download(self, query_list: list[Query], path: Path = None, overwrite: bool = False):
         """
-        Download data from URLs in a DataFrame using parfive.
 
         Parameters
         ----------
-        urls_df : `DataFrame`
-            DataFrame containing a "url" column with URLs to download.
+        query_list : `list[Query]`
+            list of Query(QTable) objects
 
-        base_directory_path : `Path`, optional
-            Base directory path to save downloaded files. Default is `arccnet.data_generation.utils.default_variables.MAG_RAW_DATA_DIR`.
+        path : `Path`
+            download path
+
+        overwrite : `bool`, optional
+            overwrite files on download. Default is False
+
+        Returns
+        -------
+        downloads : list[Result]
+            list of Result objects
+        """
+        logger.debug("Entering download")
+
+        downloads = []
+        for query in query_list:
+            # expand like swpc
+
+            new_query = None
+            results = query.copy()
+
+            if overwrite is True or "path" not in query.colnames:
+                logger.debug(f"Full download (overwrite = {overwrite})")
+                new_query = QTable(query)
+
+            # !TODO a way of retrying missing would be good, but JSOC URLs are temporary.
+            if new_query is not None:
+                downloaded_files = self._download(
+                    data_list=new_query[~new_query["url"].mask]["url"].data.data, path=path, overwrite=overwrite
+                )
+                results = self._match(results, downloaded_files)  # should return a results object.
+            else:
+                raise NotImplementedError("new_query is none.")
+
+            downloads.append(Result(results))
+
+        logger.debug("Exiting download")
+        return downloads
+
+    def _match(self, results: Result, downloads: np.array) -> Result:  # maybe?
+        """
+        match results against downloaded files
+
+        Parameters
+        ----------
+        results : `Result`
+            Result(QTable)
+
+        downloads : `np.array`
+            downloaded filenames
+
+        """
+        results = QTable(results)
+
+        if "path" in results.colnames:
+            results.remove_column("path")
+
+        results_df = QTable.to_pandas(results)
+        results_df["temp_url_name"] = [str(Path(url).name) if not pd.isna(url) else "" for url in results_df["url"]]
+        downloads_df = DataFrame({"path": downloads})
+        downloads_df["temp_path_name"] = downloads_df["path"].apply(lambda x: str(Path(x).name))
+        merged_df = pd.merge(results_df, downloads_df, left_on="temp_url_name", right_on="temp_path_name", how="left")
+
+        merged_df.drop(columns=["temp_url_name", "temp_path_name"], inplace=True)
+        results = QTable.from_pandas(merged_df)
+        return results
+
+    @staticmethod
+    def _download(
+        data_list,
+        path: Path,
+        overwrite: bool = False,
+        max_retries: int = 5,
+    ):
+        """
+        Download data from URLs
+
+        Parameters
+        ----------
+        data_list
+            list of URLs to download
+
+        path : `Path`
+            Path to save downloaded files.
+
+        overwrite : `bool`, optional
+            Flag to overwrite files. Default is False
 
         max_retries : `int`, optional
             Maximum number of download retries. Default is 5.
 
         Returns
         -------
-        `DataFrame`
-            New data frame containing "download_path" and "downloaded_successfully" columns
+        'parfive.results.Results'
         """
-        if urls_df is None or not isinstance(urls_df, pd.DataFrame) or column_name not in urls_df.columns:
-            logger.warning(f"Invalid DataFrame format. Expected a DataFrame with a '{column_name}' column.")
-            return None
-
         downloader = Downloader(
             max_conn=1,
             progress=True,
-            overwrite=False,
+            overwrite=overwrite,
             max_splits=1,
         )
 
-        # setup dataframe with download_paths
+        existing_files = []
+        # if file exists, add to list.
+        for url in data_list:
+            # Generate the full path where you want to save the file
+            file_name = Path(url).name
+            file_path = Path(path) / file_name
 
-        urls_df["download_path" + suffix] = [
-            base_directory_path / Path(url).name if isinstance(url, str) else np.nan for url in urls_df[column_name]
-        ]
-        downloaded_successfully = []
-        for path in urls_df["download_path" + suffix]:
-            if isinstance(path, Path):
-                downloaded_successfully.append(False)
-            elif pd.isna(path):
-                downloaded_successfully.append(np.nan)
+            # Check if the file already exists
+            if file_path.exists() and not overwrite:
+                existing_files.append(str(file_path))
             else:
-                raise InvalidDownloadPathError(f"Invalid download path: {path}")
+                # If it doesn't exist, enqueue the file for downloading
+                downloader.enqueue_file(url=url, path=path)
 
-        urls_df["downloaded_successfully" + suffix] = downloaded_successfully
-
-        fileskip_counter = 0
-        for _, row in urls_df.iterrows():
-            if row[column_name] is not np.nan:
-                # download only if it doesn't exist or overwrite is True
-                # this assumes that parfive deals with checking the integrity of files downloaded
-                # and that none are corrupt
-                if not row["download_path" + suffix].exists() or overwrite:
-                    downloader.enqueue_file(row[column_name], filename=row["download_path" + suffix])
-                else:
-                    fileskip_counter += 1
-
-        if fileskip_counter > 0:
-            logger.info(f"{fileskip_counter} files already exist at the destination, and will not be overwritten.")
-
+        logger.debug(f"{len(existing_files)}/{len(data_list)} files already exist (overwrite = {overwrite})")
         results = downloader.download()
 
         if len(results.errors) != 0:
@@ -448,14 +409,7 @@ class DataManager:
         else:
             logger.info("No errors reported by parfive")
 
-        parfive_download_errors = [errors.url for errors in results.errors]
+        results = np.concatenate((existing_files, results.data), axis=0)
+        results = np.sort(results, axis=0)
 
-        urls_df["downloaded_successfully" + suffix] = [
-            url not in parfive_download_errors if isinstance(url, str) else url for url in urls_df[column_name]
-        ]
-
-        return urls_df
-
-
-class InvalidDownloadPathError(Exception):
-    pass
+        return results

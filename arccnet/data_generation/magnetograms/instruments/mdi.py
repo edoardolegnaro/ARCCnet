@@ -2,7 +2,6 @@ import datetime
 
 import pandas as pd
 
-from arccnet import config
 from arccnet.data_generation.magnetograms.base_magnetogram import BaseMagnetogram
 from arccnet.data_generation.magnetograms.utils import datetime_to_jsoc
 
@@ -20,7 +19,7 @@ class MDILOSMagnetogram(BaseMagnetogram):
         str:
             JSOC Query string
         """
-        # Line-of-sight magnetic field from 30-second observations in full-disc mode,
+        # Line-of-sight magnetic field from 30-second observations in full-disk mode,
         # sampled either once in a minute or averaged over five consecutive minute samples.
         # Whether the data are form a single observation or an average of five is given by
         # the value of the keyword INTERVAL, the length of the sampling interval in seconds.
@@ -110,16 +109,6 @@ class MDILOSMagnetogram(BaseMagnetogram):
             Name of the MDI data segment
         """
         return "data"
-
-    @property
-    def metadata_save_location(self) -> str:
-        """
-        Returns
-        -------
-        str:
-            MDI directory path
-        """
-        return config["paths"]["mdi_mag_raw_csv"]
 
 
 class MDISMARPs(MDILOSMagnetogram):
@@ -244,15 +233,3 @@ class MDISMARPs(MDILOSMagnetogram):
             The name of the HMI data segment.
         """
         return "bitmap"
-
-    @property
-    def metadata_save_location(self) -> str:
-        """
-        Get the HMI directory path for saving metadata.
-
-        Returns
-        -------
-        str
-            The HMI directory path for saving metadata.
-        """
-        return config["paths"]["mdi_smarps_raw_csv"]

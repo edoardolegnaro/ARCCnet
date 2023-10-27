@@ -133,6 +133,8 @@ class ClassificationCatalog(QTable):
             raise ValueError(
                 f"{self.__class__.__name__} must contain " f"{list(self.required_column_types.keys())} columns"
             )
+        self["url"] = MaskedColumn(self["url"])
+        self["path"] = MaskedColumn(self["path"])
 
     @classmethod
     def read(cls, *args, **kwargs) -> ClassificationCatalog:
@@ -292,7 +294,7 @@ class SWPCCatalog:
             logger.debug("Catalog already creating returning input")
             return results
 
-        downloaded_filepaths = [Path(filepath) for filepath in results["path"].filled("")]
+        downloaded_filepaths = [Path(filepath) for filepath in results["path"].filled("")]  # if filepath != ""
 
         with ThreadPoolExecutor() as thread_pool:
             parsed_srs = thread_pool.map(self._parse_srs, downloaded_filepaths, timeout=10)
@@ -376,7 +378,7 @@ class SWPCCatalog:
         Parameters
         ----------
         results : `Result`
-            Exiting results
+            Existing results
         downloads : `UnifiedResponse`
             List of downloaded files
 

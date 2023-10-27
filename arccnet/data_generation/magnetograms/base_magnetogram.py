@@ -1,8 +1,8 @@
 import time
+import urllib
 import datetime
 import http.client
 from abc import ABC, abstractmethod
-from pathlib import Path
 
 import drms
 import pandas as pd
@@ -84,19 +84,6 @@ class BaseMagnetogram(ABC):
         pass
 
     @property
-    @abstractmethod
-    def metadata_save_location(self) -> str:
-        """
-        Get the directory path for saving metadata.
-
-        Returns
-        -------
-        str:
-            The directory path for saving metadata
-        """
-        pass
-
-    @property
     def _type(self):
         """
         Get the name of the instantiated class.
@@ -146,7 +133,7 @@ class BaseMagnetogram(ABC):
         """
         keys, segs = self._drms_client.query(
             query,
-            key="**ALL**",  # drms.const.all = '**ALL**'
+            key="**ALL**",  # the needed columns vary, **ALL** returns all available keys
             seg=self.segment_column_name,
         )
         return keys, segs
@@ -199,7 +186,7 @@ class BaseMagnetogram(ABC):
 
     def _data_export_request_with_retry(
         self, query: str, max_retries=5, retry_delay=60, drms_export_delay=60, **kwargs
-    ) -> None:
+    ) -> pd.DataFrame:
         """
         Submit a data export request with retries and return the URLs.
 
@@ -239,26 +226,27 @@ class BaseMagnetogram(ABC):
                 # 2. drms.exceptions.DrmsExportError
                 # The latter occurs after the former due to the request still pending
                 if isinstance(e, http.client.RemoteDisconnected):
-                    if retries <= max_retries:
-                        logger.warning(
-                            f"\t ... Exception: '{e}' raised. Retrying in {retry_delay} seconds: retry {retries} of {max_retries}."
-                        )
-                        time.sleep(retry_delay)
-                        retries += 1
-                    else:
-                        logger.error(f"All {retries} retries failed. Raising DataExportRequestError.")
-                        raise DataExportRequestError("Failed to export data after multiple retries")
+                    logger.warning(
+                        f"\t ... Exception: '{e}' raised. Retrying in {retry_delay} seconds: retry {retries} of {max_retries}."
+                    )
+                    time.sleep(retry_delay)
+                    retries += 1
                 elif isinstance(e, drms.exceptions.DrmsExportError):
                     if "pending export requests" in str(e):
                         logger.info(
                             f"\t ... waiting {drms_export_delay} seconds for pending export requests to complete."
                         )
-                        time.sleep(drms_export_delay)  # Wait for 60 seconds before checking again
+                        time.sleep(drms_export_delay)
                     else:
                         logger.warning(
                             f"\t ... Exception: '{e}' raised. Retrying in {retry_delay} seconds: retry {retries} of {max_retries}."
                         )
+                        time.sleep(retry_delay)
                         retries += 1
+                elif isinstance(e, urllib.error.HTTPError) and e.code == 504:
+                    logger.info(f"\t ... HTTP Error 504: waiting {drms_export_delay} seconds before trying again.")
+                    time.sleep(drms_export_delay)
+                    retries += 1
                 else:
                     raise e
 
@@ -270,7 +258,7 @@ class BaseMagnetogram(ABC):
         **kwargs,
     ) -> None:
         """
-        Submi a data export request and return the urls.
+        Submit a data export request and return the urls.
 
         This method submoits a data export request to JSOC based on the provided query and additional keyword arguments.
 
@@ -298,41 +286,6 @@ class BaseMagnetogram(ABC):
         export_response.wait()
         r_urls = export_response.urls.copy()
         return r_urls
-
-    def _save_metadata_to_csv(self, keys: pd.DataFrame, filepath: str = None, **kwargs) -> None:
-        """
-        Save metadata to a CSV file.
-
-        This method saves the metadata DataFrame to a CSV file.
-
-        Parameters
-        ----------
-        keys : pd.DataFrame
-            A DataFrame containing metadata keys.
-
-        filepath : `str`, optional
-            Filepath for saving the CSV file. If not provided, the default location is used
-            (refer to `metadata_save_location` attribute).
-
-        **kwargs
-            Additional keyword arguments to pass to pandas DataFrame's `to_csv` function.
-
-        Returns
-        -------
-        None
-        """
-        if filepath is None:
-            filepath = self.metadata_save_location
-
-        file = Path(filepath)
-        logger.info(f"The metadata for {self._type} has been saved to {file}")
-
-        # !TODO make a utility function here
-        directory_path = file.parent
-        if not directory_path.exists():
-            directory_path.mkdir(parents=True)
-
-        keys.to_csv(file, **kwargs)
 
     def _add_extracted_columns_to_df(
         self, df: pd.DataFrame, df_colname: str = "record"
@@ -389,7 +342,6 @@ class BaseMagnetogram(ABC):
         start_date: datetime.datetime,
         end_date: datetime.datetime,
         batch_frequency: int = 3,
-        to_csv: bool = True,
         dynamic_columns=["url"],
     ) -> pd.DataFrame:
         """
@@ -410,8 +362,10 @@ class BaseMagnetogram(ABC):
             The frequency for each batch.
             Default is 3 (3 months), empirically determined based on the density of files seen in SHARPs queries.
 
-        to_csv : `bool`, optional
-            Whether to save the fetched metadata to a CSV file. Defaults to True.
+        dynamic_columns : list[str]
+            Columns that will be different with each request. This is used for dropping duplicates.
+            For example, JSOC prepares the set of files at each request, returning unique URLs.
+            Default is ["url"].
 
         Returns
         -------
@@ -432,8 +386,6 @@ class BaseMagnetogram(ABC):
 
         Duplicate rows are checked and logged as warnings if found.
 
-        If `to_csv` is True, the fetched metadata is saved to a CSV file using the `_save_metadata_to_csv` method.
-
         See Also
         --------
         fetch_metadata_batch
@@ -450,7 +402,7 @@ class BaseMagnetogram(ABC):
             if batch_end > end_date:
                 batch_end = end_date
 
-            metadata_batch = self.fetch_metadata_batch(batch_start, batch_end, to_csv=False)
+            metadata_batch = self.fetch_metadata_batch(batch_start, batch_end)
 
             if metadata_batch is not None:  # Check if the batch is not empty or None
                 all_metadata.append(metadata_batch)
@@ -470,17 +422,13 @@ class BaseMagnetogram(ABC):
         columns_to_check = [col for col in combined_metadata.columns if col not in dynamic_columns]
         combined_metadata = combined_metadata.drop_duplicates(subset=columns_to_check).reset_index(drop=True)
 
-        if to_csv:
-            self._save_metadata_to_csv(combined_metadata)
-
-        logger.info(combined_metadata.shape)
+        logger.debug(combined_metadata.shape)
         return combined_metadata
 
     def fetch_metadata_batch(
         self,
         start_date: datetime.datetime,
         end_date: datetime.datetime,
-        to_csv: bool = False,
     ) -> pd.DataFrame:
         """
         Fetch metadata batch from JSOC.
@@ -496,8 +444,6 @@ class BaseMagnetogram(ABC):
         end_date : datetime.datetime
             The end datetime for the desired time range of observations.
 
-        to_csv : `bool`, optional
-            Whether to save the fetched metadata to a CSV file. Defaults to True.
 
         Returns
         -------
@@ -518,11 +464,9 @@ class BaseMagnetogram(ABC):
 
         Duplicate rows are checked and logged as warnings if found.
 
-        If `to_csv` is True, the fetched metadata is saved to a CSV file using the `_save_metadata_to_csv` method.
-
         See Also
         --------
-        generate_drms_query, _query_jsoc, _add_magnetogram_urls, _data_export_request, _add_extracted_columns_to_df, _save_metadata_to_csv
+        generate_drms_query, _query_jsoc, _add_magnetogram_urls, _data_export_request, _add_extracted_columns_to_df
         """
 
         query = self.generate_drms_query(start_date, end_date)
@@ -539,7 +483,7 @@ class BaseMagnetogram(ABC):
         # NB: There are two files presented here that are essentially of the same thing.
         #   1. segs is a list of data files. The full .fits can be made with keys & segs. (commented out)
         #   2. r_urls provides the urls of the full .fits files
-        # self._add_magnetogram_urls(keys, segs, url=dv.JSOC_BASE_URL, column_name="magnetogram_fits")
+        # self._add_magnetogram_urls(keys, segs, url="http://jsoc.stanford.edu", column_name="magnetogram_fits")
         r_urls = self._data_export_request_with_retry(query)
         # extract info e.g. date, active region number from the `r_url["record"]` using `_get_matching_info_from_record`
         # and insert back into r_urls as additional column names.
@@ -571,9 +515,6 @@ class BaseMagnetogram(ABC):
             keys_merged = pd.concat([keys_merged, datetime_df], axis=1)
         else:
             raise ValueError("Column 'datetime' already exists in the DataFrame.")
-
-        if to_csv:
-            self._save_metadata_to_csv(keys_merged)
 
         return keys_merged
 
