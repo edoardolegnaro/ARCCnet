@@ -10,6 +10,7 @@ from astropy.table import MaskedColumn, QTable, join, vstack
 
 from arccnet import config
 from arccnet.catalogs.active_regions.swpc import ClassificationCatalog, Query, Result, SWPCCatalog, filter_srs
+from arccnet.catalogs.utils import remove_columns_with_suffix, retrieve_harp_noaa_mapping
 from arccnet.data_generation.data_manager import DataManager
 from arccnet.data_generation.data_manager import Query as MagQuery
 from arccnet.data_generation.mag_processing import MagnetogramProcessor, RegionExtractor
@@ -696,6 +697,66 @@ def region_detection(config, hmi_sharps, mdi_smarps):
     return ar_detection
 
 
+def merge_noaa_harp(arclass, ardeten):
+    """
+    merge noaa and harp on a one-to-one basis
+    """
+    ar = arclass[arclass["region_type"] == "AR"]
+    ar = ar[~ar["quicklook_path_hmi"].mask]
+    ar["NOAA"] = ar["number"]
+    ar["target_time"] = ar["time"]
+
+    ardeten_hmi = ardeten[ardeten["instrument"] == "HMI"]
+
+    harp_noaa_map = retrieve_harp_noaa_mapping()
+
+    joined_table = join(ardeten_hmi, harp_noaa_map, keys="record_HARPNUM_arc")
+
+    # Identify dates to drop
+    joined_table["filtered"] = False
+    grouped_table = joined_table.group_by("processed_path")
+    for date in grouped_table.groups:
+        if any(date["NOAANUM"] > 1):
+            date["filtered"] = True
+
+    merged_grouped = join(grouped_table, ar, keys=["target_time", "NOAA"])
+
+    logger.info("Generating `Region Detection` dataset")
+    data_root = config["paths"]["data_root"]
+    merged_grouped_path = Path(data_root) / "04_final" / "mag" / "region_detection" / "region_detection_noaa-harp.parq"
+
+    # Remove columns ending with "_mdi"
+    merged_grouped = remove_columns_with_suffix(merged_grouped, "_mdi")
+
+    # remove columns; !TODO drop these earlier
+    cols_to_remove = [
+        "record_TARPNUM_arc",
+        "time",
+        "number",
+        "processed_path_image_hmi",
+        "top_right_cutout_hmi",
+        "bottom_left_cutout_hmi",
+        "path_image_cutout_hmi",
+        "dim_image_cutout_hmi",
+        "quicklook_path_hmi",
+    ]
+    merged_grouped.remove_columns(cols_to_remove)
+
+    # rename columns; !TODO do this earlier
+    cols_to_rename = {
+        "latitude_hmi": "latitude",
+        "longitude_hmi": "longitude",
+        "sum_ondisk_nans_hmi": "sum_ondisk_nans",
+        "NOAANUM": "number_noaa_per_harp",
+    }
+    for k, v in cols_to_rename.items():
+        merged_grouped.rename_column(k, v)
+
+    merged_grouped.write(merged_grouped_path, format="parquet", overwrite=True)
+
+    return merged_grouped
+
+
 def main():
     root_logger = logging.getLogger()
     root_logger.setLevel("DEBUG")
@@ -720,10 +781,12 @@ def main():
     )
 
     # extract AR/QS regions from HMI and MDI
-    region_extraction(config, srs_hmi, srs_mdi)
+    arclass = region_extraction(config, srs_hmi, srs_mdi)
 
     # bounding box locations of cutouts (in pixel space) on the full-disk images
-    region_detection(config, hmi_sharps, mdi_smarps)
+    ardeten = region_detection(config, hmi_sharps, mdi_smarps)
+
+    merge_noaa_harp(arclass, ardeten)
 
     logger.debug("Finished main")
 
