@@ -27,6 +27,29 @@ class DetectionBox:
     top_right_coord_px: tuple[float, float]
 
 
+class RegionDetectionResult(QTable):
+    r"""
+    Region Detection QTable object.
+
+    """
+    required_column_types = {
+        "target_time": Time,
+        "processed_path": str,
+        "path_arc": str,
+        "filtered": bool,
+        "filter_reason": str,
+        "top_right_cutout": tuple,
+        "bottom_left_cutout": tuple,
+    }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if not set(self.colnames).issuperset(set(self.required_column_types.keys())):
+            raise ValueError(
+                f"{self.__class__.__name__} must contain " f"{list(self.required_column_types.keys())} columns"
+            )
+
+
 class RegionDetectionTable(QTable):
     r"""
     Region Detection QTable object.
@@ -36,6 +59,8 @@ class RegionDetectionTable(QTable):
         "target_time": Time,
         "processed_path": str,
         "path_arc": str,
+        "filtered": bool,
+        "filter_reason": str,
     }
 
     def __init__(self, *args, **kwargs):
@@ -51,7 +76,7 @@ class RegionDetectionTable(QTable):
             raise ValueError("base_table must be an instance of RegionDetectionTable")
 
         # Check if additional columns already exist
-        existing_columns = set(base_table.colnames).intersection(["top_right", "bottom_left"])
+        existing_columns = set(base_table.colnames).intersection(["top_right_cutout", "bottom_left_cutout"])
         if existing_columns:
             raise ValueError(f"Columns {existing_columns} already exist in base_table.")
 
@@ -105,10 +130,16 @@ class RegionDetection:
 
         bboxes = []
         for group in tqdm(grouped_data.groups, total=len(grouped_data.groups), desc="Processing"):
+            if np.all(group["filtered"] == True):  # noqa
+                continue
+
             fulldisk_path = group["processed_path"][0]
             fulldisk_map = sunpy.map.Map(Path(fulldisk_path))
 
             for row in group:
+                if np.any(row["filtered"] == True):  # noqa
+                    raise NotImplementedError()
+
                 cutout_map = sunpy.map.Map(row[self._col_cutout])
 
                 # rotate with missing, the value to use for pixels in the output map that are beyond the extent of the input map,
@@ -171,11 +202,11 @@ class RegionDetection:
             else:
                 logger.warn(f"{len(matching_rows)} rows matched with {bbox.fulldisk_path} and {bbox.cutout_path}")
 
-        return RegionDetectionTable(updated_table)
+        return RegionDetectionResult(updated_table)
 
+    @staticmethod
     def summary_plots(
-        self,
-        table: RegionDetectionTable,
+        table: RegionDetectionResult,
         summary_plot_path: Path,
     ) -> None:
         data = QTable(table)
@@ -185,9 +216,15 @@ class RegionDetection:
         data.add_column(col, name="quicklook_path")
 
         grouped_data = data.group_by("processed_path")
+        result_table = data[:0].copy()
 
         logger.info("region detection ")
         for group in tqdm(grouped_data.groups, total=len(grouped_data.groups), desc="Plotting"):
+            if np.all(group["filtered"] == True):  # noqa
+                for row in group:
+                    result_table.add_row(row)
+                continue
+
             fulldisk_path = group["processed_path"][0]
             instrument = group["instrument"][0]
 
@@ -199,16 +236,19 @@ class RegionDetection:
 
             for row in group:
                 row["quicklook_path"] = output_filename
+                result_table.add_row(row)
 
             logger.info(group)
 
-            self._summary_plot(group, fulldisk_map, output_filename)
+            RegionDetection._summary_plot(group, fulldisk_map, output_filename)
 
-        return grouped_data
+        assert len(result_table) == len(data)
+
+        return result_table
 
     @staticmethod
     def _summary_plot(
-        table: RegionDetectionTable,
+        table: RegionDetectionResult,
         sunpy_map: sunpy.map.Map,
         output_filename: Path,
     ):
