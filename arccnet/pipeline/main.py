@@ -52,9 +52,28 @@ def process_srs(config):
     srs_processed_catalog_file.parent.mkdir(exist_ok=True, parents=True)
     srs_clean_catalog_file.parent.mkdir(exist_ok=True, parents=True)
 
-    srs_query = Query.create_empty(config["general"]["start_date"], config["general"]["end_date"])
-    if srs_query_file.exists():  # this is fine only if the query agrees
-        srs_query = Query.read(srs_query_file)
+    srs_query = Query.create_empty(
+        config["general"]["start_date"].isoformat(), config["general"]["end_date"].isoformat()
+    )
+
+    # Check if the query file exists
+    if srs_query_file.exists():
+        # Read the query from the file
+        file_query = Query.read(srs_query_file)
+
+        # Raise an error if the queries do not match
+        identical = (
+            QTable(srs_query)[["start_time", "end_time"]]
+            .to_pandas()
+            .equals(QTable(file_query)[["start_time", "end_time"]].to_pandas())
+        )
+
+        if not identical:
+            msg = "The requested SRS query does not match the saved query"
+            logger.error(msg)
+            raise ValueError(msg)
+        else:
+            srs_query = file_query
 
     srs_query = swpc.search(srs_query)
     srs_query.write(srs_query_file, format="parquet", overwrite=True)
@@ -913,10 +932,9 @@ def merge_noaa_harp(arclass, ardeten):
     return merged_grouped
 
 
-def main():
-    logger.debug("Starting main")
-    process_flares(config)
-    _, _, _, _, clean_catalog = process_srs(config)
+def process_ars(config, catalog):
+    logger.info("Processing AR images with config")
+
     hmi_download_obj, sharps_download_obj = process_hmi(config)
     mdi_download_obj, smarps_download_obj = process_mdi(config)
 
@@ -927,7 +945,7 @@ def main():
     #   MDI-SMARPS: merge HMI and SHARPs (null datetime dropped before merge)
     srs_hmi, srs_mdi, hmi_sharps, mdi_smarps = merge_mag_tables(
         config,
-        srs=clean_catalog,
+        srs=catalog,
         hmi=hmi_download_obj,
         mdi=mdi_download_obj,
         sharps=sharps_download_obj,
@@ -941,9 +959,7 @@ def main():
     ardeten = region_detection(config, hmi_sharps, mdi_smarps)
     merged_table = merge_noaa_harp(arclass, ardeten)
 
-    merged_table_quicklook = RegionDetection(
-        table=merged_table, col_group_path="processed_path", col_cutout_path="path_arc"
-    ).summary_plots(
+    merged_table_quicklook = RegionDetection.summary_plots(
         RegionDetectionTable(merged_table),
         Path(config["paths"]["data_root"]) / "04_final" / "data" / "region_detection" / "quicklook",
     )
@@ -958,7 +974,19 @@ def main():
         format="parquet",
         overwrite=True,
     )
-    print(merged_table_quicklook["quicklook_path"])
+
+
+def process_ar_catalogs(config):
+    logger.info("Processing AR catalogs with config")
+    _, _, _, processed_catalog, _ = process_srs(config)
+    return processed_catalog
+
+
+def main():
+    logger.debug("Starting main")
+    process_flares(config)
+    catalog = process_ar_catalogs(config)
+    process_ars(config, catalog)
 
 
 if __name__ == "__main__":
