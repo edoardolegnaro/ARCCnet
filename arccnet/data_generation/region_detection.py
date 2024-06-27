@@ -259,6 +259,7 @@ class RegionDetection:
         sunpy_map.plot_settings["norm"].vmin = -1499
         sunpy_map.plot_settings["norm"].vmax = 1499
         sunpy_map.plot(axes=ax, cmap="hmimag")
+        sunpy_map.draw_grid(axes=ax)
 
         for row in table:
             # deal with boxes off the edge
@@ -278,6 +279,19 @@ class RegionDetection:
                 markersize=4,
                 label=f'NOAA {row["NOAA"]}',
             )
+
+            delta_lon = row["longitudinal_extent"] / 2.0 * u.deg
+            start = row["longitude"] - delta_lon
+            end = row["longitude"] + delta_lon
+
+            constant_lon = SkyCoord(
+                np.linspace(start, end, 2),
+                row["latitude"],
+                frame=sunpy.coordinates.frames.HeliographicStonyhurst,
+                obstime=sunpy_map.date,
+            )
+
+            ax.plot_coord(constant_lon, color="k")
 
             ax.legend()
 
