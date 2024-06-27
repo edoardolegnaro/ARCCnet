@@ -1,3 +1,4 @@
+import copy
 import random
 import multiprocessing
 from typing import Union
@@ -277,6 +278,22 @@ class RegionBox:
 class ARBox(RegionBox):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.region_type = "AR"
+
+
+class IABox(RegionBox):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.region_type = "IA"
+
+
+class IIBox:
+    def __init__(
+        self,
+        identifier: int = None,
+    ):
+        self.identifier = identifier
+        self.region_type = "II"
 
 
 class FilteredBox(RegionBox):
@@ -284,11 +301,14 @@ class FilteredBox(RegionBox):
         super().__init__(*args, **kwargs)
 
         self.filepath = None
+        self.region_type = "FB"
 
 
 class QSBox(RegionBox):
     def __init__(self, sunpy_map: sunpy.map.Map, *args, **kwargs):
         super().__init__(*args, **kwargs)
+
+        self.region_type = "QS"
 
         if sunpy.map.coordinate_is_on_solar_disk(sunpy_map.center):
             latlon = sunpy_map.center.transform_to(sunpy.coordinates.frames.HeliographicStonyhurst)
@@ -379,8 +399,7 @@ class RegionExtractor:
         result_table = QTable(ARClassification.augment_table(self._table))
         table_by_target_time = result_table.group_by("target_time")
 
-        ar_table = result_table[:0].copy()
-        qs_table = result_table[:0][
+        qs_rows = [
             "target_time",
             "number",
             "path_image_cutout",
@@ -395,9 +414,13 @@ class RegionExtractor:
             "region_type",
             "filtered",
             "filter_reason",
-        ].copy()
+        ]
 
-        # iterate through groups
+        qs_table = copy.deepcopy(result_table[:0])[qs_rows]
+
+        # # iterate through groups
+        ar_table_all = None
+
         for tbtt in tqdm(table_by_target_time.groups):
             if len(np.unique(tbtt["processed_path_image"])) != 1:
                 raise ValueError("len(image_file) is not 1")
@@ -412,8 +435,11 @@ class RegionExtractor:
                 tbtt["filter_reason"] != "not_ar,invalid_magnetic_class,invalid_mcintosh_class,"
             )
             if np.all(condition_met):
-                for tbttrw in tbtt:
-                    ar_table.add_row(tbttrw)
+                ar_table = tbtt.copy()
+                if ar_table_all is None:
+                    ar_table_all = copy.deepcopy(ar_table)
+                else:
+                    ar_table_all = ARClassification(vstack([QTable(ar_table_all), QTable(ar_table)]))
                 continue
 
             # probably need to split the tbtt into filtered etc. to keep them in
@@ -421,8 +447,11 @@ class RegionExtractor:
             rows_filtered = tbtt[tbtt["filtered"] == True].copy()  # noqa
 
             if len(rows) == 0:  # only filtered rows
-                for rw in rows_filtered:
-                    ar_table.add_row(rw)
+                ar_table = rows_filtered.copy()
+                if ar_table_all is None:
+                    ar_table_all = copy.deepcopy(ar_table)
+                else:
+                    ar_table_all = ARClassification(vstack([QTable(ar_table_all), QTable(ar_table)]))
                 continue
 
             if tbtt["processed_path_image"][0] == "None":
@@ -448,10 +477,13 @@ class RegionExtractor:
 
             # add active regions to regions list
             active_regions = self._activeregion_extraction(rows, image_map, cutout_size, path=data_path)
-            filtered_regions = self._filteredregion_extraction(rows_filtered, image_map, cutout_size)
+            rows_filtered_labels, rows_filtered_unlabeled, filtered_regions = self._filteredregion_extraction(
+                rows_filtered, image_map, cutout_size, path=data_path
+            )
             regions.extend(active_regions)
 
             # ... update the table
+            assert len(rows) == len(regions)
             for r, reg in zip(rows, regions):
                 r["top_right_cutout"] = reg.top_right
                 r["bottom_left_cutout"] = reg.bottom_left
@@ -459,16 +491,36 @@ class RegionExtractor:
                 r["dim_image_cutout"] = reg.shape
                 r["path_image_cutout"] = reg.filepath
                 r["quicklook_path"] = quicklook_filename
-                r["region_type"] = "AR"
+                r["region_type"] = reg.region_type
 
-                ar_table.add_row(r)
+            ar_table = copy.deepcopy(rows)
 
-            for rw in rows_filtered:
-                ar_table.add_row(rw)
+            if (len(rows_filtered_labels) + len(rows_filtered_unlabeled)) != len(rows_filtered):
+                raise ValueError("len(filtered labeled rows) + len(filtered unlabeled rows) != len(all filtered rows)")
+            if len(rows_filtered_labels) != len(filtered_regions):
+                raise ValueError("length mismatch of `rows_filtered_labels`, `filtered_regions`")
+            for rf, rw in zip(rows_filtered_labels, filtered_regions):
+                rf["top_right_cutout"] = rw.top_right
+                rf["bottom_left_cutout"] = rw.bottom_left
+                rf["sum_ondisk_nans"] = on_disk_nans.sum()
+                rf["dim_image_cutout"] = rw.shape
+                rf["path_image_cutout"] = rw.filepath
+                rf["quicklook_path"] = quicklook_filename
+                rf["region_type"] = rw.region_type
+                ar_table.add_row(rf)
 
+            # these are rows that aren't associated with a region box
+            for ul_row in rows_filtered_unlabeled:
+                if ul_row["id"] == "II":
+                    ul_row["region_type"] = "II"
+                else:
+                    # set a placeholder
+                    ul_row["region_type"] = "FX"
+                ar_table.add_row(ul_row)
+
+            regions.extend(filtered_regions)
             # if quiet_sun, attempt to extract `num_random_attempts` regions and append
             if qs_random_attempts > 0:
-                regions.extend(filtered_regions)
                 quiet_regions = self._quietsun_extraction(
                     sunpy_map=image_map,
                     cutout_size=cutout_size,
@@ -492,7 +544,7 @@ class RegionExtractor:
                         "processed_path_image": image_file,
                         "sum_ondisk_nans": on_disk_nans.sum(),
                         "quicklook_path": quicklook_filename,
-                        "region_type": "QS",
+                        "region_type": qsreg.region_type,
                     }
                     qs_table.add_row(new_row)
 
@@ -501,20 +553,36 @@ class RegionExtractor:
 
             del image_map
 
+            if ar_table_all is None:
+                ar_table_all = copy.deepcopy(ar_table)
+            else:
+                ar_table_all = ARClassification(vstack([QTable(ar_table_all), QTable(ar_table)]))
+
         # not sure about this, but want to convert to strings, not leave as objects
         # Add a region_type, vstack, and sort by time.
-        ttt = ARClassification(ar_table)
-        ttt.replace_column("path_image_cutout", [str(p) for p in ttt["path_image_cutout"]])
-        ttt.replace_column("quicklook_path", [str(p) for p in ttt["quicklook_path"]])
+        art = ARClassification(ar_table_all)
+        # !TODO Could be an issue with the "--" making the way into the paths
+        art["path_image_cutout"] = MaskedColumn(
+            data=[str(p) for p in art["path_image_cutout"]], mask=art["path_image_cutout"].mask, fill_value=""
+        )
+        art["quicklook_path"] = MaskedColumn(
+            data=[str(p) for p in art["quicklook_path"]], mask=art["quicklook_path"].mask, fill_value=""
+        )
 
         qst = ARClassification(qs_table)
-        qst.replace_column("path_image_cutout", [str(p) for p in qst["path_image_cutout"]])
-        qst.replace_column("quicklook_path", [str(p) for p in qst["quicklook_path"]])
+        # qst.replace_column("path_image_cutout", [str(p) for p in qst["path_image_cutout"]])
+        qst["path_image_cutout"] = MaskedColumn(
+            data=[str(p) for p in qst["path_image_cutout"]], mask=qst["path_image_cutout"].mask, fill_value=""
+        )
+        # qst.replace_column("quicklook_path", [str(p) for p in qst["quicklook_path"]])
+        qst["quicklook_path"] = MaskedColumn(
+            data=[str(p) for p in qst["quicklook_path"]], mask=qst["quicklook_path"].mask, fill_value=""
+        )
 
-        all_regions = ARClassification(vstack([QTable(ttt), QTable(qst)]))
+        all_regions = ARClassification(vstack([QTable(art), QTable(qst)]))
         all_regions.sort("target_time")
 
-        return ttt, qst, all_regions
+        return art, qst, all_regions
 
     def _activeregion_extraction(self, group, sunpy_map, cutout_size, path) -> list[ARBox]:
         """
@@ -558,15 +626,18 @@ class RegionExtractor:
             del hmi_smap
         return ar_objs
 
-    def _filteredregion_extraction(self, group, sunpy_map, cutout_size) -> list[FilteredBox]:
+    def _filteredregion_extraction(self, group, sunpy_map, cutout_size, path) -> list[FilteredBox]:
         """
-        given a table `group` that share the same `sunpy_map`, return ARBox objects with a determined cutout_size
+        Given a table `group` that share the same `sunpy_map`, return ARBox objects with a determined cutout_size
         """
         region_objs = []
+        valid_rows = []  # List to keep track of rows with valid region_objs
+        invalid_rows = []
+
         xsize, ysize = cutout_size
         for row in group:
             """
-            iterate through group, extracting active regions from lat/lon into image pixels
+            Iterate through group, extracting active regions from lat/lon into image pixels
             """
             top_right, bottom_left, ar_pos_pixels = extract_region_lonlat(
                 sunpy_map,
@@ -576,27 +647,45 @@ class RegionExtractor:
                 ysize=ysize,
             )
 
-            identifier = row["id"] + " " + str(row["number"])
-
             try:
-                smap = sunpy_map.submap(bottom_left, top_right=top_right)
-
-                # store info in ARBox
-                region_objs.append(
-                    FilteredBox(
-                        top_right=top_right,
-                        bottom_left=bottom_left,
-                        shape=smap.data.shape * u.pix,
-                        ar_pos_pixels=ar_pos_pixels,
-                        identifier=identifier,
+                if row["id"] == "IA":
+                    filtered_smap = sunpy_map.submap(bottom_left, top_right=top_right)
+                    output_filename = (
+                        path
+                        / f"{sunpy_map.date.to_datetime().strftime('%Y%m%d_%H%M%S')}_IA-{row['number']}_{sunpy_map.instrument.replace(' ', '_')}.fits"
                     )
-                )
 
-                del smap
+                    save_compressed_map(filtered_smap, path=output_filename, overwrite=True)
+
+                    region_objs.append(
+                        IABox(
+                            top_right=top_right,
+                            bottom_left=bottom_left,
+                            shape=filtered_smap.data.shape * u.pix,
+                            ar_pos_pixels=ar_pos_pixels,
+                            identifier=str(row["number"]),
+                            filepath=output_filename,
+                        )
+                    )
+                else:
+                    filtered_smap = sunpy_map.submap(bottom_left, top_right=top_right)
+                    region_objs.append(
+                        FilteredBox(
+                            top_right=top_right,
+                            bottom_left=bottom_left,
+                            shape=filtered_smap.data.shape * u.pix,
+                            ar_pos_pixels=ar_pos_pixels,
+                            identifier=str(row["id"]) + "-" + str(row["number"]),
+                        )
+                    )
+
+                valid_rows.append(row)  # Append to valid_rows
+                del filtered_smap
             except Exception as e:
+                invalid_rows.append(row)
                 logger.warn(e)
 
-        return region_objs
+        return valid_rows, invalid_rows, region_objs
 
     def _quietsun_extraction(
         self,
@@ -691,6 +780,7 @@ class RegionExtractor:
         sunpy_map.plot_settings["norm"].vmin = -1499
         sunpy_map.plot_settings["norm"].vmax = 1499
         sunpy_map.plot(axes=ax, cmap="hmimag")
+        sunpy_map.draw_grid(axes=ax)
 
         text_objects = []
 
@@ -701,6 +791,8 @@ class RegionExtractor:
                 rectangle_cr = "blue"
             elif isinstance(box_info, FilteredBox):
                 rectangle_cr = "black"
+            elif isinstance(box_info, IABox):
+                rectangle_cr = "darkslategrey"
             else:
                 raise ValueError("Unsupported box type")
 

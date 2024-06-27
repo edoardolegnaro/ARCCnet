@@ -98,8 +98,8 @@ def process_srs(config):
 
     srs_processed_catalog = filter_srs(
         catalog=srs_processed_catalog,
-        lat_limit=config["srs"]["lat_lim_degrees"] * u.degree,
-        lon_limit=config["srs"]["lon_lim_degrees"] * u.degree,
+        lat_limit=float(config["srs"]["lat_lim_degrees"]) * u.degree,
+        lon_limit=float(config["srs"]["lon_lim_degrees"]) * u.degree,
     )
     srs_processed_catalog.write(srs_processed_catalog_file, format="parquet", overwrite=True)
 
@@ -457,6 +457,7 @@ def merge_mag_tables(config, srs, hmi, mdi, sharps, smarps):
     )
     # attempting to remove the object
     catalog_mdi.replace_column("path_catalog", [str(pc) for pc in catalog_mdi["path_catalog"]])
+
     catalog_mdi.rename_column("processed_path", "processed_path_image")
     # catalog_mdi["filtered"][catalog_mdi["processed_path_image"].mask] = True
 
@@ -472,6 +473,11 @@ def merge_mag_tables(config, srs, hmi, mdi, sharps, smarps):
             if np.int32(int(catalog_mdi["QUALITY"][idx], 16)) >= 262144:
                 row["filtered"] = True
                 filter_reason_column[row.index] += "QUALITY,"
+            if (int(catalog_mdi["QUALITY"][idx], 16) & 0b01111100) != 0:
+                # checking MDI bits 2,3,4,5,6 (http://soi.stanford.edu/production/QUALITY/DATASWtable.html)
+                # https://docs.astropy.org/en/stable/nddata/bitmask.html
+                row["filtered"] = True
+                filter_reason_column[row.index] += "QUALITY(Missing%),"
 
     # Add the updated "filter_reason" list as a new column to the catalog_mdi table
     catalog_mdi["filter_reason"] = [str(fr) for fr in filter_reason_column]
@@ -488,6 +494,7 @@ def merge_mag_tables(config, srs, hmi, mdi, sharps, smarps):
     )
     # attempting to remove the object
     catalog_hmi.replace_column("path_catalog", [str(pc) for pc in catalog_hmi["path_catalog"]])
+
     catalog_hmi.rename_column("processed_path", "processed_path_image")
     # catalog_hmi["filtered"][catalog_hmi["processed_path_image"].mask] = True
     # we need to add the filter reason... but having issues with string concatenation
@@ -665,6 +672,7 @@ def region_cutouts(config, srs_hmi, srs_mdi):
         mdi_table.write(mdi_file, format="parquet", overwrite=True)
 
     if classification_file.exists():
+        logger.debug(f"reading {classification_file}")
         ar_classification_hmi_mdi = QTable.read(classification_file)
     else:
         column_subset = [
@@ -688,6 +696,7 @@ def region_cutouts(config, srs_hmi, srs_mdi):
             "quicklook_path",
             "filtered",
             "filter_reason",
+            "QUALITY",
         ]
 
         ar_classification_hmi_mdi = join(
@@ -703,6 +712,7 @@ def region_cutouts(config, srs_hmi, srs_mdi):
         ar_classification_hmi_mdi["region_type"] = _combine_columns(
             ar_classification_hmi_mdi["region_type_hmi"], ar_classification_hmi_mdi["region_type_mdi"]
         )
+
         ar_classification_hmi_mdi["magnetic_class"] = _combine_columns(
             ar_classification_hmi_mdi["magnetic_class_hmi"], ar_classification_hmi_mdi["magnetic_class_mdi"]
         )
@@ -721,6 +731,32 @@ def region_cutouts(config, srs_hmi, srs_mdi):
         ar_classification_hmi_mdi["number_of_sunspots"] = _combine_columns(
             ar_classification_hmi_mdi["number_of_sunspots_hmi"], ar_classification_hmi_mdi["number_of_sunspots_mdi"]
         )
+
+        # Define the fill values for each column
+        # !TODO fix this later; shouldn't have to replace the fill values
+        columns_with_fill_values = {
+            "region_type": "XX",
+            "processed_path_image_mdi": "",
+            "processed_path_image_hmi": "",
+            "quicklook_path_hmi": "",
+            "quicklook_path_mdi": "",
+            "path_image_cutout_hmi": "",
+            "path_image_cutout_mdi": "",
+            "filter_reason_hmi": "",
+            "filter_reason_mdi": "",
+            "magnetic_class": "",
+            "mcintosh_class": "",
+            "carrington_longitude": np.nan,
+            "area": np.nan,
+            "longitudinal_extent": np.nan,
+            "number_of_sunspots": -1,
+            "QUALITY_hmi": "",
+            "QUALITY_mdi": "",
+        }
+
+        # Update the columns
+        ar_classification_hmi_mdi = _update_column_fillvals(ar_classification_hmi_mdi, columns_with_fill_values)
+
         # List of columns to remove
         columns_to_remove = [
             "region_type_hmi",
@@ -745,10 +781,22 @@ def region_cutouts(config, srs_hmi, srs_mdi):
                 ar_classification_hmi_mdi.remove_column(col_name)
 
         logger.debug(f"writing {classification_file}")
+        # problem is this now has filtered values (before we drop all filtered and merge on SRS)
         ar_classification_hmi_mdi.write(classification_file, format="parquet", overwrite=True)
 
     # filter: hmi/mdi cutout size...
     # one merged catalogue file with both MDI/HMI each task classification and detection
+    return ar_classification_hmi_mdi
+
+
+def _update_column_fillvals(ar_classification_hmi_mdi, columns_with_fill_values):
+    for column, fill_value in columns_with_fill_values.items():
+        ar_classification_hmi_mdi[column] = MaskedColumn(
+            data=ar_classification_hmi_mdi[column].filled(fill_value),
+            mask=ar_classification_hmi_mdi[column].mask,
+            fill_value=fill_value,
+        )
+
     return ar_classification_hmi_mdi
 
 
@@ -773,7 +821,7 @@ def _combine_columns(column1, column2):
             combined_column[i] = column1[i]
         else:
             # Values are different and not both masked, raise an error
-            raise ValueError(f"Elements at index {i} are different or have different masks.")
+            raise ValueError(f"Elements at index {i} are different or have different masks: {column1[i]}, {column2[i]}")
 
     return combined_column
 
@@ -964,7 +1012,13 @@ def process_ars(config, catalog):
         Path(config["paths"]["data_root"]) / "04_final" / "data" / "region_detection" / "quicklook",
     )
 
-    merged_table_quicklook.replace_column("quicklook_path", [str(p) for p in merged_table_quicklook["quicklook_path"]])
+    # merged_table_quicklook.replace_column("quicklook_path", [str(p) for p in merged_table_quicklook["quicklook_path"]])
+    merged_table_quicklook["quicklook_path"] = MaskedColumn(
+        data=[str(p) for p in merged_table_quicklook["quicklook_path"]],
+        mask=merged_table_quicklook["quicklook_path"].mask,
+        fill_value="",
+    )
+
     merged_table_quicklook.write(
         Path(config["paths"]["data_root"])
         / "04_final"
