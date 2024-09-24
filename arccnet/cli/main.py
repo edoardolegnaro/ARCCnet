@@ -8,10 +8,10 @@ from collections import ChainMap, defaultdict
 from collections.abc import Mapping
 
 from arccnet import load_config
-from arccnet.pipeline.main import process_ar_catalogs, process_ars, process_flares
-from arccnet.utils.logging import get_logger
 from arccnet.models.cutouts import config as config_module
 from arccnet.models.cutouts.train import run_training
+from arccnet.pipeline.main import process_ar_catalogs, process_ars, process_flares
+from arccnet.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -120,6 +120,7 @@ def catalog_commands(options):
             catalog = process_ar_catalogs(options)
             process_ars(options, catalog)
 
+
 def train_commands(options):
     args = argparse.Namespace()
 
@@ -134,7 +135,7 @@ def train_commands(options):
         "data_folder": "data_folder",
         "dataset_folder": "dataset_folder",
         "df_file_name": "df_file_name",
-        "num_workers": "num_workers"
+        "num_workers": "num_workers",
     }
 
     def get_option_value(options, arg):
@@ -215,7 +216,7 @@ def combine_args(args=None):
 
 def main(args=None):
     combined = combine_args(args)
-    command = combined.get('command')
+    command = combined.get("command")
     if command == "catalog":
         catalog_commands(combined)
     elif command == "train":

@@ -20,7 +20,7 @@ def run_training(config, args):
     - config: The configuration object containing default values.
     - args: Parsed command-line arguments that override config values.
     """
-    
+
     # Override config settings with arguments if provided
     arg_to_config = {
         "model_name": "model_name",
@@ -32,14 +32,14 @@ def run_training(config, args):
         "data_folder": "data_folder",
         "dataset_folder": "dataset_folder",
         "df_file_name": "df_file_name",
-        "num_workers": "num_workers"
+        "num_workers": "num_workers",
     }
 
     for arg, attr in arg_to_config.items():
         value = getattr(args, arg)
         if value is not None:
             setattr(config, attr, value)
-    
+
     if args.gpu_index is not None:
         config.device = f"cuda:{args.gpu_index}"
 
@@ -69,7 +69,7 @@ def run_training(config, args):
     df, df_du = ut.undersample_group_filter(
         df, config.label_mapping, long_limit_deg=60, undersample=True, buffer_percentage=0.1
     )
-    
+
     # Split data into folds for cross-validation
     fold_df = ut.split_data(df_du, label_col="grouped_labels", group_col="number", random_state=42)
     df = ut.assign_fold_sets(df, fold_df)
@@ -98,6 +98,7 @@ def run_training(config, args):
     print("Training complete.")
     return avg_test_loss, test_accuracy, test_precision, test_recall, test_f1, cm_test, report_df
 
+
 if __name__ == "__main__":
     # Initialize argument parser
     parser = argparse.ArgumentParser(description="Training script with configurable options.")
@@ -111,7 +112,7 @@ if __name__ == "__main__":
     parser.add_argument("--data_folder", type=str, help="Path to the data folder.")
     parser.add_argument("--dataset_folder", type=str, help="Path to the dataset folder.")
     parser.add_argument("--df_file_name", type=str, help="Name of the dataframe file.")
-    
+
     # Parse arguments
     args = parser.parse_args()
 

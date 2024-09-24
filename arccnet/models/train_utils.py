@@ -3,39 +3,20 @@ import time
 import random
 import socket
 
-import matplotlib  # noqa: F401
 import numpy as np
 import pandas as pd
 import timm
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from comet_ml.integration.pytorch import log_model
-from matplotlib import pyplot as plt
-from skimage import transform
 from sklearn.metrics import classification_report, confusion_matrix, f1_score, precision_score, recall_score
-from sklearn.model_selection import StratifiedGroupKFold
-from sklearn.utils import resample
 from sklearn.utils.class_weight import compute_class_weight
-from sunpy.visualization import colormaps as cm  # noqa: F401
-from torch.cuda.amp import GradScaler
 from torch.utils.data import DataLoader, Dataset
-from torchvision.transforms.functional import to_tensor
 from tqdm import tqdm
 
 from astropy.io import fits
-from astropy.time import Time
 
-deg = np.pi / 180
-
-magnetic_map = matplotlib.colormaps["hmimag"]
-
-greek_mapping = {
-    "Alpha": "α",
-    "Beta": "β",
-    "Gamma": "γ",
-    "Delta": "δ",
-}
+import arccnet.visualisation.utils as ut
 
 label_to_index = {
     "QS": 0,
@@ -52,186 +33,6 @@ label_to_index = {
 index_to_label = {v: k for k, v in label_to_index.items()}
 
 
-def convert_to_greek_label(names_array):
-    def map_to_greek(name):
-        parts = name.split("-")
-        greek_parts = [greek_mapping.get(part, part) for part in parts]
-        return "-".join(greek_parts)
-
-    return np.array([map_to_greek(name) for name in names_array])
-
-
-### Data Handling ###
-def make_dataframe(
-    data_folder="../../data/",
-    dataset_folder="arccnet-cutout-dataset-v20240715",
-    file_name="cutout-mcintosh-catalog-v20240715.parq",
-):
-    """
-    Processes the ARCCNet cutout dataset by loading a parquet file, converting Julian dates to datetime objects,
-    filtering out problematic magnetograms, and categorizing the regions based on their magnetic class or type.
-
-    Parameters:
-    - data_folder (str): The base directory where the dataset folder is located. Default is '../../data/'.
-    - dataset_folder (str): The folder containing the dataset. Default is 'arccnet-cutout-dataset-v20240715'.
-    - file_name (str): The name of the parquet file to read. Default is 'cutout-mcintosh-catalog-v20240715.parq'.
-
-    Returns:
-    - df (pd.DataFrame): The processed DataFrame containing all regions with additional date and label columns.
-    - AR_df (pd.DataFrame): A DataFrame filtered to include only active regions (AR) and intermediate regions (IA).
-    """
-    # Set the data folder using environment variable or default
-    data_folder = os.getenv("ARCAFF_DATA_FOLDER", data_folder)
-
-    # Read the parquet file
-    df = pd.read_parquet(os.path.join(data_folder, dataset_folder, file_name))
-
-    # Convert Julian dates to datetime objects
-    df["time"] = df["target_time.jd1"] + df["target_time.jd2"]
-    times = Time(df["time"], format="jd")
-    dates = pd.to_datetime(times.iso)  # Convert to datetime objects
-    df["dates"] = dates
-
-    # Remove problematic magnetograms from the dataset
-    problematic_quicklooks = ["20010116_000028_MDI.png", "20001130_000028_MDI.png", "19990420_235943_MDI.png"]
-
-    filtered_df = []
-    for ql in problematic_quicklooks:
-        row = df["quicklook_path_mdi"] == "quicklook/" + ql
-        filtered_df.append(df[row])
-    filtered_df = pd.concat(filtered_df)
-    df = df.drop(filtered_df.index).reset_index(drop=True)
-
-    # Label the data
-    df["label"] = np.where(df["magnetic_class"] == "", df["region_type"], df["magnetic_class"])
-    df["date_only"] = df["dates"].dt.date
-
-    # Filter AR and IA regions
-    AR_df = pd.concat([df[df["region_type"] == "AR"], df[df["region_type"] == "IA"]])
-
-    return df, AR_df
-
-
-def undersample_group_filter(df, label_mapping, long_limit_deg=60, undersample=True, buffer_percentage=0.1):
-    """
-    This function filters the data based on a specified longitude limit, assigns 'front' or 'rear' locations, and
-    groups labels according to a provided mapping.
-    If undersampling is enabled, it reduces the majority class to the size of the second-largest class plus a
-    specified buffer percentage.
-    The function returns both the modified original dataframe with location and grouped labels and the undersampled dataframe.
-
-    Parameters:
-    - df (pd.DataFrame): The dataframe containing the data to be undersampled, grouped, and filtered.
-    - label_mapping (dict): A dictionary mapping original labels to grouped labels.
-    - long_limit_deg (int, optional): The longitude limit for filtering to determine 'front' or 'rear' location.
-                                      Defaults to 60 degrees.
-    - undersample (bool, optional): Flag to enable or disable undersampling of the majority class. Defaults to True.
-    - buffer_percentage (float, optional): The percentage buffer added to the second-largest class size when undersampling
-                                           the majority class. Defaults to 0.1 (10%).
-
-    Returns:
-    - pd.DataFrame: The modified original dataframe with 'location', 'grouped_labels' and 'encoded_labels' columns added.
-    - pd.DataFrame: The undersampled and grouped dataframe, with rows from the 'rear' location filtered out.
-    """
-    lonV = np.deg2rad(np.where(df["processed_path_image_hmi"] != "", df["longitude_hmi"], df["longitude_mdi"]))
-    condition = (lonV < -long_limit_deg * deg) | (lonV > long_limit_deg * deg)
-    df_filtered = df[~condition]
-    df_rear = df[condition]
-    df.loc[df_filtered.index, "location"] = "front"
-    df.loc[df_rear.index, "location"] = "rear"
-
-    # Apply label mapping to the dataframe
-    df["grouped_labels"] = df["label"].map(label_mapping)
-    df["encoded_labels"] = df["grouped_labels"].map(label_to_index)
-
-    if undersample:
-        class_counts = df["grouped_labels"].value_counts()
-        majority_class = class_counts.idxmax()
-        second_largest_class_count = class_counts.iloc[1]
-        n_samples = int(second_largest_class_count * (1 + buffer_percentage))
-
-        # Perform undersampling on the majority class
-        df_majority = df[df["grouped_labels"] == majority_class]
-        df_majority_undersampled = resample(df_majority, replace=False, n_samples=n_samples, random_state=42)
-
-        df_list = [df[df["grouped_labels"] == label] for label in class_counts.index if label != majority_class]
-        df_list.append(df_majority_undersampled)
-
-        df_du = pd.concat(df_list)
-    else:
-        df_du = df.copy()
-
-    # Filter out rows with 'rear' location
-    df_du = df_du[df_du["location"] != "rear"]
-
-    return df, df_du
-
-
-def split_data(df_du, label_col, group_col, random_state=42):
-    """
-    Split the data into training, validation, and test sets using stratified group k-fold cross-validation.
-
-    Parameters:
-    - df_du (pd.DataFrame): The dataframe to be split. It must contain the columns specified by `label_col` and `group_col`.
-    - label_col (str): The name of the column to be used for stratification, ensuring balanced class distribution across folds.
-    - group_col (str): The name of the column to be used for grouping, ensuring that all instances of a group are in the same fold.
-    - random_state (int, optional): The random seed for reproducibility of the splits. Defaults to 42.
-
-    Returns:
-    - list of tuples containing:
-        - fold (int): The fold number (1 to n_splits).
-        - train_df (pd.DataFrame): The training set for the fold.
-        - val_df (pd.DataFrame): The validation set for the fold.
-        - test_df (pd.DataFrame): The test set for the fold.
-    """
-    fold_df = []
-    inner_fold_choice = [0, 1, 2, 3, 4]
-    sgkf = StratifiedGroupKFold(n_splits=5, random_state=random_state, shuffle=True)
-    X = df_du
-
-    for fold, (train_idx, val_idx) in enumerate(sgkf.split(df_du, df_du[label_col], df_du[group_col]), 1):
-        temp_df = X.iloc[train_idx]
-        val_df = X.iloc[val_idx]
-        inner_sgkf = StratifiedGroupKFold(n_splits=10)
-        inner_splits = list(inner_sgkf.split(temp_df, temp_df[label_col], temp_df[group_col]))
-        inner_train_idx, inner_test_idx = inner_splits[inner_fold_choice[fold - 1]]
-        train_df = temp_df.iloc[inner_train_idx]
-        test_df = temp_df.iloc[inner_test_idx]
-
-        fold_df.append((fold, train_df, val_df, test_df))
-
-    for fold, train_df, val_df, test_df in fold_df:
-        X.loc[train_df.index, f"Fold {fold}"] = "train"
-        X.loc[val_df.index, f"Fold {fold}"] = "val"
-        X.loc[test_df.index, f"Fold {fold}"] = "test"
-
-    return fold_df
-
-
-def assign_fold_sets(df, fold_df):
-    """
-    Assigns training, validation, and test sets to the dataframe based on fold information.
-
-    Parameters:
-    - df (pd.DataFrame): Dataframe to be annotated with set information.
-    - fold_df (list of tuples): List containing tuples for each fold.
-      Each tuple consists of:
-        - fold (int): The fold number.
-        - train_df (pd.DataFrame): The training set for the fold.
-        - val_df (pd.DataFrame): The validation set for the fold.
-        - test_df (pd.DataFrame): The test set for the fold.
-
-    Returns:
-    - pd.DataFrame: The original dataframe with an additional 'set' column indicating training, validation, or test set.
-    """
-    for fold, train_set, val_set, test_set in fold_df:
-        df.loc[train_set.index, f"Fold {fold}"] = "train"
-        df.loc[val_set.index, f"Fold {fold}"] = "val"
-        df.loc[test_set.index, f"Fold {fold}"] = "test"
-    return df
-
-
-### NN Training ###
 class FITSDataset(Dataset):
     """
     Dataset class for loading and transforming magnetograms along with their corresponding labels.
@@ -300,8 +101,10 @@ class FITSDataset(Dataset):
         with fits.open(fits_file_path, memmap=True) as img_fits:
             image_data = np.array(img_fits[1].data, dtype=np.float32)
         image_data = np.nan_to_num(image_data, nan=0.0)
-        image_data = hardtanh_transform_npy(image_data, divisor=self.divisor, min_val=-1.0, max_val=1.0)
-        image_data = pad_resize_normalize(image_data, target_height=self.target_height, target_width=self.target_width)
+        image_data = ut.hardtanh_transform_npy(image_data, divisor=self.divisor, min_val=-1.0, max_val=1.0)
+        image_data = ut.pad_resize_normalize(
+            image_data, target_height=self.target_height, target_width=self.target_width
+        )
         image = torch.from_numpy(image_data).unsqueeze(0)
         return image, row["encoded_labels"]
 
@@ -694,15 +497,15 @@ def train_model(config, df, weights_dir, experiment=None, fold=1):
         train_image_path = os.path.join(script_dir, "temp", "train_dataset.png")
         val_image_path = os.path.join(script_dir, "temp", "val_dataset.png")
         test_image_path = os.path.join(script_dir, "temp", "test_dataset.png")
-        make_classes_histogram(
+        ut.make_classes_histogram(
             df_train["grouped_labels"], title="Train Dataset", y_off=100, figsz=(7, 5), save_path=train_image_path
         )
         experiment.log_image(train_image_path)
-        make_classes_histogram(
+        ut.make_classes_histogram(
             df_val["grouped_labels"], title="Val Dataset", y_off=100, figsz=(7, 5), save_path=val_image_path
         )
         experiment.log_image(val_image_path)
-        make_classes_histogram(
+        ut.make_classes_histogram(
             df_test["grouped_labels"], title="Test Dataset", y_off=100, figsz=(7, 5), save_path=test_image_path
         )
         experiment.log_image(test_image_path)
@@ -743,7 +546,7 @@ def train_model(config, df, weights_dir, experiment=None, fold=1):
     if cuda_version and float(cuda_version) < 11.8:
         scaler = torch.cuda.amp.GradScaler()
     else:
-        scaler = torch.amp.GradScaler('cuda')
+        scaler = torch.amp.GradScaler("cuda")
 
     # Training Loop
     best_val_metric = 0.0
@@ -841,379 +644,3 @@ def train_model(config, df, weights_dir, experiment=None, fold=1):
             )
 
     return (avg_test_loss, test_accuracy, test_precision, test_recall, test_f1, cm_test, report_df)
-
-
-### IMAGES ###
-def pad_resize_normalize(image, target_height=224, target_width=224):
-    """
-    Adds padding to and resizes an image to specified target height and width.
-    The function maintains the aspect ratio of the image by calculating the necessary padding.
-    The image is padded with a constant value (default is 0.0) and then resized to the target dimensions.
-
-    Parameters:
-    - image (ndarray): The input image to be processed, can be in grayscale or RGB format.
-    - target_height (int, optional): The target height of the image after resizing. Defaults to 224.
-    - target_width (int, optional): The target width of the image after resizing. Defaults to 224.
-
-    Returns:
-    - ndarray: The processed image resized to the target dimensions with padding added as necessary.
-    """
-
-    original_height, original_width = image.shape[:2]
-    original_aspect = original_width / original_height
-    target_aspect = target_width / target_height
-
-    if original_aspect > target_aspect:
-        # Image is wider than the target aspect ratio
-        new_width = original_width
-        new_height = int(original_width / target_aspect)
-        padding_vertical = (new_height - original_height) // 2
-        padding_horizontal = 0
-    else:
-        # Image is taller than the target aspect ratio
-        new_height = original_height
-        new_width = int(original_height * target_aspect)
-        padding_horizontal = (new_width - original_width) // 2
-        padding_vertical = 0
-
-    # Adjust padding based on the image's dimensions
-    if image.ndim == 3:  # Color image
-        padding = ((padding_vertical, padding_vertical), (padding_horizontal, padding_horizontal), (0, 0))
-    else:  # Grayscale image
-        padding = ((padding_vertical, padding_vertical), (padding_horizontal, padding_horizontal))
-
-    padded_image = np.pad(image, padding, "constant", constant_values=0.0)
-
-    # Resize the padded image to the target size
-    resized_image = transform.resize(padded_image, (target_height, target_width), anti_aliasing=True)
-
-    return resized_image
-
-
-def make_classes_histogram(
-    series,
-    figsz=(13, 5),
-    y_off=300,
-    title=None,
-    titlesize=14,
-    x_rotation=0,
-    fontsize=11,
-    bar_color="#4C72B0",
-    edgecolor="black",
-    text_fontsize=11,
-    style="seaborn-v0_8-darkgrid",
-    show_percentages=True,
-    ax=None,
-    save_path=None,
-):
-    """
-    Creates and displays a bar chart (histogram) that visualizes the distribution of classes in a given pandas Series.
-
-    Parameters:
-    - series (pandas.Series):
-        The input series containing the class labels.
-    - figsz (tuple, optional):
-        A tuple representing the size of the figure (width, height) in inches.
-        Default is (13, 5).
-    - y_off (int, optional):
-        The vertical offset for the text labels above the bars.
-        Default is 300.
-    - title (str, optional):
-        The title of the histogram plot. If `None`, no title will be displayed.
-        Default is None.
-    - titlesize (int, optional):
-        The font size of the title text. Ignored if `title` is `None`.
-        Default is 14.
-    - x_rotation (int, optional):
-        The rotation angle for the x-axis labels.
-        Default is 0.
-    - fontsize (int, optional):
-        The font size of the x and y axis labels.
-        Default is 11.
-    - bar_color (str, optional):
-        The color of the bars in the histogram.
-        Default is '#4C72B0'.
-    - edgecolor (str, optional):
-        The color of the edges of the bars.
-        Default is 'black'.
-    - text_fontsize (int, optional):
-        The font size of the text displayed above the bars.
-        Default is 11.
-    - style (str, optional):
-        The matplotlib style to be used for the plot.
-        Default is 'seaborn-v0_8-darkgrid'.
-    - show_percentages (bool, optional):
-        Whether to display percentages on top of the bars.
-        Default is True.
-    - ax (matplotlib.axes.Axes, optional):
-        An existing matplotlib Axes object to plot on. If `None`, a new figure and Axes will be created.
-        Default is None.
-    - save_path (str, optional):
-        Path to save the figure. If `None`, the plot will be displayed instead of saved.
-        Default is None.
-    """
-
-    # Remove None values before sorting
-    classes_names = sorted(filter(lambda x: x is not None, series.unique()))
-
-    greek_labels = convert_to_greek_label(classes_names)
-    classes_counts = series.value_counts().reindex(classes_names)
-    values = classes_counts.values
-    total = np.sum(values)
-
-    with plt.style.context(style):
-        if ax is None:
-            plt.figure(figsize=figsz)
-            bars = plt.bar(greek_labels, values, color=bar_color, edgecolor=edgecolor)
-        else:
-            bars = ax.bar(greek_labels, values, color=bar_color, edgecolor=edgecolor)
-
-        # Add text on top of the bars
-        for bar in bars:
-            yval = bar.get_height()
-            if show_percentages:
-                percentage = f"{yval/total*100:.2f}%" if total > 0 else "0.00%"
-                if ax is None:
-                    plt.text(
-                        bar.get_x() + bar.get_width() / 2,
-                        yval + y_off,
-                        f"{yval} ({percentage})",
-                        ha="center",
-                        va="bottom",
-                        fontsize=text_fontsize,
-                    )
-                else:
-                    ax.text(
-                        bar.get_x() + bar.get_width() / 2,
-                        yval + y_off,
-                        f"{yval} ({percentage})",
-                        ha="center",
-                        va="bottom",
-                        fontsize=text_fontsize,
-                    )
-            else:
-                if ax is None:
-                    plt.text(
-                        bar.get_x() + bar.get_width() / 2,
-                        yval + y_off,
-                        f"{yval}",
-                        ha="center",
-                        va="bottom",
-                        fontsize=text_fontsize,
-                    )
-                else:
-                    ax.text(
-                        bar.get_x() + bar.get_width() / 2,
-                        yval + y_off,
-                        f"{yval}",
-                        ha="center",
-                        va="bottom",
-                        fontsize=text_fontsize,
-                    )
-
-        # Setting x and y ticks
-        if ax is None:
-            plt.xticks(rotation=x_rotation, ha="center", fontsize=fontsize)
-            plt.yticks(fontsize=fontsize)
-        else:
-            ax.set_xticks(np.arange(len(greek_labels)))
-            ax.set_xticklabels(greek_labels, rotation=x_rotation, ha="center", fontsize=fontsize)
-            ax.tick_params(axis="y", labelsize=fontsize)
-
-        if title:
-            if ax is None:
-                plt.title(title, fontsize=titlesize)
-            else:
-                ax.set_title(title, fontsize=titlesize)
-
-        # If a new figure was created, show the plot
-        if ax is None:
-            if save_path:
-                plt.savefig(save_path, bbox_inches="tight")
-                plt.close()
-            else:
-                plt.show()
-
-
-class HardTanhTransform:
-    """
-    This transformation first scales the input image tensor by a specified divisor and then clamps the resulting values
-    using the HardTanh function, which limits the values to a specified range [min_val, max_val].
-
-    Attributes:
-    - divisor (float):
-        The value by which to divide the image tensor.
-        This scaling factor is applied to the image before the HardTanh operation. Default is 800.0.
-    - min_val (float):
-        The minimum value to clamp the image tensor to using the HardTanh function. Default is -1.0.
-    - max_val (float):
-        The maximum value to clamp the image tensor to using the HardTanh function. Default is 1.0.
-
-    Methods:
-    - __call__(img):
-        Applies the scaling and HardTanh transformation to the input image.
-
-        Parameters:
-        - img (PIL.Image or torch.Tensor):
-            The input image, which can be either a PIL image or a PyTorch tensor.
-            If a PIL image is provided, it will be converted to a tensor.
-
-        Returns:
-        - torch.Tensor:
-            The transformed image tensor, scaled by the divisor and clamped to the range [min_val, max_val].
-    """
-
-    def __init__(self, divisor=800.0, min_val=-1.0, max_val=1.0):
-        self.divisor = divisor
-        self.min_val = min_val
-        self.max_val = max_val
-
-    def __call__(self, img):
-        # Convert image to tensor if it's not already one
-        if not torch.is_tensor(img):
-            img = to_tensor(img)
-
-        # Scale by the divisor and apply hardtanh
-        img = img / self.divisor
-        img = F.hardtanh(img, min_val=self.min_val, max_val=self.max_val)
-        return img
-
-
-def hardtanh_transform_npy(img, divisor=800.0, min_val=-1.0, max_val=1.0):
-    """
-    Apply HardTanh transformation to the input image.
-
-    Args:
-    - img: Input image (numpy array).
-    - divisor: Value to divide the input image by.
-    - min_val: Minimum value for the HardTanh function.
-    - max_val: Maximum value for the HardTanh function.
-
-    Returns:
-    - Transformed image.
-    """
-    # Ensure the input is a NumPy array
-    if not isinstance(img, np.ndarray):
-        raise TypeError("Input should be a NumPy array")
-
-    # Scale by the divisor
-    img = img / divisor
-
-    # Apply hardtanh
-    img = np.clip(img, min_val, max_val)
-    return img
-
-
-def visualize_transformations(images, transforms, n_samples=16):
-    """
-    Visualize the effect of transformations on a set of images.
-
-    Parameters:
-    images (numpy.ndarray): Array of images to be transformed and visualized.
-                            The shape should be (n_images, height, width).
-    transforms (torchvision.transforms.Compose): The transformations to be applied to the images.
-    n_samples (int): The number of sample images to visualize. Default is 16.
-
-    Returns:
-    None: Displays a plot with the transformed images in a 4x4 grid.
-    """
-    plt.figure(figsize=(12, 12))
-
-    for i in range(n_samples):
-        original_image = images[i]
-        original_image_tensor = torch.from_numpy(original_image).float().unsqueeze(0)
-        transformed_image_tensor = transforms(original_image_tensor)
-        transformed_image = transformed_image_tensor.squeeze().numpy()
-
-        # Plot transformed image
-        plt.subplot(4, 4, i + 1)
-        plt.imshow(transformed_image, cmap=magnetic_map, vmin=-1, vmax=1)
-        plt.title(f"Transformed Image {i+1}")
-        plt.axis("off")
-
-    plt.tight_layout()
-    plt.show()
-
-
-def plot_location_on_sun(df, long_limit_deg=60, experiment=None):
-    """
-    Analyze and plot the distribution of solar cutouts based on their longitude.
-
-    This function filters cutouts based on longitude, categorizes them as 'front' or 'rear',
-    and plots their positiosns on a solar disc.
-
-    Parameters:
-    - df (pd.DataFrame): The dataframe containing the solar data with latitude and longitude information.
-    - long_limit_deg (int, optional): The longitude limit in degrees to determine front vs. rear. Default is 60 degrees.
-    """
-    latV = np.deg2rad(np.where(df["processed_path_image_hmi"] != "", df["latitude_hmi"], df["latitude_mdi"]))
-    lonV = np.deg2rad(np.where(df["processed_path_image_hmi"] != "", df["longitude_hmi"], df["longitude_mdi"]))
-
-    yV = np.cos(latV) * np.sin(lonV)
-    zV = np.sin(latV)
-
-    condition = (lonV < -long_limit_deg * deg) | (lonV > long_limit_deg * deg)
-
-    rear_latV = latV[condition]
-    lonV[condition]
-    rear_yV = yV[condition]
-    rear_zV = zV[condition]
-
-    front_latV = latV[~condition]
-    lonV[~condition]
-    front_yV = yV[~condition]
-    front_zV = zV[~condition]
-
-    # Plot ARs' location on the solar disc
-    circle = plt.Circle((0, 0), 1, edgecolor="gray", facecolor="none")
-    fig, ax = plt.subplots(figsize=(10, 10))
-    ax.add_artist(circle)
-
-    num_meridians = 12
-    num_parallels = 12
-    num_points = 300
-
-    phis = np.linspace(0, 2 * np.pi, num_meridians, endpoint=False)
-    lats = np.linspace(-np.pi / 2, np.pi / 2, num_parallels)
-    theta = np.linspace(-np.pi / 2, np.pi / 2, num_points)
-
-    # Plot each meridian
-    for phi in phis:
-        y = np.cos(theta) * np.sin(phi)
-        z = np.sin(theta)
-        ax.plot(y, z, "k-", linewidth=0.2)
-
-    # Plot each parallel
-    for lat in lats:
-        radius = np.cos(lat)
-        y = radius * np.sin(theta)
-        z = np.sin(lat) * np.ones(num_points)
-        ax.plot(y, z, "k-", linewidth=0.2)
-
-    ax.scatter(rear_yV, rear_zV, s=1, alpha=0.2, color="r", label="Rear")
-    ax.scatter(front_yV, front_zV, s=1, alpha=0.2, color="b", label="Front")
-
-    ax.set_xlim(-1.1, 1.1)
-    ax.set_ylim(-1.1, 1.1)
-    ax.set_aspect("equal")
-    ax.axis("off")
-    ax.legend(fontsize=12)
-
-    # Save the plot
-
-    num_rear_cutouts = len(rear_latV)
-    num_front_cutouts = len(front_latV)
-    percentage_rear = 100 * num_rear_cutouts / (num_rear_cutouts + num_front_cutouts)
-
-    text_output = (
-        f"Rear: {num_rear_cutouts}\n" f"Front: {num_front_cutouts}\n" f"Percentage of Rear: {percentage_rear:.2f}%"
-    )
-
-    if experiment:
-        plot_path = os.path.join("temp", "solar_disc_plot.png")
-        plt.savefig(plot_path)
-        experiment.log_image(plot_path, name="Solar Disc Plot")
-        experiment.log_text(text_output, metadata={"description": "Solar cutouts analysis"})
-
-    print(text_output)
-    plt.show()
