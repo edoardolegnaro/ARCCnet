@@ -8,6 +8,7 @@ from sklearn.utils import resample
 from astropy import Time
 
 deg = np.pi / 180
+
 label_to_index = {
     "QS": 0,
     "IA": 1,

@@ -5,7 +5,9 @@ import torch
 from comet_ml import Experiment
 
 import arccnet.models.cutouts.config as config
-import arccnet.models.utilities as ut
+import arccnet.models.dataset_utils as ut_d
+import arccnet.models.train_utils as ut_t
+import arccnet.visualisation.utils as ut_v
 
 
 def run_training(config, args):
@@ -44,7 +46,7 @@ def run_training(config, args):
         config.device = f"cuda:{args.gpu_index}"
 
     # Generate run ID and weights directory
-    run_id, weights_dir = ut.generate_run_id(config)
+    run_id, weights_dir = ut_t.generate_run_id(config)
 
     # Initialize Comet experiment
     run_comet = Experiment(project_name=config.project_name, workspace="arcaff")
@@ -59,35 +61,35 @@ def run_training(config, args):
         }
     )
     run_comet.log_code(config.__file__)
-    run_comet.log_code(ut.__file__)
+    run_comet.log_code(ut_t.__file__)
 
     # Data preparation
     print("Making dataframe...")
-    df, AR_df = ut.make_dataframe(config.data_folder, config.dataset_folder, config.df_file_name)
+    df, AR_df = ut_d.make_dataframe(config.data_folder, config.dataset_folder, config.df_file_name)
 
     # Undersample and filter the dataframe
-    df, df_du = ut.undersample_group_filter(
+    df, df_du = ut_d.undersample_group_filter(
         df, config.label_mapping, long_limit_deg=60, undersample=True, buffer_percentage=0.1
     )
 
     # Split data into folds for cross-validation
-    fold_df = ut.split_data(df_du, label_col="grouped_labels", group_col="number", random_state=42)
-    df = ut.assign_fold_sets(df, fold_df)
+    fold_df = ut_d.split_data(df_du, label_col="grouped_labels", group_col="number", random_state=42)
+    df = ut_d.assign_fold_sets(df, fold_df)
     print("Dataframe preparation done.")
 
     # Start training
     print("Starting Training...")
-    (avg_test_loss, test_accuracy, test_precision, test_recall, test_f1, cm_test, report_df) = ut.train_model(
+    (avg_test_loss, test_accuracy, test_precision, test_recall, test_f1, cm_test, report_df) = ut_t.train_model(
         config, df, weights_dir, experiment=run_comet
     )
 
     # Logging and saving assets
     print("Logging assets...")
-    script_dir = os.path.dirname(ut.__file__)
+    script_dir = os.path.dirname(ut_t.__file__)
     save_path = os.path.join(script_dir, "temp", "working_dataset.png")
 
     # Create and log the dataset histogram
-    ut.make_classes_histogram(
+    ut_v.make_classes_histogram(
         df_du["grouped_labels"], title="Dataset (Grouped Undersampled)", y_off=100, figsz=(7, 5), save_path=save_path
     )
     run_comet.log_image(save_path)
