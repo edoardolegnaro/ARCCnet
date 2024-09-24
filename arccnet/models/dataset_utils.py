@@ -5,7 +5,7 @@ import pandas as pd
 from sklearn.model_selection import StratifiedGroupKFold
 from sklearn.utils import resample
 
-from astropy import Time
+from astropy.time import Time
 
 deg = np.pi / 180
 
