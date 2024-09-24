@@ -10,6 +10,8 @@ from collections.abc import Mapping
 from arccnet import load_config
 from arccnet.pipeline.main import process_ar_catalogs, process_ars, process_flares
 from arccnet.utils.logging import get_logger
+from arccnet.models.cutouts import config as config_module
+from arccnet.models.cutouts.train import run_training
 
 logger = get_logger(__name__)
 
@@ -83,8 +85,18 @@ def parser(args=None):
         "dataset", choices=["cutout_classification", "region_detection", "all"], help="Type of dataset to create"
     )
 
+    # Train
     train_parser = commands.add_parser("train", help="Train models on datasets")
-    train_parser.add_subparsers(dest="train")
+    train_parser.add_argument("--model_name", type=str, help="Timm model name")
+    train_parser.add_argument("--batch_size", type=int, help="Batch size for training.")
+    train_parser.add_argument("--num_workers", type=int, help="Number of workers for data loading and preprocessing.")
+    train_parser.add_argument("--num_epochs", type=int, help="Number of epochs for training.")
+    train_parser.add_argument("--patience", type=int, help="Patience for early stopping.")
+    train_parser.add_argument("--learning_rate", type=float, help="Learning rate for optimizer.")
+    train_parser.add_argument("--gpu_index", type=int, help="Index of the GPU to use.")
+    train_parser.add_argument("--data_folder", type=str, help="Path to the data folder.")
+    train_parser.add_argument("--dataset_folder", type=str, help="Path to the dataset folder.")
+    train_parser.add_argument("--df_file_name", type=str, help="Name of the dataframe file.")
 
     eval_parser = commands.add_parser("eval", help="Evaluate models on given data")
     eval_parser.add_subparsers(dest="eval")
@@ -92,8 +104,8 @@ def parser(args=None):
     options, rest = root_parser.parse_known_args(args)
 
     options_dict = vars(options)
-    if "train" in options_dict or "eval" in options_dict:
-        raise NotImplementedError("Please wait 'train' and 'eval' commands have not been implemented")
+    if "eval" in options_dict:
+        raise NotImplementedError("Please wait 'eval' commands have not been implemented")
 
     return options_dict, rest
 
@@ -107,6 +119,35 @@ def catalog_commands(options):
         if options["dataset"] == "ars":
             catalog = process_ar_catalogs(options)
             process_ars(options, catalog)
+
+def train_commands(options):
+    args = argparse.Namespace()
+
+    # Override config settings with arguments if provided
+    arg_to_config = {
+        "model_name": "model_name",
+        "batch_size": "batch_size",
+        "num_epochs": "num_epochs",
+        "patience": "patience",
+        "learning_rate": "learning_rate",
+        "gpu_index": "gpu_index",
+        "data_folder": "data_folder",
+        "dataset_folder": "dataset_folder",
+        "df_file_name": "df_file_name",
+        "num_workers": "num_workers"
+    }
+
+    def get_option_value(options, arg):
+        try:
+            return options[arg]
+        except KeyError:
+            return None
+
+    for arg in arg_to_config.keys():
+        value = get_option_value(options, arg)
+        setattr(args, arg, value)
+
+    run_training(config_module, args)
 
 
 def combine_args(args=None):
@@ -174,5 +215,10 @@ def combine_args(args=None):
 
 def main(args=None):
     combined = combine_args(args)
-    if "catalog" in combined:
+    command = combined.get('command')
+    if command == "catalog":
         catalog_commands(combined)
+    elif command == "train":
+        train_commands(combined)
+    else:
+        raise ValueError(f"Unknown command: {command}")
