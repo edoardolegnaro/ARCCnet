@@ -5,8 +5,8 @@ from torchvision.transforms import v2
 mode = 'qs-ia-a-b-bg'
 project_name = "arcaff-v2-" + mode
 
-batch_size = 32
-num_workers = 16
+batch_size = 16
+num_workers = 32
 num_epochs = 300
 patience = 15
 pretrained = True
@@ -16,7 +16,7 @@ model_name = "resnet18"
 gpu_index = 0
 device = "cuda:" + str(gpu_index)
 
-data_folder = os.getenv("ARCAFF_DATA_FOLDER", "../../data/")
+data_folder = os.getenv("ARCAFF_DATA_FOLDER", "../../../../data")
 dataset_folder = "arccnet-cutout-dataset-v20240715"
 df_file_name = "cutout-mcintosh-catalog-v20240715.parq"
 

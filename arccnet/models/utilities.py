@@ -290,7 +290,6 @@ class FITSDataset(Dataset):
         self.dataset_folder = dataset_folder
         self.df = df
         self.transform = transform
-        self.cache = {}
         self.target_height = target_height
         self.target_width = target_width
         self.divisor = divisor
@@ -310,12 +309,8 @@ class FITSDataset(Dataset):
         return len(self.df)
 
     def __getitem__(self, idx):
-        if idx in self.cache:
-            image, label = self.cache[idx]
-        else:
-            row = self.df.iloc[idx]
-            image, label = self._load_image(row)
-            self.cache[idx] = (image, label)
+        row = self.df.iloc[idx]
+        image, label = self._load_image(row)
 
         if self.transform:
             image = self.transform(image)

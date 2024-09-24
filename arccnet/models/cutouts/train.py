@@ -85,7 +85,7 @@ def run_training(config, args):
     print("Logging assets...")
     script_dir = os.path.dirname(ut.__file__)
     save_path = os.path.join(script_dir, "temp", "working_dataset.png")
-    
+
     # Create and log the dataset histogram
     ut.make_classes_histogram(
         df_du["grouped_labels"], title="Dataset (Grouped Undersampled)", y_off=100, figsz=(7, 5), save_path=save_path
