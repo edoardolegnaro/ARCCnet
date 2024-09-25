@@ -3,6 +3,7 @@ import argparse
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import requests
 import timm
 import torch
@@ -80,9 +81,10 @@ def main(args):
     result = run_inference(model, args.fits_file_path, device)
     predicted_class = np.argmax(result)
     probabilities = torch.softmax(torch.tensor(result), dim=1).numpy()
-
-    print("Normalized Predictions:", probabilities)
-    print("Predicted class:", ut_t.index_to_label[predicted_class])
+    df_prob = pd.DataFrame(probabilities, columns=[ut_t.index_to_label[idx] for idx in range(num_classes)])
+    print("\nPredictions:")
+    print(df_prob.to_string(index=False))
+    print("\nPredicted class:", ut_t.index_to_label[predicted_class])
 
 
 if __name__ == "__main__":
