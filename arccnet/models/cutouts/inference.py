@@ -93,7 +93,7 @@ if __name__ == "__main__":
         "--fits_file_path",
         type=str,
         default=os.path.join(
-            config.data_folder, config.dataset_folder, "fits", "20221109_235833_I-13140_HMI_COMBINED.fits"
+            config.data_folder, config.dataset_folder, "fits", "20160203_235809_I-12493_HMI_SIDE1.fits"
         ),
         help="Path to the FITS file.",
     )
