@@ -54,7 +54,7 @@ def run_inference(model, fits_file_path, device):
     return output.cpu().numpy()
 
 
-def main(args):
+def predict(args):
     api = API()
     script_dir = Path(__file__).parent.resolve()
     output_dir = script_dir.parent / "trained_models"
@@ -103,4 +103,4 @@ if __name__ == "__main__":
     parser.add_argument("--model_version", type=str, default="1.0.0", help="Model version.")
 
     args = parser.parse_args()
-    main(args)
+    predict(args)
