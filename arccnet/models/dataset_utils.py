@@ -81,24 +81,49 @@ def make_dataframe(data_folder, dataset_folder, file_name):
 
 def undersample_group_filter(df, label_mapping, long_limit_deg=60, undersample=True, buffer_percentage=0.1):
     """
-    This function filters the data based on a specified longitude limit, assigns 'front' or 'rear' locations, and
-    groups labels according to a provided mapping.
-    If undersampling is enabled, it reduces the majority class to the size of the second-largest class plus a
-    specified buffer percentage.
-    The function returns both the modified original dataframe with location and grouped labels and the undersampled dataframe.
+    Filter data based on a specified longitude limit, assign 'front' or 'rear' locations, and group labels
+    according to a provided mapping. Optionally undersample the majority class.
 
-    Parameters:
-    - df (pd.DataFrame): The dataframe containing the data to be undersampled, grouped, and filtered.
-    - label_mapping (dict): A dictionary mapping original labels to grouped labels.
-    - long_limit_deg (int, optional): The longitude limit for filtering to determine 'front' or 'rear' location.
-                                      Defaults to 60 degrees.
-    - undersample (bool, optional): Flag to enable or disable undersampling of the majority class. Defaults to True.
-    - buffer_percentage (float, optional): The percentage buffer added to the second-largest class size when undersampling
-                                           the majority class. Defaults to 0.1 (10%).
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        The dataframe containing the data to be undersampled, grouped, and filtered.
+    label_mapping : dict
+        A dictionary mapping original labels to grouped labels.
+    long_limit_deg : int, optional
+        The longitude limit for filtering to determine 'front' or 'rear' location. Defaults to 60 degrees.
+    undersample : bool, optional
+        Flag to enable or disable undersampling of the majority class. Defaults to True.
+    buffer_percentage : float, optional
+        The percentage buffer added to the second-largest class size when undersampling the majority class.
+        Defaults to 0.1 (10%).
 
-    Returns:
-    - pd.DataFrame: The modified original dataframe with 'location', 'grouped_labels' and 'encoded_labels' columns added.
-    - pd.DataFrame: The undersampled and grouped dataframe, with rows from the 'rear' location filtered out.
+    Returns
+    -------
+    pandas.DataFrame
+        The modified original dataframe with 'location', 'grouped_labels', and 'encoded_labels' columns added.
+    pandas.DataFrame
+        The undersampled and grouped dataframe, with rows from the 'rear' location filtered out.
+
+    Notes
+    -----
+    - This function assigns 'front' or 'rear' location based on a longitude limit.
+    - Labels are grouped according to the `label_mapping` provided.
+    - If `undersample` is True, the majority class is reduced to the size of the second-largest class,
+      plus a specified buffer percentage.
+    - The function returns two dataframes: the modified original dataframe and an undersampled version where
+      the 'rear' locations are filtered out.
+
+    Examples
+    --------
+    >>> label_mapping = {'A': 'group1', 'B': 'group1', 'C': 'group2'}
+    >>> df, undersampled_df = undersample_group_filter(
+    ...     df=my_dataframe,
+    ...     label_mapping=label_mapping,
+    ...     long_limit_deg=60,
+    ...     undersample=True,
+    ...     buffer_percentage=0.1
+    ... )
     """
     lonV = np.deg2rad(np.where(df["processed_path_image_hmi"] != "", df["longitude_hmi"], df["longitude_mdi"]))
     condition = (lonV < -np.deg2rad(long_limit_deg)) | (lonV > np.deg2rad(long_limit_deg))
@@ -138,18 +163,46 @@ def split_data(df_du, label_col, group_col, random_state=42):
     """
     Split the data into training, validation, and test sets using stratified group k-fold cross-validation.
 
-    Parameters:
-    - df_du (pd.DataFrame): The dataframe to be split. It must contain the columns specified by `label_col` and `group_col`.
-    - label_col (str): The name of the column to be used for stratification, ensuring balanced class distribution across folds.
-    - group_col (str): The name of the column to be used for grouping, ensuring that all instances of a group are in the same fold.
-    - random_state (int, optional): The random seed for reproducibility of the splits. Defaults to 42.
+    Parameters
+    ----------
+    df_du : pandas.DataFrame
+        The dataframe to be split. It must contain the columns specified by `label_col` and `group_col`.
+    label_col : str
+        The name of the column to be used for stratification, ensuring balanced class distribution across folds.
+    group_col : str
+        The name of the column to be used for grouping, ensuring that all instances of a group are in the same fold.
+    random_state : int, optional
+        The random seed for reproducibility of the splits. Defaults to 42.
 
-    Returns:
-    - list of tuples containing:
-        - fold (int): The fold number (1 to n_splits).
-        - train_df (pd.DataFrame): The training set for the fold.
-        - val_df (pd.DataFrame): The validation set for the fold.
-        - test_df (pd.DataFrame): The test set for the fold.
+    Returns
+    -------
+    list of tuples
+        A list of tuples, each containing the following for each fold:
+        - fold : int
+            The fold number (1 to n_splits).
+        - train_df : pandas.DataFrame
+            The training set for the fold.
+        - val_df : pandas.DataFrame
+            The validation set for the fold.
+        - test_df : pandas.DataFrame
+            The test set for the fold.
+
+    Notes
+    -----
+    - The function uses `StratifiedGroupKFold` to perform k-fold cross-validation with both stratification and
+      group-wise splits.
+    - `label_col` is used to ensure balanced class distributions across folds, while `group_col` ensures that
+      all instances of a group remain in the same fold.
+    - An inner 10-fold split is performed on the training set to create the test set.
+
+    Examples
+    --------
+    >>> fold_splits = split_data(
+    ...     df_du=my_dataframe,
+    ...     label_col='grouped_labels',
+    ...     group_col='number',
+    ...     random_state=42
+    ... )
     """
     fold_df = []
     inner_fold_choice = [0, 1, 2, 3, 4]
@@ -177,19 +230,40 @@ def split_data(df_du, label_col, group_col, random_state=42):
 
 def assign_fold_sets(df, fold_df):
     """
-    Assigns training, validation, and test sets to the dataframe based on fold information.
+    Assign training, validation, and test sets to the dataframe based on fold information.
 
-    Parameters:
-    - df (pd.DataFrame): Dataframe to be annotated with set information.
-    - fold_df (list of tuples): List containing tuples for each fold.
-      Each tuple consists of:
-        - fold (int): The fold number.
-        - train_df (pd.DataFrame): The training set for the fold.
-        - val_df (pd.DataFrame): The validation set for the fold.
-        - test_df (pd.DataFrame): The test set for the fold.
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        The dataframe to be annotated with set information.
+    fold_df : list of tuples
+        A list containing tuples for each fold. Each tuple consists of:
+        - fold : int
+            The fold number.
+        - train_df : pandas.DataFrame
+            The training set for the fold.
+        - val_df : pandas.DataFrame
+            The validation set for the fold.
+        - test_df : pandas.DataFrame
+            The test set for the fold.
 
-    Returns:
-    - pd.DataFrame: The original dataframe with an additional 'set' column indicating training, validation, or test set.
+    Returns
+    -------
+    pandas.DataFrame
+        The original dataframe with an additional 'set' column, which indicates whether a row belongs
+        to the training, validation, or test set for each fold.
+
+    Notes
+    -----
+    - The function iterates through each fold, adding a 'set' column to the dataframe that assigns rows to
+    either the 'train', 'val', or 'test' sets based on the information in `fold_df`.
+
+    Examples
+    --------
+    >>> df = assign_fold_sets(
+    ...     df=df,
+    ...     fold_df=fold_splits
+    ... )
     """
     for fold, train_set, val_set, test_set in fold_df:
         df.loc[train_set.index, f"Fold {fold}"] = "train"
