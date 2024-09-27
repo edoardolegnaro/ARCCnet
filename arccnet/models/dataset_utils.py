@@ -7,10 +7,11 @@ from sklearn.utils import resample
 
 from astropy.time import Time
 
-from arccnet.models import labels
 from arccnet import load_config
+from arccnet.models import labels
 
-config = load_config() 
+config = load_config()
+
 
 def make_dataframe(data_folder, dataset_folder, file_name):
     """
@@ -34,7 +35,7 @@ def make_dataframe(data_folder, dataset_folder, file_name):
 
     Notes
     -----
-    - The function reads a parquet file from the specified folder, processes Julian dates, and converts them to 
+    - The function reads a parquet file from the specified folder, processes Julian dates, and converts them to
       datetime objects.
     - It filters out problematic magnetograms from the dataset by excluding specific records based on quicklook images.
     - The magnetic regions are labeled either by their magnetic class or region type, and an additional column
@@ -59,7 +60,7 @@ def make_dataframe(data_folder, dataset_folder, file_name):
     df["dates"] = dates
 
     # Remove problematic magnetograms from the dataset
-    problematic_quicklooks = config.get("magnetograms", "problematic_quicklooks").split(',')
+    problematic_quicklooks = config.get("magnetograms", "problematic_quicklooks").split(",")
 
     filtered_df = []
     for ql in problematic_quicklooks:

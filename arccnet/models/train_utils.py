@@ -293,8 +293,8 @@ def evaluate(model, val_loader, criterion, device):
 
     Notes
     -----
-    This function evaluates the model without modifying its parameters. 
-    It sets the model to evaluation mode (`model.eval()`) and ensures that no gradients are computed by using `torch.no_grad()`. 
+    This function evaluates the model without modifying its parameters.
+    It sets the model to evaluation mode (`model.eval()`) and ensures that no gradients are computed by using `torch.no_grad()`.
     After computing the predictions, various evaluation metrics are computed.
 
     Examples
@@ -355,7 +355,7 @@ def check_early_stopping(val_metric, best_val_metric, patience_counter, model, w
     config : module
         Configuration module containing various parameters, including `patience` for early stopping.
     fold_n : int, optional
-        The current fold number for cross-validation. If `None`, cross-validation is not being used. 
+        The current fold number for cross-validation. If `None`, cross-validation is not being used.
         Default is None.
 
     Returns
@@ -369,7 +369,7 @@ def check_early_stopping(val_metric, best_val_metric, patience_counter, model, w
 
     Notes
     -----
-    - Early stopping is triggered when the validation metric does not improve after a certain number 
+    - Early stopping is triggered when the validation metric does not improve after a certain number
       of epochs (defined by `config.patience`).
     - If the validation metric improves, the model's weights are saved to the specified directory.
     - The function supports both single training runs and cross-validation.
@@ -462,7 +462,7 @@ def load_model_test(weights_dir, model, device, fold_n=None):
 
     Notes
     -----
-    This function loads the best model weights saved during training from a specified file and 
+    This function loads the best model weights saved during training from a specified file and
     prepares the model for testing by moving it to the specified device (CPU or GPU) and setting it
     to evaluation mode (`model.eval()`).
 
