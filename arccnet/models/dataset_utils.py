@@ -7,19 +7,7 @@ from sklearn.utils import resample
 
 from astropy.time import Time
 
-deg = np.pi / 180
-
-label_to_index = {
-    "QS": 0,
-    "IA": 1,
-    "Alpha": 2,
-    "Beta": 3,
-    "Beta-Gamma": 4,
-    "Beta-Delta": 5,
-    "Beta-Gamma-Delta": 6,
-    "Gamma": 7,
-    "Gamma-Delta": 8,
-}
+from arccnet.models import labels
 
 
 def make_dataframe(
@@ -94,7 +82,7 @@ def undersample_group_filter(df, label_mapping, long_limit_deg=60, undersample=T
     - pd.DataFrame: The undersampled and grouped dataframe, with rows from the 'rear' location filtered out.
     """
     lonV = np.deg2rad(np.where(df["processed_path_image_hmi"] != "", df["longitude_hmi"], df["longitude_mdi"]))
-    condition = (lonV < -long_limit_deg * deg) | (lonV > long_limit_deg * deg)
+    condition = (lonV < -np.deg2rad(long_limit_deg)) | (lonV > np.deg2rad(long_limit_deg))
     df_filtered = df[~condition]
     df_rear = df[condition]
     df.loc[df_filtered.index, "location"] = "front"
@@ -102,7 +90,7 @@ def undersample_group_filter(df, label_mapping, long_limit_deg=60, undersample=T
 
     # Apply label mapping to the dataframe
     df["grouped_labels"] = df["label"].map(label_mapping)
-    df["encoded_labels"] = df["grouped_labels"].map(label_to_index)
+    df["encoded_labels"] = df["grouped_labels"].map(labels.label_to_index)
 
     if undersample:
         class_counts = df["grouped_labels"].value_counts()

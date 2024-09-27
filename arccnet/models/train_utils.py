@@ -17,20 +17,7 @@ from tqdm import tqdm
 from astropy.io import fits
 
 import arccnet.visualisation.utils as ut
-
-label_to_index = {
-    "QS": 0,
-    "IA": 1,
-    "Alpha": 2,
-    "Beta": 3,
-    "Beta-Gamma": 4,
-    "Beta-Delta": 5,
-    "Beta-Gamma-Delta": 6,
-    "Gamma": 7,
-    "Gamma-Delta": 8,
-}
-
-index_to_label = {v: k for k, v in label_to_index.items()}
+from arccnet.models import labels as lbs
 
 
 class FITSDataset(Dataset):
@@ -38,20 +25,34 @@ class FITSDataset(Dataset):
     Dataset class for loading and transforming magnetograms along with their corresponding labels.
     This class inherits from `torch.utils.data.Dataset`, making it compatible with PyTorch's DataLoader.
 
-    Attributes:
-    -----------
+    Parameters
+    ----------
     data_folder : str
         The root directory containing the data.
     dataset_folder : str
-        Directory containing inside the fits folder the FITS files.
-    df : pd.DataFrame
+        Directory containing the FITS files inside the folder.
+    df : pandas.DataFrame
         A DataFrame containing the file paths and corresponding labels for the images.
     transform : callable, optional
         A function/transform that takes in an image tensor and returns a transformed version.
-        This can be used for data augmentation or normalization.
-    cache : dict
-        A dictionary used to cache loaded images in memory. The keys are the indices of the images,
-        and the values are tuples containing the image tensors and their corresponding labels.
+        This can be used for data augmentation or normalization. Default is None.
+    target_height : int, optional
+        The target height to resize the images. Default is 224.
+    target_width : int, optional
+        The target width to resize the images. Default is 224.
+    divisor : float, optional
+        The divisor used for normalizing image pixel values. Default is 1600.0.
+
+    Attributes
+    ----------
+    data_folder : str
+        The root directory containing the data.
+    dataset_folder : str
+        Directory containing the FITS files.
+    df : pandas.DataFrame
+        A DataFrame containing the file paths and corresponding labels for the images.
+    transform : callable or None
+        A transformation function for the images, if provided.
     target_height : int
         The target height to resize the images.
     target_width : int
@@ -59,29 +60,23 @@ class FITSDataset(Dataset):
     divisor : float
         The divisor used for normalizing image pixel values.
 
-    Methods:
-    --------
+    Methods
+    -------
     __init__(self, data_folder, dataset_folder, df, transform=None, target_height=224, target_width=224, divisor=1600.0)
         Initializes the dataset with the provided directories, DataFrame, and optional transformations.
-        Initializes an empty cache for storing images in memory.
-
     __len__(self)
         Returns the number of samples in the dataset.
-
     __getitem__(self, idx)
         Retrieves the image and label at the specified index.
-        If the image is cached, it retrieves the image from the cache.
-        Otherwise, it loads the image from the FITS file, caches it, and
-        then returns the transformed image along with its label.
-
+        Loads the image from the FITS file and applies any specified transformations.
     _load_image(self, row)
         Loads an image from the FITS file specified in the DataFrame row,
         converts it to a tensor, and returns it along with its label.
 
-    Example Usage:
-    --------------
-    dataset = FITSDataset(data_folder='path/to/data/', dataset_folder='dataset_folder', df=df, transform=your_transforms)
-    dataloader = DataLoader(dataset, batch_size=32, shuffle=True, num_workers=4, pin_memory=True)
+    Examples
+    --------
+    >>> dataset = FITSDataset(data_folder='path/to/data/', dataset_folder='dataset_folder', df=df, transform=your_transforms)
+    >>> dataloader = DataLoader(dataset, batch_size=32, shuffle=True, num_workers=4, pin_memory=True)
     """
 
     def __init__(
@@ -125,18 +120,29 @@ def replace_activations(module, old_act, new_act, **kwargs):
     """
     Recursively replace activation functions in a given module.
 
-    Parameters:
-    -----------
+    Parameters
+    ----------
     module : torch.nn.Module
-        The neural network in which to replace activation functions.
-
+        The neural network module in which to replace activation functions.
     old_act : type
         The class of the activation function to be replaced.
-        For example, torch.nn.ReLU or torch.nn.Tanh.
-
+        For example, `torch.nn.ReLU` or `torch.nn.Tanh`.
     new_act : type
         The class of the new activation function to use as a replacement.
-        For example, torch.nn.LeakyReLU.
+        For example, `torch.nn.LeakyReLU`.
+    **kwargs :
+        Additional keyword arguments to pass to the constructor of the new activation function.
+
+    Notes
+    -----
+    This function performs an in-place replacement of activation functions.
+    It traverses the module hierarchy recursively and replaces instances of `old_act`
+    with instances of `new_act`.
+
+    Examples
+    --------
+    >>> model = MyModel()
+    >>> replace_activations(model, torch.nn.ReLU, torch.nn.LeakyReLU, negative_slope=0.01)
     """
     for name, child in module.named_children():
         if isinstance(child, old_act):
@@ -638,8 +644,8 @@ def train_model(config, df, weights_dir, experiment=None, fold=1):
                 img,
                 name=f"Misclassified_{idx}_true{true_label}_pred{pred_label}",
                 metadata={
-                    "predicted_label": index_to_label[pred_label].title(),
-                    "true_label": index_to_label[true_label].title(),
+                    "predicted_label": lbs.index_to_label[pred_label].title(),
+                    "true_label": lbs.index_to_label[true_label].title(),
                 },
             )
 
