@@ -8,29 +8,47 @@ from sklearn.utils import resample
 from astropy.time import Time
 
 from arccnet.models import labels
+from arccnet import load_config
 
+config = load_config() 
 
-def make_dataframe(
-    data_folder="../../data/",
-    dataset_folder="arccnet-cutout-dataset-v20240715",
-    file_name="cutout-mcintosh-catalog-v20240715.parq",
-):
+def make_dataframe(data_folder, dataset_folder, file_name):
     """
-    Processes the ARCCNet cutout dataset by loading a parquet file, converting Julian dates to datetime objects,
-    filtering out problematic magnetograms, and categorizing the regions based on their magnetic class or type.
+    Process the ARCCNet cutout dataset.
 
-    Parameters:
-    - data_folder (str): The base directory where the dataset folder is located. Default is '../../data/'.
-    - dataset_folder (str): The folder containing the dataset. Default is 'arccnet-cutout-dataset-v20240715'.
-    - file_name (str): The name of the parquet file to read. Default is 'cutout-mcintosh-catalog-v20240715.parq'.
+    Parameters
+    ----------
+    data_folder : str, optional
+        The base directory where the dataset folder is located.
+    dataset_folder : str, optional
+        The folder containing the dataset. Default is 'arccnet-cutout-dataset-v20240715'.
+    file_name : str, optional
+        The name of the parquet file to read. Default is 'cutout-mcintosh-catalog-v20240715.parq'.
 
-    Returns:
-    - df (pd.DataFrame): The processed DataFrame containing all regions with additional date and label columns.
-    - AR_df (pd.DataFrame): A DataFrame filtered to include only active regions (AR) and intermediate regions (IA).
+    Returns
+    -------
+    df : pandas.DataFrame
+        The processed DataFrame containing all regions with additional date and label columns.
+    AR_df : pandas.DataFrame
+        A DataFrame filtered to include only active regions (AR) and plages (IA).
+
+    Notes
+    -----
+    - The function reads a parquet file from the specified folder, processes Julian dates, and converts them to 
+      datetime objects.
+    - It filters out problematic magnetograms from the dataset by excluding specific records based on quicklook images.
+    - The magnetic regions are labeled either by their magnetic class or region type, and an additional column
+      for date is added.
+    - A subset of the data containing only active regions (AR) and intermediate regions (IA) is returned.
+
+    Examples
+    --------
+    >>> df, AR_df = make_dataframe(
+    ...     data_folder='../../data/',
+    ...     dataset_folder='arccnet-cutout-dataset-v20240715',
+    ...     file_name='cutout-mcintosh-catalog-v20240715.parq'
+    ... )
     """
-    # Set the data folder using environment variable or default
-    data_folder = os.getenv("ARCAFF_DATA_FOLDER", data_folder)
-
     # Read the parquet file
     df = pd.read_parquet(os.path.join(data_folder, dataset_folder, file_name))
 
@@ -41,7 +59,7 @@ def make_dataframe(
     df["dates"] = dates
 
     # Remove problematic magnetograms from the dataset
-    problematic_quicklooks = ["20010116_000028_MDI.png", "20001130_000028_MDI.png", "19990420_235943_MDI.png"]
+    problematic_quicklooks = config.get("magnetograms", "problematic_quicklooks").split(',')
 
     filtered_df = []
     for ql in problematic_quicklooks:
