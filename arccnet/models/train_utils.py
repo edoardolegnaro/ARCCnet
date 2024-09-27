@@ -178,22 +178,52 @@ def generate_run_id(config):
 def train_one_epoch(epoch, model, train_loader, criterion, optimizer, device, scaler=None):
     """
     Train the model for one epoch.
-    The autocast context manager is used to enable mixed precision for the forward pass.
-    The GradScaler scales the loss to prevent underflow during backpropagation.
-    After backpropagation, the gradients are unscaled before updating the model parameters.
 
-    Args:
-    - epoch (int): The current epoch number.
-    - model (torch.nn.Module): The model to be trained.
-    - train_loader (torch.utils.data.DataLoader): DataLoader for the training data.
-    - criterion (torch.nn.Module): The loss function.
-    - optimizer (torch.optim.Optimizer): The optimizer used for model training.
-    - device (torch.device): The device (CPU or GPU) on which to perform the training.
-    - scaler (torch.amp.GradScaler()): GradScaler for mixed precision training.
+    The `torch.amp.autocast` context manager is used to enable mixed precision for the forward pass.
+    The `torch.amp.GradScaler` is used to scale the loss to prevent underflow during backpropagation.
+    Gradients are unscaled before updating the model parameters when using mixed precision training.
 
-    Returns:
-    - avg_loss (float): The average training loss over the epoch.
-    - accuracy (float): The training accuracy over the epoch.
+    Parameters
+    ----------
+    epoch : int
+        The current epoch number.
+    model : torch.nn.Module
+        The model to be trained.
+    train_loader : torch.utils.data.DataLoader
+        DataLoader for the training data.
+    criterion : torch.nn.Module
+        The loss function to be used during training.
+    optimizer : torch.optim.Optimizer
+        The optimizer used to update the model's parameters.
+    device : torch.device
+        The device (CPU or GPU) on which the training is performed.
+    scaler : torch.amp.GradScaler, optional
+        GradScaler for mixed precision training. Default is None.
+
+    Returns
+    -------
+    avg_loss : float
+        The average training loss over the epoch.
+    accuracy : float
+        The training accuracy over the epoch.
+
+    Notes
+    -----
+    This function sets the model to training mode (`model.train()`) and processes each batch in
+    the DataLoader using the specified loss function and optimizer. It supports mixed precision
+    training if a `scaler` is provided.
+
+    Examples
+    --------
+    >>> avg_loss, accuracy = train_one_epoch(
+    ...     epoch=10,
+    ...     model=my_model,
+    ...     train_loader=my_train_loader,
+    ...     criterion=torch.nn.CrossEntropyLoss(),
+    ...     optimizer=torch.optim.Adam(my_model.parameters()),
+    ...     device=torch.device('cuda'),
+    ...     scaler=torch.amp.GradScaler()
+    ... )
     """
     model.train()
     total_loss = 0
@@ -237,18 +267,44 @@ def evaluate(model, val_loader, criterion, device):
     """
     Evaluate the model on the validation set.
 
-    Args:
-    - model (torch.nn.Module): The model to be evaluated.
-    - val_loader (torch.utils.data.DataLoader): DataLoader for the validation data.
-    - criterion (torch.nn.Module): The loss function.
-    - device (torch.device): The device (CPU or GPU) on which to perform the evaluation.
+    Parameters
+    ----------
+    model : torch.nn.Module
+        The model to be evaluated.
+    val_loader : torch.utils.data.DataLoader
+        DataLoader for the validation data.
+    criterion : torch.nn.Module
+        The loss function used to compute validation loss.
+    device : torch.device
+        The device (CPU or GPU) on which the evaluation is performed.
 
-    Returns:
-    - avg_loss (float): The average validation loss.
-    - accuracy (float): The validation accuracy.
-    - precision (float): The validation precision score (macro-averaged).
-    - recall (float): The validation recall score (macro-averaged).
-    - f1 (float): The validation F1 score (macro-averaged).
+    Returns
+    -------
+    avg_loss : float
+        The average validation loss over all batches.
+    accuracy : float
+        The validation accuracy as the percentage of correctly predicted labels.
+    precision : float
+        The validation precision score (macro-averaged) across all classes.
+    recall : float
+        The validation recall score (macro-averaged) across all classes.
+    f1 : float
+        The validation F1 score (macro-averaged) across all classes.
+
+    Notes
+    -----
+    This function evaluates the model without modifying its parameters. 
+    It sets the model to evaluation mode (`model.eval()`) and ensures that no gradients are computed by using `torch.no_grad()`. 
+    After computing the predictions, various evaluation metrics are computed.
+
+    Examples
+    --------
+    >>> avg_loss, accuracy, precision, recall, f1 = evaluate(
+    ...     model=my_model,
+    ...     val_loader=my_val_loader,
+    ...     criterion=torch.nn.CrossEntropyLoss(),
+    ...     device=torch.device('cuda')
+    ... )
     """
     model.eval()
     total_loss = 0
@@ -282,21 +338,53 @@ def evaluate(model, val_loader, criterion, device):
 
 def check_early_stopping(val_metric, best_val_metric, patience_counter, model, weights_dir, config, fold_n=None):
     """
-    Check for early stopping and save the model if the validation metric improves.
+    Check for early stopping based on the validation metric and save the model if the metric improves.
 
-    Args:
-    - val_metric (float): The current validation metric.
-    - best_val_metric (float): The best validation metric so far.
-    - patience_counter (int): Counter for the number of epochs without improvement.
-    - model (torch.nn.Module): The model being trained.
-    - weights_dir (str): Directory to save the model weights.
-    - config (module): Configuration module containing various parameters like patience.
-    - fold_n (int, optional): The current fold number. If None, cross-validation is not used.
+    Parameters
+    ----------
+    val_metric : float
+        The current validation metric (e.g., validation loss or accuracy).
+    best_val_metric : float
+        The best validation metric observed so far.
+    patience_counter : int
+        The counter tracking how many epochs have passed without improvement in the validation metric.
+    model : torch.nn.Module
+        The model being trained.
+    weights_dir : str
+        Directory where the model weights will be saved if the validation metric improves.
+    config : module
+        Configuration module containing various parameters, including `patience` for early stopping.
+    fold_n : int, optional
+        The current fold number for cross-validation. If `None`, cross-validation is not being used. 
+        Default is None.
 
-    Returns:
-    - best_val_metric (float): Updated best validation metric.
-    - patience_counter (int): Updated patience counter.
-    - stop_training (bool): Whether to stop training due to early stopping.
+    Returns
+    -------
+    best_val_metric : float
+        Updated best validation metric.
+    patience_counter : int
+        Updated patience counter.
+    stop_training : bool
+        Whether to stop training due to early stopping criteria being met.
+
+    Notes
+    -----
+    - Early stopping is triggered when the validation metric does not improve after a certain number 
+      of epochs (defined by `config.patience`).
+    - If the validation metric improves, the model's weights are saved to the specified directory.
+    - The function supports both single training runs and cross-validation.
+
+    Examples
+    --------
+    >>> best_val_metric, patience_counter, stop_training = check_early_stopping(
+    ...     val_metric=0.85,
+    ...     best_val_metric=0.80,
+    ...     patience_counter=2,
+    ...     model=my_model,
+    ...     weights_dir="./model_weights/",
+    ...     config=my_config,
+    ...     fold_n=1
+    ... )
     """
     stop_training = False
     if val_metric > best_val_metric:
@@ -321,17 +409,26 @@ def print_epoch_summary(
     epoch, avg_train_loss, train_accuracy, avg_val_loss, val_accuracy, val_precision, val_recall, val_f1
 ):
     """
-    Prints a summary of the training and validation metrics for a given epoch.
+    Print a summary of the training and validation metrics for a given epoch.
 
-    Parameters:
-    - epoch (int): The current epoch number (0-indexed).
-    - avg_train_loss (float): The average training loss for the current epoch.
-    - train_accuracy (float): The training accuracy for the current epoch.
-    - avg_val_loss (float): The average validation loss for the current epoch.
-    - val_accuracy (float): The validation accuracy for the current epoch.
-    - val_precision (float): The validation precision for the current epoch.
-    - val_recall (float): The validation recall for the current epoch.
-    - val_f1 (float): The validation F1 score for the current epoch.
+    Parameters
+    ----------
+    epoch : int
+        The current epoch number (0-indexed).
+    avg_train_loss : float
+        The average training loss for the current epoch.
+    train_accuracy : float
+        The training accuracy for the current epoch.
+    avg_val_loss : float
+        The average validation loss for the current epoch.
+    val_accuracy : float
+        The validation accuracy for the current epoch.
+    val_precision : float
+        The validation precision score for the current epoch.
+    val_recall : float
+        The validation recall score for the current epoch.
+    val_f1 : float
+        The validation F1 score for the current epoch.
     """
     print(
         f"Epoch Summary {epoch+1}: "
@@ -344,16 +441,39 @@ def print_epoch_summary(
 
 def load_model_test(weights_dir, model, device, fold_n=None):
     """
-    Loads the best model weights from a specified directory and prepares the model for testing.
+    Load the best model weights from a specified directory and prepare the model for testing.
 
-    Args:
-        weights_dir (str): The directory where the model weights are stored.
-        model (torch.nn.Module): The model to load the weights into.
-        device (torch.device): The device to which the model is moved.
-        fold_n (int, optional): The fold number in cross-validation. Defaults to None.
+    Parameters
+    ----------
+    weights_dir : str
+        The directory where the model weights are stored.
+    model : torch.nn.Module
+        The model into which the weights will be loaded.
+    device : torch.device
+        The device (CPU or GPU) to which the model is moved after loading the weights.
+    fold_n : int, optional
+        The fold number for cross-validation. If provided, the weights for the specific fold are loaded.
+        Defaults to None.
 
-    Returns:
-        torch.nn.Module: The model with the loaded weights.
+    Returns
+    -------
+    torch.nn.Module
+        The model with the loaded weights, ready for testing.
+
+    Notes
+    -----
+    This function loads the best model weights saved during training from a specified file and 
+    prepares the model for testing by moving it to the specified device (CPU or GPU) and setting it
+    to evaluation mode (`model.eval()`).
+
+    Examples
+    --------
+    >>> model = load_model_test(
+    ...     weights_dir="./model_weights/",
+    ...     model=my_model,
+    ...     device=torch.device('cuda'),
+    ...     fold_n=1
+    ... )
     """
     if fold_n is not None:
         model_path = os.path.join(weights_dir, f"best_model_fold{fold_n}.pth")
