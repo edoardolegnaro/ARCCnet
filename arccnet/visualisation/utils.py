@@ -2,6 +2,7 @@ import os
 
 import matplotlib  # noqa: F401
 import numpy as np
+import plotly.graph_objects as go
 import torch
 import torch.nn.functional as F
 from matplotlib import pyplot as plt
@@ -392,3 +393,80 @@ def plot_location_on_sun(df, long_limit_deg=60, experiment=None):
 
     print(text_output)
     plt.show()
+
+
+def months_years_heatmap(df, datetime_column, title, colorbar_title, height=900, width=650):
+    """
+    Create a heatmap showing the number of images per month and year.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        The dataset to plot. Must contain a datetime column to group by.
+    datetime_column : str
+        The name of the datetime column in `df` to use for grouping by year and month.
+    title : str
+        The title of the heatmap.
+    colorbar_title : str
+        The title for the colorbar, indicating what the heatmap values represent.
+    height : int, optional
+        The height of the figure in pixels. Default is 900.
+    width : int, optional
+        The width of the figure in pixels. Default is 650.
+
+    Returns
+    -------
+    fig : plotly.graph_objects.Figure
+        The generated Plotly heatmap figure object.
+
+    Notes
+    -----
+    This function creates a heatmap where the rows represent the years and the columns represent the months,
+    showing the number of occurrences of a particular event (e.g., images) in each month-year combination.
+
+    Examples
+    --------
+    >>> fig = months_years_heatmap(selected_df, 'datetime', 'Number of Events per Month and Year', 'Number of Events')
+    >>> fig.show()
+    """
+
+    grouped_df = (
+        df.groupby([df[datetime_column].dt.year.rename("year"), df[datetime_column].dt.strftime("%b").rename("month")])
+        .size()
+        .reset_index(name="count")
+    )
+
+    # Create a pivot table where rows are years, columns are months, and values are counts
+    pivot_table = grouped_df.pivot(index="year", columns="month", values="count").fillna(0)
+
+    # Ensure correct order of months
+    months_order = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    pivot_table = pivot_table.reindex(columns=months_order)
+
+    # Create the heatmap
+    fig = go.Figure(
+        data=go.Heatmap(
+            z=pivot_table.values,
+            x=pivot_table.columns,  # Months on x-axis
+            y=pivot_table.index,  # Years on y-axis
+            colorscale="Portland",
+            colorbar=dict(title=colorbar_title),
+            text=pivot_table.values,
+            texttemplate="%{text}",
+            textfont={"size": 12, "color": "white"},
+        )
+    )
+
+    # Update the layout
+    fig.update_layout(
+        title=title,
+        xaxis_title="Month",
+        yaxis_title="Year",
+        xaxis={"type": "category"},  # Ensure months are treated as categorical data
+        yaxis={"type": "category"},  # Ensure years are treated as categorical data
+        autosize=True,
+        height=height,
+        width=width,
+    )
+
+    return fig
