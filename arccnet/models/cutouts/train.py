@@ -12,15 +12,42 @@ import arccnet.visualisation.utils as ut_v
 
 def run_training(config, args):
     """
-    This function handles the entire training pipeline including:
-    - Setting up the configuration.
-    - Initializing the Comet.ml experiment.
-    - Data preparation and model training.
-    - Logging results and artifacts.
+    Runs the full training pipeline for a machine learning model, including
+    configuration setup, data preparation, model training, and logging.
 
-    Parameters:
-    - config: The configuration object containing default values.
-    - args: Parsed command-line arguments that override config values.
+    Parameters
+    ----------
+    config : object
+        Configuration object with default settings for the training process.
+    args : Namespace
+        Parsed command-line arguments that may override configuration defaults.
+
+    Returns
+    -------
+    tuple
+        A tuple containing:
+        - avg_test_loss : float
+            Average test loss after model training.
+        - test_accuracy : float
+            Test set accuracy.
+        - test_precision : float
+            Precision score on the test set.
+        - test_recall : float
+            Recall score on the test set.
+        - test_f1 : float
+            F1 score on the test set.
+        - cm_test : ndarray
+            Confusion matrix for the test set predictions.
+        - report_df : DataFrame
+            Dataframe containing detailed classification report for test set.
+
+    Notes
+    -----
+    - Overrides specific configuration parameters with provided arguments.
+    - Initializes a Comet.ml experiment for tracking.
+    - Prepares and processes data for training, including undersampling and
+      cross-validation split.
+    - Logs artifacts such as training configurations, dataset, and metrics to Comet.ml.
     """
 
     # Override config settings with arguments if provided
