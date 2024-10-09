@@ -100,3 +100,5 @@ label_mapping_dict = {
     "qs-ia-a-b-bg": qs_ia_a_b_bg_mapping,
     "a-b-bg": a_b_bg_mapping,
 }
+
+fulldisk_labels_ARs = {"Alpha": 0, "Beta": 1, "Beta-Gamma": 2, "Beta-Delta": 3, "Beta-Gamma-Delta": 4}
