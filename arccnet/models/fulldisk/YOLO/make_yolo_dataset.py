@@ -1,9 +1,6 @@
-# %%
 import os
 
-import comet_ml
 import pandas as pd
-from ultralytics import YOLO
 
 from astropy.time import Time
 
@@ -62,23 +59,6 @@ split_idx = int(0.8 * len(cleaned_df))
 train_df = cleaned_df[:split_idx]
 val_df = cleaned_df[split_idx:]
 
-
-# %%
-comet_ml.init(project_name="fulldisk-detection-arcaff", workspace="arcaff")
-
-# %%
-model = YOLO("yolov8l.pt")  # load a pretrained model
-
-# Define training arguments
-train_args = {
-    "data": "fulldisk640.yaml",
-    "imgsz": 1024,  # Image size
-    "batch": 64,
-    "epochs": 1000,
-    "device": [0],
-    "patience": 200,
-    "dropout": 0.1,
-    "fliplr": 0.5,
-}
-
-results = model.train(**train_args)
+YOLO_root_path = os.path.join(data_folder, "YOLO_dataset")
+ut.process_and_save_fits(local_path_root, train_df, YOLO_root_path, "train", resize_dim=(1024, 1024))
+ut.process_and_save_fits(local_path_root, val_df, YOLO_root_path, "val", resize_dim=(1024, 1024))
