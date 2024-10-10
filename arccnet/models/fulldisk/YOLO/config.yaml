@@ -1,0 +1,9 @@
+train: '/home/edoardo/Code/ARCAFF/data/YOLO_dataset/images/train'
+val: '/home/edoardo/Code/ARCAFF/data/YOLO_dataset/images/val'
+nc: 5
+names:
+- Alpha
+- Beta
+- Beta-Gamma
+- Beta-Delta
+- Beta-Gamma-Delta
