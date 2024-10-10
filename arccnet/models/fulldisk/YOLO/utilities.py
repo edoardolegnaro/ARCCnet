@@ -77,38 +77,38 @@ def process_fits_row(row, local_path_root, base_dir, dataset_type, resize_dim=(6
         data = img_fit[1].data
         header = img_fit[1].header
 
-        sunpy_map = sunpy.map.Map(data, header)
-        x, y = np.meshgrid(np.arange(sunpy_map.data.shape[1]), np.arange(sunpy_map.data.shape[0]))
-        coordinates = sunpy_map.pixel_to_world(x * u.pix, y * u.pix)
-        # Obtain solar angular radius
-        solar_radius = sunpy.coordinates.sun.angular_radius(sunpy_map.date).to(u.deg)
-        # Check if the coordinates are on the solar disk
-        on_disk = coordinates.separation(sunpy_map.reference_coordinate) <= solar_radius
-        # Mask data that is outside the solar disk
-        sunpy_map.data[~on_disk] = np.nan  # Set off-disk pixels to NaN
-        crota2 = sunpy_map.meta.get("CROTA2", 0)
-        rotated_map = sunpy_map.rotate(angle=-crota2 * u.deg)
-        data = rotated_map.data
-        data = np.nan_to_num(data, nan=0.0)
-        data = ut_v.hardtanh_transform_npy(data)
+    sunpy_map = sunpy.map.Map(data, header)
+    x, y = np.meshgrid(np.arange(sunpy_map.data.shape[1]), np.arange(sunpy_map.data.shape[0]))
+    coordinates = sunpy_map.pixel_to_world(x * u.pix, y * u.pix)
+    # Obtain solar angular radius
+    solar_radius = sunpy.coordinates.sun.angular_radius(sunpy_map.date).to(u.deg)
+    # Check if the coordinates are on the solar disk
+    on_disk = coordinates.separation(sunpy_map.reference_coordinate) <= solar_radius
+    # Mask data that is outside the solar disk
+    sunpy_map.data[~on_disk] = np.nan  # Set off-disk pixels to NaN
+    crota2 = sunpy_map.meta.get("CROTA2", 0)
+    rotated_map = sunpy_map.rotate(angle=-crota2 * u.deg)
+    data = rotated_map.data
+    data = np.nan_to_num(data, nan=0.0)
+    data = ut_v.hardtanh_transform_npy(data)
 
-        # Normalize and scale the image data
-        data = (data - np.min(data)) / (np.max(data) - np.min(data))
-        data = (data * 255).astype(np.uint8)
+    # Normalize and scale the image data
+    data = (data - np.min(data)) / (np.max(data) - np.min(data))
+    data = (data * 255).astype(np.uint8)
 
-        # Convert to PIL Image and resize
-        img = Image.fromarray(data)
-        img_resized = img.resize(resize_dim)
+    # Convert to PIL Image and resize
+    img = Image.fromarray(data)
+    img_resized = img.resize(resize_dim)
 
-        # Save the resized image as PNG
-        basename = os.path.basename(image_path)
-        png_filename = os.path.splitext(basename)[0] + ".png"
-        img_resized.save(os.path.join(base_image_dir, png_filename))
+    # Save the resized image as PNG
+    basename = os.path.basename(image_path)
+    png_filename = os.path.splitext(basename)[0] + ".png"
+    img_resized.save(os.path.join(base_image_dir, png_filename))
 
-        # Save the YOLO label in a .txt file
-        label_filename = os.path.splitext(basename)[0] + ".txt"
-        with open(os.path.join(base_label_dir, label_filename), "w") as label_file:
-            label_file.write(label)
+    # Save the YOLO label in a .txt file
+    label_filename = os.path.splitext(basename)[0] + ".txt"
+    with open(os.path.join(base_label_dir, label_filename), "w") as label_file:
+        label_file.write(label)
 
 
 def process_and_save_fits(local_path_root, dataframe, base_dir, dataset_type, resize_dim=(640, 640)):

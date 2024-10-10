@@ -1,6 +1,8 @@
+# %% Clean up Dataframe
 import os
 
 import pandas as pd
+from p_tqdm import p_map
 
 from astropy.time import Time
 
@@ -18,7 +20,7 @@ df["time"] = df["datetime.jd1"] + df["datetime.jd2"]
 times = Time(df["time"], format="jd")
 df["datetime"] = pd.to_datetime(times.iso)
 
-selected_df = df[df["filtered"] is False]
+selected_df = df[~df["filtered"]]
 
 lon_trshld = 70
 front_df = selected_df[(selected_df["longitude"] < lon_trshld) & (selected_df["longitude"] > -lon_trshld)]
@@ -54,11 +56,21 @@ cleaned_df["yolo_label"] = cleaned_df.apply(
 
 df_yolo = cleaned_df.groupby("path")["yolo_label"].apply(lambda x: "\n".join(x)).reset_index()
 
-# temporal dataset split
-split_idx = int(0.8 * len(cleaned_df))
-train_df = cleaned_df[:split_idx]
-val_df = cleaned_df[split_idx:]
+# %% temporal dataset split
+split_idx = int(0.8 * len(df_yolo))
+train_df = df_yolo[:split_idx]
+val_df = df_yolo[split_idx:]
 
 YOLO_root_path = os.path.join(data_folder, "YOLO_dataset")
-ut.process_and_save_fits(local_path_root, train_df, YOLO_root_path, "train", resize_dim=(1024, 1024))
-ut.process_and_save_fits(local_path_root, val_df, YOLO_root_path, "val", resize_dim=(1024, 1024))
+
+
+def process_train(row):
+    return ut.process_fits_row(row, local_path_root, YOLO_root_path, "train", resize_dim=(1024, 1024))
+
+
+def process_val(row):
+    return ut.process_fits_row(row, local_path_root, YOLO_root_path, "val", resize_dim=(1024, 1024))
+
+
+p_map(process_train, [row for _, row in train_df.iterrows()], num_cpus=16)
+p_map(process_val, [row for _, row in val_df.iterrows()], num_cpus=16)
