@@ -9,6 +9,7 @@ import astropy.units as u
 from astropy.io import fits
 
 from arccnet.models import labels
+from arccnet.visualisation import utils as ut_v
 
 
 def to_yolo(class_name, top_right, bottom_left, img_width, img_height):
@@ -88,6 +89,8 @@ def process_fits_row(row, local_path_root, base_dir, dataset_type, resize_dim=(6
         crota2 = sunpy_map.meta.get("CROTA2", 0)
         rotated_map = sunpy_map.rotate(angle=-crota2 * u.deg)
         data = rotated_map.data
+        data = np.nan_to_num(data, nan=0.0)
+        data = ut_v.hardtanh_transform_npy(data)
 
         # Normalize and scale the image data
         data = (data - np.min(data)) / (np.max(data) - np.min(data))
