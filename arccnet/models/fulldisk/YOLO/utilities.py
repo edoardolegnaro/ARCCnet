@@ -12,14 +12,14 @@ from arccnet.models import labels
 from arccnet.visualisation import utils as ut_v
 
 
-def to_yolo(class_name, top_right, bottom_left, img_width, img_height):
+def to_yolo(encoded_label, top_right, bottom_left, img_width, img_height):
     """
     Converts bounding box coordinates and class name into YOLO format.
 
     Parameters
     ----------
-    class_name : str
-        The name of the class associated with the object in the bounding box.
+    encoded_label : str
+        The index of the class associated with the object in the bounding box.
     top_right : tuple of float
         The (x, y) coordinates of the top-right corner of the bounding box.
     bottom_left : tuple of float
@@ -48,14 +48,13 @@ def to_yolo(class_name, top_right, bottom_left, img_width, img_height):
     >>> to_yolo("dog", (200, 150), (100, 50), 500, 400)
     '0 0.3 0.25 0.2 0.25'
     """
-    class_id = labels.fulldisk_labels_ARs.get(class_name, -1)  # Returns -1 if class_name is not found
     x1, y1 = bottom_left
     x2, y2 = top_right
     x_center = ((x1 + x2) / 2) / img_width
     y_center = ((y1 + y2) / 2) / img_height
     width = (x2 - x1) / img_width
     height = (y2 - y1) / img_height
-    return f"{class_id} {x_center} {y_center} {width} {height}"
+    return f"{encoded_label} {x_center} {y_center} {width} {height}"
 
 
 def process_fits_row(row, local_path_root, base_dir, dataset_type, resize_dim=(640, 640)):
