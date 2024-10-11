@@ -1,11 +1,10 @@
 import os
 
 import numpy as np
-import sunpy.map
 from p_tqdm import p_map
-from PIL import Image
+from PIL import Image, ImageDraw
+from scipy.ndimage import rotate
 
-import astropy.units as u
 from astropy.io import fits
 
 from arccnet.models import labels
@@ -76,20 +75,10 @@ def process_fits_row(row, local_path_root, base_dir, dataset_type, resize_dim=(6
         data = img_fit[1].data
         header = img_fit[1].header
 
-    sunpy_map = sunpy.map.Map(data, header)
-    x, y = np.meshgrid(np.arange(sunpy_map.data.shape[1]), np.arange(sunpy_map.data.shape[0]))
-    coordinates = sunpy_map.pixel_to_world(x * u.pix, y * u.pix)
-    # Obtain solar angular radius
-    solar_radius = sunpy.coordinates.sun.angular_radius(sunpy_map.date).to(u.deg)
-    # Check if the coordinates are on the solar disk
-    on_disk = coordinates.separation(sunpy_map.reference_coordinate) <= solar_radius
-    # Mask data that is outside the solar disk
-    sunpy_map.data[~on_disk] = np.nan  # Set off-disk pixels to NaN
-    crota2 = sunpy_map.meta.get("CROTA2", 0)
-    rotated_map = sunpy_map.rotate(angle=-crota2 * u.deg)
-    data = rotated_map.data
     data = np.nan_to_num(data, nan=0.0)
     data = ut_v.hardtanh_transform_npy(data)
+    crota2 = header["CROTA2"]
+    data = rotate(data, crota2, reshape=False, mode="constant", cval=0)
 
     # Normalize and scale the image data
     data = (data - np.min(data)) / (np.max(data) - np.min(data))
@@ -123,3 +112,42 @@ def process_and_save_fits(local_path_root, dataframe, base_dir, dataset_type, re
         [dataset_type] * len(dataframe),
         [resize_dim] * len(dataframe),
     )
+
+
+def draw_yolo_labels_on_image(image_path, output_path=None):
+    """
+    Draws YOLO labels on the image by finding the corresponding label file,
+    which assumes the label file is in a parallel 'labels' directory and has
+    the same base name as the image file but with a '.txt' extension.
+
+    Parameters:
+    - image_path: Path to the input image.
+    - output_path: Path where the output image will be saved.
+                   If None, display the image.
+    """
+    class_names = [name for name, _ in sorted(labels.fulldisk_labels_ARs.items(), key=lambda item: item[1])]
+
+    # Load the image
+    img = Image.open(image_path).convert("RGB")
+    draw = ImageDraw.Draw(img)
+    width, height = img.size
+
+    # Normalize the image path and replace 'images' with 'labels', change the extension to .txt
+    label_path = image_path.replace("images", "labels").rsplit(".", 1)[0] + ".txt"
+
+    # Read the label file
+    with open(label_path) as file:
+        for line in file:
+            class_id, x_center, y_center, bbox_width, bbox_height = map(float, line.split())
+
+            # Convert YOLO coordinates to PIL rectangle format
+            x1 = (x_center - bbox_width / 2) * width
+            y1 = (y_center - bbox_height / 2) * height
+            x2 = (x_center + bbox_width / 2) * width
+            y2 = (y_center + bbox_height / 2) * height
+
+            # Draw the bounding box rectangle and the label
+            draw.rectangle([x1, y1, x2, y2], outline="orange", width=1)
+            draw.text((x1, y1), class_names[int(class_id)], fill="yellow")
+
+    return img

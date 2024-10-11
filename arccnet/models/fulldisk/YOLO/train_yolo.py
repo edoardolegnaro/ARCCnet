@@ -3,7 +3,7 @@ from ultralytics import YOLO
 
 comet_ml.init(project_name="arcaff-v2-fulldisk-detection-classification", workspace="arcaff")
 
-model = YOLO("yolo11n.pt")  # load a pretrained model
+model = YOLO("yolov8n.pt")  # load a pretrained model
 
 
 # Define training arguments
