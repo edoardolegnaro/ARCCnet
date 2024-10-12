@@ -1,5 +1,5 @@
-train: '/home/edoardo/Code/ARCAFF/data/YOLO_dataset/images/train'
-val: '/home/edoardo/Code/ARCAFF/data/YOLO_dataset/images/val'
+train: '/ARCAFF/data/YOLO_dataset/images/train'
+val: '/ARCAFF/data/YOLO_dataset/images/val'
 nc: 3
 names:
 - Alpha

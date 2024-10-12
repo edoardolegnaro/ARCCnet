@@ -1,20 +1,20 @@
 import comet_ml
 from ultralytics import YOLO
 
-comet_ml.init(project_name="arcaff-v2-fulldisk-detection-classification", workspace="arcaff")
+comet_ml.login(project_name="arcaff-v2-fulldisk-detection-classification", workspace="arcaff")
 
-model = YOLO("yolov8n.pt")  # load a pretrained model
+model = YOLO("yolo11x.pt")  # load a pretrained model
 
 
 # Define training arguments
 train_args = {
     "data": "config.yaml",
     "imgsz": 1024,  # Image size
-    "batch": 16,
-    "epochs": 1000,
-    "device": [0],
-    "patience": 200,
-    "dropout": 0.1,
+    "batch": 32,
+    "epochs": 10000,
+    "device": [0, 1, 2, 3],
+    "patience": 500,
+    "dropout": 0.25,
     "fliplr": 0.5,
 }
 
