@@ -113,6 +113,9 @@ def run_training(config, args):
     save_path = os.path.join(script_dir, "temp", "working_dataset.png")
     os.makedirs(os.path.dirname(save_path), exist_ok=True)  # Create directory if it doesn't exist
 
+    # Create directory for saving the dataset histogram if it doesn't exist
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+
     # Create and log the dataset histogram
     ut_v.make_classes_histogram(
         df_du["grouped_labels"], title="Dataset (Grouped Undersampled)", y_off=100, figsz=(7, 5), save_path=save_path
