@@ -77,15 +77,15 @@ split_idx = int(0.8 * len(df_yolo))
 train_df = df_yolo[:split_idx]
 val_df = df_yolo[split_idx:]
 
-YOLO_root_path = os.path.join(data_folder, "YOLO_dataset")
+YOLO_root_path = os.path.join(data_folder, "YOLO_dataset_cmap")
 
 
 def process_train(row):
-    return ut.process_fits_row(row, local_path_root, YOLO_root_path, "train", resize_dim=(1024, 1024))
+    return ut.process_fits_row(row, local_path_root, YOLO_root_path, "train", resize_dim=(1024, 1024), plt=True)
 
 
 def process_val(row):
-    return ut.process_fits_row(row, local_path_root, YOLO_root_path, "val", resize_dim=(1024, 1024))
+    return ut.process_fits_row(row, local_path_root, YOLO_root_path, "val", resize_dim=(1024, 1024), plt=True)
 
 
 p_map(process_train, [row for _, row in train_df.iterrows()], num_cpus=32)
