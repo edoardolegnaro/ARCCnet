@@ -49,7 +49,7 @@ def run_training(config, args):
         "num_epochs": "num_epochs",
         "patience": "patience",
         "learning_rate": "learning_rate",
-        "gpu_indexes": "gpu_indexes",
+        "gpu_index": "gpu_index",
         "data_folder": "data_folder",
         "dataset_folder": "dataset_folder",
         "df_file_name": "df_file_name",
@@ -61,10 +61,8 @@ def run_training(config, args):
         if value is not None:
             setattr(config, attr, value)
 
-    if args.gpu_indexes is not None:
-        config.device = (
-            f"cuda:{args.gpu_indexes[0]}" if len(args.gpu_indexes) == 1 else [f"cuda:{idx}" for idx in args.gpu_indexes]
-        )
+    if args.gpu_index is not None:
+        config.device = f"cuda:{args.gpu_index}"
 
     # Generate run ID and weights directory
     run_id, weights_dir = ut_t.generate_run_id(config)
@@ -79,7 +77,7 @@ def run_training(config, args):
         {
             "model_name": config.model_name,
             "batch_size": config.batch_size,
-            "GPU": f"GPUs_{args.gpu_indexes}" if torch.cuda.is_available() else "CPU",
+            "GPU": f"GPU{config.gpu_index}_{torch.cuda.get_device_name()}" if torch.cuda.is_available() else "CPU",
             "num_epochs": config.num_epochs,
             "patience": config.patience,
         }
@@ -104,7 +102,7 @@ def run_training(config, args):
     # Start training
     print("Starting Training...")
     (avg_test_loss, test_accuracy, test_precision, test_recall, test_f1, cm_test, report_df) = ut_t.train_model(
-        config, df, weights_dir, experiment=run_comet, use_multi_gpu=len(args.gpu_indexes) > 1
+        config, df, weights_dir, experiment=run_comet
     )
 
     # Logging and saving assets
@@ -138,7 +136,7 @@ if __name__ == "__main__":
     parser.add_argument("--num_epochs", type=int, help="Number of epochs for training.")
     parser.add_argument("--patience", type=int, help="Patience for early stopping.")
     parser.add_argument("--learning_rate", type=float, help="Learning rate for optimizer.")
-    parser.add_argument("--gpu_indexes", type=int, nargs="+", help="Indexes of the GPUs to use.")
+    parser.add_argument("--gpu_index", type=int, help="Index of the GPU to use.")
     parser.add_argument("--data_folder", type=str, help="Path to the data folder.")
     parser.add_argument("--dataset_folder", type=str, help="Path to the dataset folder.")
     parser.add_argument("--df_file_name", type=str, help="Name of the dataframe file.")
