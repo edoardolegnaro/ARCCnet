@@ -1,6 +1,7 @@
 import os
 
 import numpy as np
+from matplotlib import pyplot as plt
 from p_tqdm import p_map
 from PIL import Image, ImageDraw
 from scipy.ndimage import rotate
@@ -56,7 +57,7 @@ def to_yolo(encoded_label, top_right, bottom_left, img_width, img_height):
     return f"{encoded_label} {x_center} {y_center} {width} {height}"
 
 
-def process_fits_row(row, local_path_root, base_dir, dataset_type, resize_dim=(640, 640), plt=False):
+def process_fits_row(row, local_path_root, base_dir, dataset_type, resize_dim=(640, 640), cmap=False):
     """
     Process a single row in the DataFrame, handling the FITS file and saving the processed image and YOLO label.
     """
@@ -87,20 +88,19 @@ def process_fits_row(row, local_path_root, base_dir, dataset_type, resize_dim=(6
     basename = os.path.basename(image_path)
     png_filename = os.path.splitext(basename)[0] + ".png"
     output_image_path = os.path.join(base_image_dir, png_filename)
-    
+
     if plt:
         target_width, target_height = resize_dim
         data = ut_v.pad_resize_normalize(data, target_height=target_width, target_width=target_height)
         plt.imshow(data, cmap=ut_v.magnetic_map)
-        plt.axis('off') 
-        plt.savefig(output_image_path, bbox_inches='tight', pad_inches=0, dpi=300)
+        plt.axis("off")
+        plt.savefig(output_image_path, bbox_inches="tight", pad_inches=0, dpi=300)
         plt.close()
-        
+
     else:
         img = Image.fromarray(data)
         img_resized = img.resize(resize_dim)
         img_resized.save(output_image_path)
-    
 
     # Save the YOLO label in a .txt file
     label_filename = os.path.splitext(basename)[0] + ".txt"
