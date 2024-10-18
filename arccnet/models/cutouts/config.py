@@ -8,13 +8,13 @@ classes = "qs-ia-a-b-bg"
 project_name = "arcaff-v2-" + classes
 label_mapping = labels.label_mapping_dict.get(classes)
 
-batch_size = 16
-num_workers = 32
-num_epochs = 300
-patience = 15
+batch_size = 32
+num_workers = 100
+num_epochs = 500
+patience = 25
 learning_rate = 1e-5
 
-model_name = "resnet18"
+model_name = "vit_small_patch16_224"
 pretrained = True
 gpu_index = 0
 device = "cuda:" + str(gpu_index)
