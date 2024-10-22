@@ -237,3 +237,4 @@ arccnet/models/weights
 arccnet/models/trained_models
 arccnet/models/fulldisk/YOLO/runs/
 arccnet/models/fulldisk/YOLO/yolo*.pt
+arccnet/visualisation/images

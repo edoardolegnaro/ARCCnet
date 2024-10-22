@@ -3,7 +3,7 @@ import os
 import numpy as np
 from matplotlib import pyplot as plt
 from p_tqdm import p_map
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 from scipy.ndimage import rotate
 
 from astropy.io import fits
@@ -143,6 +143,7 @@ def draw_yolo_labels_on_image(image_path, output_path=None):
 
     # Normalize the image path and replace 'images' with 'labels', change the extension to .txt
     label_path = image_path.replace("images", "labels").rsplit(".", 1)[0] + ".txt"
+    font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 24)
 
     # Read the label file
     with open(label_path) as file:
@@ -157,6 +158,6 @@ def draw_yolo_labels_on_image(image_path, output_path=None):
 
             # Draw the bounding box rectangle and the label
             draw.rectangle([x1, y1, x2, y2], outline="orange", width=1)
-            draw.text((x1, y1), class_names[int(class_id)], fill="yellow")
+            draw.text((x1, y1), class_names[int(class_id)], fill="yellow", font=font)
 
     return img

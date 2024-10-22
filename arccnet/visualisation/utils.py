@@ -85,6 +85,7 @@ def make_classes_histogram(
     show_percentages=True,
     ax=None,
     save_path=None,
+    transparent=False,
 ):
     """
     Creates and displays a bar chart (histogram) that visualizes the distribution of classes in a given pandas Series.
@@ -212,7 +213,7 @@ def make_classes_histogram(
         # If a new figure was created, show the plot
         if ax is None:
             if save_path:
-                plt.savefig(save_path, bbox_inches="tight")
+                plt.savefig(save_path, bbox_inches="tight", transparent=transparent)
                 plt.close()
             else:
                 plt.show()
