@@ -770,3 +770,27 @@ def train_model(config, df, weights_dir, experiment=None, fold=1):
             )
 
     return (avg_test_loss, test_accuracy, test_precision, test_recall, test_f1, cm_test, report_df)
+
+
+def get_device():
+    """
+    Determines the appropriate device for PyTorch operations based on the available hardware.
+    The function checks for the following devices in order of priority:
+    1. CUDA-enabled GPU (NVIDIA)
+    2. Metal Performance Shaders (MPS) for Apple Silicon
+    3. ROCm-enabled GPU (AMD)
+    4. CPU (fallback if no GPU is available)
+
+    Returns
+    -------
+    torch.device
+        The most suitable device for PyTorch operations.
+    """
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    elif torch.backends.mps.is_available():
+        return torch.device("mps")  # Apple Silicon
+    elif torch.backends.hip.is_available():
+        return torch.device("hip")  # ROCm support
+    else:
+        return torch.device("cpu")

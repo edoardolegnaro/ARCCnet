@@ -7,16 +7,16 @@ import torch
 import torchvision
 import torchvision.ops as ops
 from scipy.ndimage import rotate
+from sklearn.metrics import average_precision_score
 from torch.optim.lr_scheduler import StepLR
 from torch.utils.data import DataLoader, Dataset
-from torchmetrics.detection.mean_ap import MeanAveragePrecision
-from torchvision import transforms
 from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
 from tqdm import tqdm
 
 from astropy.io import fits
 from astropy.time import Time
 
+from arccnet.models import train_utils as ut_t
 from arccnet.visualisation import utils as ut_v
 
 img_size_dic = {"MDI": 1024, "HMI": 4096}
@@ -85,7 +85,6 @@ label_to_index = {label: idx for idx, label in enumerate(unique_labels, start=1)
 cleaned_df["grouped_label"] = cleaned_df["magnetic_class"].map(label_mapping)
 cleaned_df = cleaned_df[cleaned_df["grouped_label"] != "None"].copy()  # Exclude 'None' labels if necessary
 cleaned_df["encoded_label"] = cleaned_df["grouped_label"].map(label_to_index)
-
 # %%
 split_idx = int(0.8 * len(cleaned_df))
 train_df = cleaned_df[:split_idx]
@@ -93,12 +92,12 @@ val_df = cleaned_df[split_idx:]
 
 # %%
 ut_v.make_classes_histogram(
-    train_df["grouped_label"], y_off=20, figsz=(10, 5), title="Train DF FullDisk Dataset", bar_color="#1f77b4"
+    train_df["grouped_label"], y_off=10, figsz=(7, 5), title="Train FullDisk Dataset", bar_color="#1f77b4"
 )
 
 # %%
 ut_v.make_classes_histogram(
-    val_df["grouped_label"], y_off=20, figsz=(10, 5), title="Validation DF FullDisk Dataset", bar_color="#1f77b4"
+    val_df["grouped_label"], y_off=3, figsz=(7, 5), title="Validation FullDisk Dataset", bar_color="#1f77b4"
 )
 
 
@@ -106,7 +105,7 @@ ut_v.make_classes_histogram(
 def preprocess_FD(row):
     arccnet_path_root = row["path"].split("/fits")[0]
     image_path = row["path"].replace(arccnet_path_root, local_path_root)
-    # Load data with FITS and SunPy
+
     with fits.open(image_path) as img_fit:
         data = img_fit[1].data
         header = img_fit[1].header
@@ -131,34 +130,20 @@ class FulldiskDataset(Dataset):
         return len(self.df)
 
     def __getitem__(self, idx):
+        final_size = 800
         row = self.df.iloc[idx]
-        arccnet_path_root = row["path"].split("/fits")[0]
-        image_path = row["path"].replace(arccnet_path_root, self.local_path_root)
-
-        # Load data with FITS and SunPy
-        with fits.open(image_path) as img_fit:
-            data = img_fit[1].data
-            header = img_fit[1].header
-
-        # Transformations
-        data = np.nan_to_num(data, nan=0.0)
-        data = ut_v.hardtanh_transform_npy(data)
-        crota2 = header["CROTA2"]
-        data = rotate(data, crota2, reshape=False, mode="constant", cval=0)
-
-        data = ut_v.pad_resize_normalize(data, target_height=1024, target_width=1024)
-
-        data = torch.tensor(data, dtype=torch.float32).unsqueeze(0)
+        data = preprocess_FD(row)
+        data = ut_v.pad_resize_normalize(data, target_height=final_size, target_width=final_size)
+        data = torch.tensor(data, dtype=torch.float32).unsqueeze(0)  # Add channel dimension
 
         if self.transform:
             data = self.transform(data)
 
-        # Extract label
         label = row["encoded_label"]
 
         # Compute bounding box
         img_sz = img_size_dic.get(row["instrument"])
-        scale_factor = 1024 / img_sz
+        scale_factor = final_size / img_sz
         x_min, y_min = row["bottom_left_cutout"]
         x_max, y_max = row["top_right_cutout"]
         bbox = [
@@ -167,201 +152,183 @@ class FulldiskDataset(Dataset):
             x_max * scale_factor,
             y_max * scale_factor,
         ]  # Absolute coordinates
-        area = (bbox[2] - bbox[0]) * (bbox[3] - bbox[1])
+        (bbox[2] - bbox[0]) * (bbox[3] - bbox[1])
 
         # Structure for Faster R-CNN
         target = {
             "boxes": torch.tensor([bbox], dtype=torch.float32),
             "labels": torch.tensor([label], dtype=torch.int64),
-            "image_id": torch.tensor([idx]),
-            "area": torch.tensor([area], dtype=torch.float32),
-            "iscrowd": torch.zeros((1,), dtype=torch.int64),
         }
 
         return data, target
 
 
 # %%
-model = torchvision.models.detection.fasterrcnn_resnet50_fpn(weights="DEFAULT")
-
-# original_conv = model.backbone.body.conv1
-# new_conv = torch.nn.Conv2d(
-#     1,
-#     original_conv.out_channels,
-#     kernel_size=original_conv.kernel_size,
-#     stride=original_conv.stride,
-#     padding=original_conv.padding,
-#     bias=original_conv.bias is not None
-# )
-# with torch.no_grad():
-#     new_conv.weight = torch.nn.Parameter(original_conv.weight.mean(dim=1, keepdim=True))
-# model.backbone.body.conv1 = new_conv
-
 num_classes = 1 + len(unique_labels)
-in_features = model.roi_heads.box_predictor.cls_score.in_features
-model.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes)
 
-device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+
+def faster_rcnn_model():
+    model = torchvision.models.detection.fasterrcnn_resnet50_fpn(weights="DEFAULT")
+
+    in_features = model.roi_heads.box_predictor.cls_score.in_features
+    model.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes)
+    # model.backbone.body.conv1 = torch.nn.Conv2d(1, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False)
+    return model
+
+
+device = ut_t.get_device()
+model = faster_rcnn_model()
 model.to(device)
 
-# %%
-# Define Transformations
-train_transforms = transforms.Compose(
-    [
-        transforms.ToPILImage(mode="F"),  # Ensure single-channel ('F' mode for floating point)
-        transforms.Resize((1024, 1024)),
-        transforms.RandomHorizontalFlip(0.5),
-        transforms.ToTensor(),
-    ]
-)
-
-val_transforms = transforms.Compose(
-    [transforms.ToPILImage(mode="F"), transforms.Resize((1024, 1024)), transforms.ToTensor()]
-)
-
-# %%
-# Hyperparameters
+# %% Training parameters
+num_epochs = 20
 learning_rate = 0.005
-num_epochs = 10
+weight_decay = 0.0005
+step_size = 5
+gamma = 0.1
+batch_size = 4
 
-# %%
-# Optimizer
-optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate, momentum=0.9, weight_decay=0.0005)
-metric_map = MeanAveragePrecision()
-
-
-# DataLoader
-def collate_fn(batch):
-    images, targets = list(zip(*batch))
-    return images, targets
-
-
-train_dataset = FulldiskDataset(train_df, local_path_root, transform=train_transforms)
-val_dataset = FulldiskDataset(val_df, local_path_root, transform=train_transforms)
-
+train_dataset = FulldiskDataset(train_df, local_path_root)
+val_dataset = FulldiskDataset(val_df, local_path_root)
 train_loader = DataLoader(
-    train_dataset, batch_size=4, shuffle=True, num_workers=100, collate_fn=collate_fn, pin_memory=True
+    train_dataset,
+    batch_size=batch_size,
+    shuffle=True,
+    num_workers=16,
+    pin_memory=True,
+    collate_fn=lambda x: list(zip(*x)),
 )
-
 val_loader = DataLoader(
-    val_dataset, batch_size=4, shuffle=False, num_workers=100, collate_fn=collate_fn, pin_memory=True
+    val_dataset,
+    batch_size=batch_size,
+    shuffle=False,
+    num_workers=16,
+    pin_memory=True,
+    collate_fn=lambda x: list(zip(*x)),
 )
-
-scheduler = StepLR(optimizer, step_size=3, gamma=0.1)
-
-cuda_version = torch.version.cuda
-if cuda_version is not None and float(cuda_version) < 11.8:
-    scaler = torch.cuda.amp.GradScaler()
-else:
-    scaler = torch.amp.GradScaler("cuda")
-
-# %%
+optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate, momentum=0.9, weight_decay=weight_decay)
+scheduler = StepLR(optimizer, step_size=step_size, gamma=gamma)
 
 
-# Function to compute IoU between predicted and true boxes
-def compute_iou(boxes1, boxes2):
-    """
-    Compute IoU between two sets of boxes using torchvision's box_iou function.
-    """
-    return ops.box_iou(boxes1, boxes2)
-
-
-# Training Loop
-def train_one_epoch(epoch, model, train_loader, optimizer, device, scaler=None):
+def train_one_epoch(model, optimizer, data_loader, device):
     model.train()
-    total_loss = 0
-
-    for images, targets in tqdm(train_loader, desc=f"Epoch {epoch+1}", unit="batch"):
+    total_loss = 0.0
+    for images, targets in tqdm(data_loader, desc="Training", leave=False):
         images = [img.to(device) for img in images]
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
+        # Zero the gradients
         optimizer.zero_grad()
 
-        if scaler:
-            with torch.amp.autocast(device_type="cuda"):
-                # During training, the model returns a loss dictionary
-                loss_dict = model(images, targets)
-                losses = sum(loss for loss in loss_dict.values())
-            scaler.scale(losses).backward()
-            scaler.step(optimizer)
-            scaler.update()
-        else:
-            loss_dict = model(images, targets)
-            losses = sum(loss for loss in loss_dict.values())
-            losses.backward()
-            optimizer.step()
+        # Forward pass
+        loss_dict = model(images, targets)
+        losses = sum(loss for loss in loss_dict.values())
+
+        # Backward pass
+        losses.backward()
+        optimizer.step()
 
         total_loss += losses.item()
 
-    avg_loss = total_loss / len(train_loader)
-    print(f"Epoch {epoch + 1}, Training Loss: {avg_loss:.4f}")
-    return avg_loss
+    return total_loss / len(data_loader)
 
 
-# Validation Loop
-def evaluate(model, val_loader, device, iou_threshold=0.5):
+def evaluate_metrics(model, data_loader, device):
     model.eval()
-    total_iou = 0
-    num_validations = 0
-    all_labels = []
-    all_preds = []
+    all_pred_boxes = []
+    all_pred_scores = []
+    all_true_boxes = []
+    all_true_labels = []
 
     with torch.no_grad():
-        for images, targets in tqdm(val_loader, desc="Validation", unit="batch"):
+        for images, targets in tqdm(data_loader, desc="Validation", leave=False):
+            images = [img.to(device) for img in images]
+            outputs = model(images)
+
+            # Collect predictions and ground truths
+            for target, output in zip(targets, outputs):
+                true_boxes = target["boxes"].cpu().numpy()
+                true_labels = target["labels"].cpu().numpy()
+
+                pred_boxes = output["boxes"].cpu().numpy()
+                pred_scores = output["scores"].cpu().numpy()
+                output["labels"].cpu().numpy()
+
+                # Append for metrics calculation
+                all_true_boxes.append(true_boxes)
+                all_true_labels.append(true_labels)
+                all_pred_boxes.append(pred_boxes)
+                all_pred_scores.append(pred_scores)
+
+    # Now calculate metrics
+    iou_list = []
+    for pred_boxes, true_boxes in zip(all_pred_boxes, all_true_boxes):
+        if len(pred_boxes) == 0 or len(true_boxes) == 0:
+            iou_list.append(0.0)
+        else:
+            # Calculate IoU
+            iou = ops.box_iou(torch.tensor(pred_boxes), torch.tensor(true_boxes)).mean().item()
+            iou_list.append(iou)
+
+    mean_iou = sum(iou_list) / len(iou_list)
+    print(f"Mean IoU: {mean_iou:.4f}")
+
+    # For mAP calculation
+    aps = []
+    for true_boxes, pred_boxes, pred_scores in zip(all_true_boxes, all_pred_boxes, all_pred_scores):
+        if len(pred_boxes) == 0:
+            aps.append(0.0)
+            continue
+        # Flatten all true boxes and labels for mAP calculation
+        true_boxes_flat = true_boxes.reshape(-1, 4)
+        pred_boxes_flat = pred_boxes.reshape(-1, 4)
+        # Using sklearn's average_precision_score to calculate mAP
+        ap = average_precision_score(true_boxes_flat, pred_boxes_flat, sample_weight=pred_scores)
+        aps.append(ap)
+
+    mAP = sum(aps) / len(aps)
+    print(f"mAP: {mAP:.4f}")
+
+
+def evaluate(model, data_loader, device):
+    model.eval()
+    total_loss = 0.0
+    with torch.no_grad():
+        for images, targets in tqdm(data_loader, desc="Validation", leave=False):
             images = [img.to(device) for img in images]
             targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
-            # Forward pass
-            predictions = model(images)
-            formatted_preds = []
-            formatted_targets = []
+            # Calculate validation loss by temporarily switching to training mode
+            model.train()
+            loss_dict = model(images, targets)
+            losses = sum(loss for loss in loss_dict.values())
+            total_loss += losses.item()
+            model.eval()
 
-            for pred, target in zip(predictions, targets):
-                pred_boxes = pred["boxes"]
-                pred_labels = pred["labels"]
-                pred["scores"]
-
-                true_boxes = target["boxes"].to(device)
-                true_labels = target["labels"].to(device)
-
-                # Calculate IoU between predicted and true boxes
-                iou = compute_iou(pred_boxes, true_boxes)
-                total_iou += iou.mean().item()  # Average IoU over the batch
-                num_validations += 1
-
-                # Save labels and predictions for further metrics like Precision/Recall
-                all_labels.extend(true_labels.cpu().numpy())
-                all_preds.extend(pred_labels.cpu().numpy())
-
-                preds = {"boxes": pred["boxes"].cpu(), "scores": pred["scores"].cpu(), "labels": pred["labels"].cpu()}
-                trues = {"boxes": target["boxes"].cpu(), "labels": target["labels"].cpu()}
-                formatted_preds.append(preds)
-                formatted_targets.append(trues)
-
-            metric_map.update(formatted_preds, formatted_targets)
-
-    avg_iou = total_iou / num_validations
-    map_results = metric_map.compute()
-    print(f"Average IoU: {avg_iou:.4f}, mAP@0.5: {map_results['map_50']:.4f}, mAP@0.5:0.95: {map_results['map']:.4f}")
-
-    return avg_iou, map_results
+    return total_loss / len(data_loader)
 
 
-# %%
-# Full training and validation loop
-def train_and_evaluate(model, train_loader, val_loader, optimizer, scheduler, device, num_epochs, scaler=None):
-    for epoch in range(num_epochs):
-        # Training Phase
-        avg_train_loss = train_one_epoch(epoch, model, train_loader, optimizer, device, scaler)
+# Training loop
+best_val_loss = float("inf")
+for epoch in range(num_epochs):
+    print(f"Epoch {epoch + 1}/{num_epochs}")
 
-        # Validation Phase
-        avg_iou, map_results = evaluate(model, val_loader, device)
+    # Train for one epoch
+    train_loss = train_one_epoch(model, optimizer, train_loader, device)
+    print(f"Train Loss: {train_loss:.4f}")
 
-        # Step the learning rate scheduler based on training loss or a validation metric
-        scheduler.step(avg_train_loss)
+    # Evaluate on validation set
+    val_loss = evaluate(model, val_loader, device)
+    print(f"Validation Loss: {val_loss:.4f}")
+    evaluate_metrics(model, val_loader, device)
 
-        print(f"Epoch {epoch + 1} Summary: Train Loss = {avg_train_loss:.4f}, Validation IoU = {avg_iou:.4f}")
+    # Update learning rate
+    scheduler.step()
 
+    # Save the model if validation loss has decreased
+    if val_loss < best_val_loss:
+        best_val_loss = val_loss
+        torch.save(model.state_dict(), "best_fasterrcnn_model.pth")
+        print("Model saved.")
 
-# %%
-train_and_evaluate(model, train_loader, val_loader, optimizer, scheduler, device, num_epochs, scaler)
+print("Training complete.")
