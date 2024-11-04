@@ -12,6 +12,7 @@ from torch.utils.data import DataLoader, Dataset
 from torchmetrics.detection.mean_ap import MeanAveragePrecision
 from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
 from tqdm import tqdm
+from p_tqdm import p_map
 
 from astropy.io import fits
 from astropy.time import Time
@@ -22,7 +23,7 @@ from arccnet.visualisation import utils as ut_v
 img_size_dic = {"MDI": 1024, "HMI": 4096}
 
 # %%
-data_folder = os.getenv("ARCAFF_DATA_FOLDER", "../../../data/")
+data_folder = os.getenv("ARCAFF_DATA_FOLDER", "../../../../../data/")
 dataset_folder = "arccnet-fulldisk-dataset-v20240917"
 df_name = "fulldisk-detection-catalog-v20240917.parq"
 
@@ -103,7 +104,6 @@ ut_v.make_classes_histogram(
 # %%
 final_size = 800
 
-
 def preprocess_FD(row):
     arccnet_path_root = row["path"].split("/fits")[0]
     image_path = row["path"].replace(arccnet_path_root, local_path_root)
@@ -114,45 +114,42 @@ def preprocess_FD(row):
 
     data = np.nan_to_num(data, nan=0.0)
     data = ut_v.hardtanh_transform_npy(data)
-    crota2 = header["CROTA2"]
+    crota2 = header.get("CROTA2", 0)  # Handle missing header key
     data = rotate(data, crota2, reshape=False, mode="constant", cval=0)
     data = ut_v.pad_resize_normalize(data, target_height=final_size, target_width=final_size)
     return data
 
-
-# train_data = p_map(preprocess_FD, [row for _, row in train_df.iterrows()], desc='Preprocessing Train FD')
-# val_data = p_map(preprocess_FD, [row for _, row in val_df.iterrows()], desc='Preprocessing Val FD')
-
-
+preprocess_data = True
+cache_path = os.path.join('cache', 'preprocessed_data.npz')
+if preprocess_data:
+    if os.path.exists(cache_path):
+        with np.load(cache_path, allow_pickle=True) as data:
+            train_data = data['train_data']
+            val_data =  data['val_data']
+    else: 
+        train_data = p_map(preprocess_FD, [row for _, row in train_df.iterrows()], desc='Preprocessing Train FD')
+        val_data = p_map(preprocess_FD, [row for _, row in val_df.iterrows()], desc='Preprocessing Val FD')
+        os.makedirs('cache', exist_ok=True)
+        np.savez(os.path.join('cache', 'preprocessed_data.npz'), train_data=np.array(train_data), val_data=np.array(val_data))
 # %%
 class FulldiskDataset(Dataset):
-    def __init__(self, df, local_path_root, transform=None, final_size=800):
+    def __init__(self, df, local_path_root, datamat=None, transform=None, final_size=800):
         self.df = df
         self.local_path_root = local_path_root
         self.transform = transform
         self.final_size = final_size
+        self.datamat=datamat
 
     def __len__(self):
         return len(self.df)
 
-    def _preprocess_FD(self, row):
-        arccnet_path_root = row["path"].split("/fits")[0]
-        image_path = row["path"].replace(arccnet_path_root, self.local_path_root)
-
-        with fits.open(image_path) as img_fit:
-            data = img_fit[1].data
-            header = img_fit[1].header
-
-        data = np.nan_to_num(data, nan=0.0)
-        data = ut_v.hardtanh_transform_npy(data)
-        crota2 = header.get("CROTA2", 0)  # Handle missing header key
-        data = rotate(data, crota2, reshape=False, mode="constant", cval=0)
-        data = ut_v.pad_resize_normalize(data, target_height=self.final_size, target_width=self.final_size)
-        return data
-
     def __getitem__(self, idx):
         row = self.df.iloc[idx]
-        data = self._preprocess_FD(row)
+        if self.datamat is not None:
+            data = self.datamat[idx]
+        else:
+            data = preprocess_FD(row)
+
         data = torch.tensor(data, dtype=torch.float32).unsqueeze(0).repeat(3, 1, 1)  # Convert to 3 channels
 
         if self.transform:
@@ -205,11 +202,16 @@ learning_rate = 0.005
 weight_decay = 0.0005
 step_size = 5
 gamma = 0.1
-batch_size = 4
+batch_size = 8
 num_workers = os.cpu_count()
 
-train_dataset = FulldiskDataset(train_df, local_path_root)
-val_dataset = FulldiskDataset(val_df, local_path_root)
+if preprocess_data:
+    train_dataset = FulldiskDataset(train_df, local_path_root, train_data)
+    val_dataset = FulldiskDataset(val_df, local_path_root, val_data)
+else:
+    train_dataset = FulldiskDataset(train_df, local_path_root)
+    val_dataset = FulldiskDataset(val_df, local_path_root)
+
 train_loader = DataLoader(
     train_dataset,
     batch_size=batch_size,
