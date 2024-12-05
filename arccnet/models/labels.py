@@ -80,6 +80,18 @@ qs_ia_a_b_bg_mapping = {
     "Gamma-Delta": None,
 }
 
+ia_a_b_bg_mapping = {
+    "QS": None,
+    "IA": "IA",
+    "Alpha": "Alpha",
+    "Beta": "Beta",
+    "Beta-Delta": "Beta",
+    "Beta-Gamma": "Beta-Gamma",
+    "Beta-Gamma-Delta": "Beta-Gamma",
+    "Gamma": None,
+    "Gamma-Delta": None,
+}
+
 a_b_bg_mapping = {
     "QS": None,
     "IA": None,
@@ -98,6 +110,7 @@ label_mapping_dict = {
     "ia-ar": ia_ar_mapping,
     "qs-ia": qs_ia_mapping,
     "qs-ia-a-b-bg": qs_ia_a_b_bg_mapping,
+    "ia-a-b-bg": ia_a_b_bg_mapping,
     "a-b-bg": a_b_bg_mapping,
 }
 

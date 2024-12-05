@@ -84,13 +84,14 @@ def run_training(config, args):
     )
     run_comet.log_code(config.__file__)
     run_comet.log_code(ut_t.__file__)
+    run_comet.add_tags(config.other_tags)
 
     # Data preparation
     print("Making dataframe...")
     df, AR_df = ut_d.make_dataframe(config.data_folder, config.dataset_folder, config.df_file_name)
 
     # Undersample and filter the dataframe
-    df, df_du = ut_d.undersample_group_filter(
+    df, df_du, zero_indexed_mapping = ut_d.undersample_group_filter(
         df, config.label_mapping, long_limit_deg=60, undersample=True, buffer_percentage=0.1
     )
 

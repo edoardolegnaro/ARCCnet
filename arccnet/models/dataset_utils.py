@@ -134,7 +134,12 @@ def undersample_group_filter(df, label_mapping, long_limit_deg=60, undersample=T
 
     # Apply label mapping to the dataframe
     df["grouped_labels"] = df["label"].map(label_mapping)
-    df["encoded_labels"] = df["grouped_labels"].map(labels.label_to_index)
+
+    # Create zero-indexed mapping for grouped labels
+    unique_labels = sorted(label for label in set(label_mapping.values()) if label is not None)
+    zero_indexed_mapping = {label: idx for idx, label in enumerate(unique_labels)}
+
+    df["encoded_labels"] = df["grouped_labels"].map(zero_indexed_mapping)
 
     if undersample:
         class_counts = df["grouped_labels"].value_counts()
@@ -156,7 +161,7 @@ def undersample_group_filter(df, label_mapping, long_limit_deg=60, undersample=T
     # Filter out rows with 'rear' location
     df_du = df_du[df_du["location"] != "rear"]
 
-    return df, df_du
+    return df, df_du, zero_indexed_mapping
 
 
 def split_data(df_du, label_col, group_col, random_state=42):

@@ -4,19 +4,19 @@ from torchvision.transforms import v2
 
 from arccnet.models import labels
 
-classes = "qs-ia-a-b-bg"
+classes = "a-b-bg"
 project_name = "arcaff-v2-" + classes
 label_mapping = labels.label_mapping_dict.get(classes)
 
-batch_size = 32
-num_workers = 100
-num_epochs = 500
-patience = 25
+batch_size = 16
+num_workers = 40
+num_epochs = 1000
+patience = 10
 learning_rate = 1e-5
 
-model_name = "vit_small_patch16_224"
+model_name = "deit3_small_patch16_224"
 pretrained = True
-gpu_index = 0
+gpu_index = 1
 device = "cuda:" + str(gpu_index)
 
 
@@ -28,10 +28,11 @@ df_file_name = "cutout-mcintosh-catalog-v20240715.parq"
 train_transforms = v2.Compose(
     [
         v2.RandomVerticalFlip(),
-        v2.RandomHorizontalFlip(),
-        v2.RandomPerspective(distortion_scale=0.1, p=0.25),
-        v2.RandomAffine(degrees=30, translate=(0.05, 0.05), scale=(0.95, 1.05), shear=5),
+        v2.RandomHorizontalFlip()
+        #v2.RandomPerspective(distortion_scale=0.1, p=0.25),
+        #v2.RandomAffine(degrees=30, translate=(0.05, 0.05), scale=(0.95, 1.05), shear=5),
     ]
 )
 
 val_transforms = None
+other_tags = ['only_flips_transformations']
