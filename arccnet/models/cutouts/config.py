@@ -14,8 +14,8 @@ num_epochs = 1000
 patience = 10
 learning_rate = 1e-5
 
-model_name = "deit3_small_patch16_224"
-pretrained = True
+model_name = "vit_large_patch14_224"
+pretrained = False
 gpu_index = 1
 device = "cuda:" + str(gpu_index)
 
@@ -28,11 +28,10 @@ df_file_name = "cutout-mcintosh-catalog-v20240715.parq"
 train_transforms = v2.Compose(
     [
         v2.RandomVerticalFlip(),
-        v2.RandomHorizontalFlip()
-        # v2.RandomPerspective(distortion_scale=0.1, p=0.25),
-        # v2.RandomAffine(degrees=30, translate=(0.05, 0.05), scale=(0.95, 1.05), shear=5),
+        v2.RandomHorizontalFlip(),
+        v2.RandomPerspective(distortion_scale=0.1, p=0.25),
+        v2.RandomAffine(degrees=30, translate=(0.05, 0.05), scale=(0.95, 1.05), shear=5),
     ]
 )
-
 val_transforms = None
-other_tags = ["only_flips_transformations"]
+other_tags = ""
