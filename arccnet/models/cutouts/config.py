@@ -29,10 +29,10 @@ train_transforms = v2.Compose(
     [
         v2.RandomVerticalFlip(),
         v2.RandomHorizontalFlip()
-        #v2.RandomPerspective(distortion_scale=0.1, p=0.25),
-        #v2.RandomAffine(degrees=30, translate=(0.05, 0.05), scale=(0.95, 1.05), shear=5),
+        # v2.RandomPerspective(distortion_scale=0.1, p=0.25),
+        # v2.RandomAffine(degrees=30, translate=(0.05, 0.05), scale=(0.95, 1.05), shear=5),
     ]
 )
 
 val_transforms = None
-other_tags = ['only_flips_transformations']
+other_tags = ["only_flips_transformations"]

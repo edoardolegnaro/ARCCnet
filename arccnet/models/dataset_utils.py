@@ -8,7 +8,6 @@ from sklearn.utils import resample
 from astropy.time import Time
 
 from arccnet import load_config
-from arccnet.models import labels
 
 config = load_config()
 

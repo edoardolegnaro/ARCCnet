@@ -3,8 +3,10 @@ import time
 import random
 import socket
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import seaborn as sns
 import timm
 import torch
 import torch.nn as nn
@@ -748,6 +750,39 @@ def train_model(config, df, weights_dir, experiment=None, fold=1):
             file_name="test_confusion_matrix_best_epoch.json",
             labels=unique_lbls,
         )
+
+        # Calculate the row percentages
+        row_sums = cm_test.sum(axis=1, keepdims=True)
+        cm_percentage = cm_test / row_sums * 100
+
+        # Create a custom annotation that includes both count and percentage
+        annotations = np.empty_like(cm_test).astype(str)
+
+        for i in range(cm_test.shape[0]):
+            for j in range(cm_test.shape[1]):
+                annotations[i, j] = f"{cm_test[i, j]}\n({cm_percentage[i, j]:.1f}%)"
+        greek_labels = lbs.convert_to_greek_label(unique_lbls)
+        # Plot the heatmap with the annotations, using cm_percentage for the color mapping
+        plt.figure(figsize=(5, 5))
+        sns.heatmap(
+            cm_percentage,
+            annot=annotations,
+            fmt="",
+            cmap="Blues",
+            xticklabels=greek_labels,
+            yticklabels=greek_labels,
+            cbar=False,
+        )
+        plt.title(config.model_name)
+        plt.xlabel("Predicted")
+        plt.ylabel("True")
+
+        # Save the plot to a file
+        heatmap_filename = os.path.join(script_dir, "temp", "confusion_matrix_heatmap.png")
+        plt.savefig(heatmap_filename)
+        plt.close()
+        experiment.log_image(heatmap_filename, name="Confusion Matrix Heatmap")
+
         experiment.log_text(report_df.to_string(), metadata={"type": "Classification Report"})
         csv_file_path = os.path.join(weights_dir, "classification_report.csv")
         report_df.to_csv(csv_file_path, index=False)
@@ -762,10 +797,10 @@ def train_model(config, df, weights_dir, experiment=None, fold=1):
             pred_label = all_preds[idx]
             experiment.log_image(
                 img,
-                name=f"Misclassified_{idx}_true{true_label}_pred{pred_label}",
+                name=f"Misclassified_{idx}_true{unique_lbls[int(true_label)]}_pred{unique_lbls[int(pred_label)]}",
                 metadata={
-                    "predicted_label": lbs.index_to_label[pred_label].title(),
-                    "true_label": lbs.index_to_label[true_label].title(),
+                    "predicted_label": unique_lbls[int(true_label)].title(),
+                    "true_label": unique_lbls[int(true_label)].title(),
                 },
             )
 

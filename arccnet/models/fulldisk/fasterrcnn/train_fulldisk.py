@@ -6,13 +6,13 @@ import pandas as pd
 import torch
 import torchvision
 import torchvision.ops as ops
+from p_tqdm import p_map
 from scipy.ndimage import rotate
 from torch.optim.lr_scheduler import StepLR
 from torch.utils.data import DataLoader, Dataset
 from torchmetrics.detection.mean_ap import MeanAveragePrecision
 from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
 from tqdm import tqdm
-from p_tqdm import p_map
 
 from astropy.io import fits
 from astropy.time import Time
@@ -104,6 +104,7 @@ ut_v.make_classes_histogram(
 # %%
 final_size = 800
 
+
 def preprocess_FD(row):
     arccnet_path_root = row["path"].split("/fits")[0]
     image_path = row["path"].replace(arccnet_path_root, local_path_root)
@@ -119,18 +120,23 @@ def preprocess_FD(row):
     data = ut_v.pad_resize_normalize(data, target_height=final_size, target_width=final_size)
     return data
 
+
 preprocess_data = True
-cache_path = os.path.join('cache', 'preprocessed_data.npz')
+cache_path = os.path.join("cache", "preprocessed_data.npz")
 if preprocess_data:
     if os.path.exists(cache_path):
         with np.load(cache_path, allow_pickle=True) as data:
-            train_data = data['train_data']
-            val_data =  data['val_data']
-    else: 
-        train_data = p_map(preprocess_FD, [row for _, row in train_df.iterrows()], desc='Preprocessing Train FD')
-        val_data = p_map(preprocess_FD, [row for _, row in val_df.iterrows()], desc='Preprocessing Val FD')
-        os.makedirs('cache', exist_ok=True)
-        np.savez(os.path.join('cache', 'preprocessed_data.npz'), train_data=np.array(train_data), val_data=np.array(val_data))
+            train_data = data["train_data"]
+            val_data = data["val_data"]
+    else:
+        train_data = p_map(preprocess_FD, [row for _, row in train_df.iterrows()], desc="Preprocessing Train FD")
+        val_data = p_map(preprocess_FD, [row for _, row in val_df.iterrows()], desc="Preprocessing Val FD")
+        os.makedirs("cache", exist_ok=True)
+        np.savez(
+            os.path.join("cache", "preprocessed_data.npz"), train_data=np.array(train_data), val_data=np.array(val_data)
+        )
+
+
 # %%
 class FulldiskDataset(Dataset):
     def __init__(self, df, local_path_root, datamat=None, transform=None, final_size=800):
@@ -138,7 +144,7 @@ class FulldiskDataset(Dataset):
         self.local_path_root = local_path_root
         self.transform = transform
         self.final_size = final_size
-        self.datamat=datamat
+        self.datamat = datamat
 
     def __len__(self):
         return len(self.df)

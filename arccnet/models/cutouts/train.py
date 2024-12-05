@@ -1,5 +1,4 @@
 import os
-import argparse
 
 import torch
 from comet_ml import Experiment
@@ -126,7 +125,8 @@ def run_training(config, args):
 
 
 if __name__ == "__main__":
-    # Initialize argument parser
+    import argparse
+
     parser = argparse.ArgumentParser(description="Training script with configurable options.")
     parser.add_argument("--model_name", type=str, help="Timm model name")
     parser.add_argument("--batch_size", type=int, help="Batch size for training.")
@@ -139,8 +139,5 @@ if __name__ == "__main__":
     parser.add_argument("--dataset_folder", type=str, help="Path to the dataset folder.")
     parser.add_argument("--df_file_name", type=str, help="Name of the dataframe file.")
 
-    # Parse arguments
     args = parser.parse_args()
-
-    # Call the run_training function
     run_training(config, args)
