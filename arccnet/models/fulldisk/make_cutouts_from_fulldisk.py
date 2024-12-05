@@ -1,6 +1,7 @@
 # %%
 import os
 
+import h5py
 import numpy as np
 import pandas as pd
 import sunpy.map
@@ -134,6 +135,8 @@ def process_row(row):
 
     plt.savefig(os.path.join(save_dir, f"{filename}.png"), dpi=300)
 
+    plt.close()
+
     image_array = cutout_map.data
 
     return image_array, row["magnetic_class"]
@@ -143,5 +146,22 @@ def process_row(row):
 results = p_map(process_row, [row for _, row in cleaned_df.iterrows()])
 image_arrays, labels = zip(*results)
 
-np.savez_compressed(os.path.join(base_dir, "dataset.npz"), image_arrays=np.array(image_arrays), labels=np.array(labels))
+# Save image arrays and labels to HDF5
+h5py_file_path = os.path.join(base_dir, "dataset.h5")
+
+with h5py.File(h5py_file_path, "w") as h5file:
+    # Create a group for the image arrays
+    image_group = h5file.create_group("images")
+
+    # Save each image array as a separate dataset
+    for i, image_array in enumerate(image_arrays):
+        image_group.create_dataset(f"image_{i}", data=image_array, compression="gzip", compression_opts=9)
+
+    # Save the labels as a separate dataset
+    h5file.create_dataset("labels", data=np.array(labels, dtype="S"))  # Save labels as strings
+
+print(f"Dataset saved as {h5py_file_path}")
+
 cleaned_df.to_parquet(os.path.join(base_dir, "dataframe.parquet"))
+
+# %%
