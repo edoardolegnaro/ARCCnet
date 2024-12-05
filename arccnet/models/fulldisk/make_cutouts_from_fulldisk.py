@@ -12,6 +12,7 @@ from tqdm import tqdm
 import astropy.units as u
 from astropy.io import fits
 from astropy.time import Time
+from p_tqdm import p_map
 
 img_size_dic = {"MDI": 1024, "HMI": 4096}
 
@@ -103,11 +104,10 @@ def process_row(row):
     cutout_map = map.submap(bottom_left=lower_left_coord, top_right=upper_right_coord)
 
     # save cutout as fits file
-    fits_path = os.path.join("base_dir", "fits", f"{filename}.fits")
+    fits_path = os.path.join(base_dir, "fits", f"{filename}.fits")
     header = fits.Header()
-    for key, value in row.items():  # Add all metadata to the header
-        if isinstance(value, (str, int, float)):  # Ensure FITS-compatible types
-            header[key.upper()] = value
+    header['MAGCLASS'] = row['magnetic_class']  # Ensure the key is <= 8 characters
+    header['NOAA'] = row['NOAA']
     fits.writeto(fits_path, cutout_map.data, header, overwrite=True)
 
     # Plot and save quicklook
@@ -142,21 +142,10 @@ def process_row(row):
 
 
 # %%
-def parallel_process_dataframe(df):
-    results = []
-    with ProcessPoolExecutor() as executor:
-        # Prepare row processing tasks
-        futures = [executor.submit(process_row, row) for _, row in df.iterrows()]
+results = p_map(process_row, [row for _, row in cleaned_df.iterrows()])
+image_arrays, labels = zip(*results)
+, 
 
-        # Collect results with a progress bar
-        for future in tqdm(futures, total=len(df)):
-            results.append(future.result())
-
-    # Separate images and labels
-    image_arrays, labels = zip(*results)
-    return np.array(image_arrays), np.array(labels)
-
-
-# %%
-image_arrays, labels = parallel_process_dataframe(cleaned_df)
-np.savez_compressed(os.path.join(base_dir, "dataset.npz"), image_arrays=image_arrays, labels=labels)
+np.savez_compressed(os.path.join(base_dir, "dataset.npz"), 
+                    image_arrays=np.array(image_arrays), labels=np.array(labels))
+cleaned_df.to_parquet(os.path.join(base_dir,"dataframe.parquet"))
