@@ -1,18 +1,16 @@
 # %%
 import os
-from concurrent.futures import ProcessPoolExecutor
 
 import numpy as np
 import pandas as pd
 import sunpy.map
 from matplotlib import pyplot as plt
 from matplotlib.patches import Rectangle
-from tqdm import tqdm
+from p_tqdm import p_map
 
 import astropy.units as u
 from astropy.io import fits
 from astropy.time import Time
-from p_tqdm import p_map
 
 img_size_dic = {"MDI": 1024, "HMI": 4096}
 
@@ -106,8 +104,8 @@ def process_row(row):
     # save cutout as fits file
     fits_path = os.path.join(base_dir, "fits", f"{filename}.fits")
     header = fits.Header()
-    header['MAGCLASS'] = row['magnetic_class']  # Ensure the key is <= 8 characters
-    header['NOAA'] = row['NOAA']
+    header["MAGCLASS"] = row["magnetic_class"]  # Ensure the key is <= 8 characters
+    header["NOAA"] = row["NOAA"]
     fits.writeto(fits_path, cutout_map.data, header, overwrite=True)
 
     # Plot and save quicklook
@@ -144,8 +142,6 @@ def process_row(row):
 # %%
 results = p_map(process_row, [row for _, row in cleaned_df.iterrows()])
 image_arrays, labels = zip(*results)
-, 
 
-np.savez_compressed(os.path.join(base_dir, "dataset.npz"), 
-                    image_arrays=np.array(image_arrays), labels=np.array(labels))
-cleaned_df.to_parquet(os.path.join(base_dir,"dataframe.parquet"))
+np.savez_compressed(os.path.join(base_dir, "dataset.npz"), image_arrays=np.array(image_arrays), labels=np.array(labels))
+cleaned_df.to_parquet(os.path.join(base_dir, "dataframe.parquet"))
