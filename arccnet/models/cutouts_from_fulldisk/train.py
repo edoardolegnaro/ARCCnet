@@ -7,7 +7,7 @@ import torch.nn as nn
 from comet_ml import Experiment
 import numpy as np
 
-import arccnet.models.cutouts.config as config
+import arccnet.models.cutouts_from_fulldisk.config as config
 import arccnet.models.dataset_utils as ut_d
 import arccnet.models.train_utils as ut_t
 import arccnet.visualisation.utils as ut_v
@@ -30,7 +30,6 @@ run_id, weights_dir = ut_t.generate_run_id(config)
 os.makedirs(weights_dir, exist_ok=True)
 # -
 
-experiment = None
 if experiment:
     # Initialize Comet experiment
     run_comet = Experiment(project_name=config.project_name, workspace="arcaff")

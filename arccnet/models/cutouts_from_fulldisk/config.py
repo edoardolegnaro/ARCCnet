@@ -12,7 +12,7 @@ num_epochs = 1000
 patience = 10
 learning_rate = 1e-5
 
-model_name = "resnet10t"
+model_name = "deit_small_patch16_224"
 pretrained = True
 gpu_index = 2
 device = "cuda:" + str(gpu_index)
