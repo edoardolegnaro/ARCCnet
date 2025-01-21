@@ -1,4 +1,8 @@
+import os
+
+import pandas as pd
 import torch
+from sklearn.metrics import f1_score
 from torch import nn, optim
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -149,7 +153,7 @@ def evaluate(
 
 def test(model: nn.Module, device: torch.device, loader: DataLoader) -> tuple:
     """
-    Tests the model and computes accuracy for each component.
+    Tests the model and computes accuracy and F1 scores for each component.
     Also collects true and predicted labels for confusion matrices.
 
     Args:
@@ -158,7 +162,7 @@ def test(model: nn.Module, device: torch.device, loader: DataLoader) -> tuple:
         loader (DataLoader): DataLoader for test data.
 
     Returns:
-        tuple: Accuracy for Z, P, and C components respectively,
+        tuple: Accuracy and F1 scores for Z, P, and C components respectively,
                and lists of true and predicted labels for each component.
     """
     model.eval()
@@ -208,14 +212,23 @@ def test(model: nn.Module, device: torch.device, loader: DataLoader) -> tuple:
             true_labels_c.extend(labels_c.cpu().numpy())
             pred_labels_c.extend(predicted_c.cpu().numpy())
 
+    # Accuracy computation
     accuracy_z = correct_z / total_z if total_z > 0 else 0
     accuracy_p = correct_p / total_p if total_p > 0 else 0
     accuracy_c = correct_c / total_c if total_c > 0 else 0
+
+    # F1-score computation
+    f1_score_z = f1_score(true_labels_z, pred_labels_z, average="weighted")
+    f1_score_p = f1_score(true_labels_p, pred_labels_p, average="weighted")
+    f1_score_c = f1_score(true_labels_c, pred_labels_c, average="weighted")
 
     return (
         accuracy_z,
         accuracy_p,
         accuracy_c,
+        f1_score_z,
+        f1_score_p,
+        f1_score_c,
         true_labels_z,
         pred_labels_z,
         true_labels_p,
@@ -223,3 +236,42 @@ def test(model: nn.Module, device: torch.device, loader: DataLoader) -> tuple:
         true_labels_c,
         pred_labels_c,
     )
+
+
+def check_early_stopping(val_metric, best_val_metric, patience_counter, model, weights_dir, patience):
+    stop_training = False
+    if val_metric > best_val_metric:
+        best_val_metric = val_metric
+        patience_counter = 0
+        model_save_path = os.path.join(weights_dir, "best_model.pth")
+        torch.save(model.state_dict(), model_save_path)
+    else:
+        patience_counter += 1
+        print(f"Early Stopping: {patience_counter}/{patience} without improvement.")
+        if patience_counter >= patience:
+            print("Stopping early due to no improvement in validation metric.")
+            stop_training = True
+
+    return best_val_metric, patience_counter, stop_training
+
+
+def print_test_scores(accuracy_z, accuracy_p, accuracy_c, f1_z, f1_p, f1_c):
+    """
+    Prints test scores (accuracy and F1 scores) in a structured format using a DataFrame.
+
+    Args:
+        accuracy_z (float): Accuracy for Z component.
+        accuracy_p (float): Accuracy for P component.
+        accuracy_c (float): Accuracy for C component.
+        f1_z (float): F1 score for Z component.
+        f1_p (float): F1 score for P component.
+        f1_c (float): F1 score for C component.
+    """
+    # Create a DataFrame
+    data = {
+        "Component": ["Z", "P", "C"],
+        "Accuracy": [accuracy_z, accuracy_p, accuracy_c],
+        "F1 Score": [f1_z, f1_p, f1_c],
+    }
+    df = pd.DataFrame(data)
+    return df

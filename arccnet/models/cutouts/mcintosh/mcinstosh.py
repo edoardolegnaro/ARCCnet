@@ -20,6 +20,8 @@
 
 # %%
 import os
+import time
+import socket
 
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -27,6 +29,7 @@ import torch
 import torch.nn as nn
 from sklearn.metrics import confusion_matrix
 from torch.utils.data import DataLoader
+from torchvision.transforms import v2
 
 import arccnet.models.cutouts.mcintosh.dataset_utils as mci_ut_d
 import arccnet.models.cutouts.mcintosh.train_utils as mci_ut_t
@@ -39,11 +42,23 @@ pd.set_option("display.max_columns", None)
 # %%
 gpu_index = 0
 device = f"cuda:{gpu_index}"
-EPOCHS = 10
+EPOCHS = 50
 batch_size = 32
 num_workers = os.cpu_count()
 plot_histograms = False
+patience = 2
 
+# %%
+t = time.localtime()
+current_time = time.strftime("%Y%m%d-%H%M%S", t)
+run_id = f"{current_time}_mcintosh_GPU{torch.cuda.get_device_name()}_{socket.gethostname()}"
+weights_dir = os.path.join(os.path.dirname(os.path.abspath(ut_t.__file__)), "weights", f"{run_id}")
+os.makedirs(weights_dir, exist_ok=True)
+
+# %%
+weights_dir
+
+# %%
 data_folder = os.getenv("ARCAFF_DATA_FOLDER", "../../../../../data/")
 dataset_folder = "arccnet-cutout-dataset-v20240715"
 
@@ -70,7 +85,14 @@ train_df, val_df, test_df = mci_ut_d.split_dataset(
     verbose=True,
 )
 
-train_dataset = mci_ut_d.SunspotDataset(data_folder, dataset_folder, train_df)
+train_transforms = v2.Compose(
+    [
+        v2.RandomRotation(degrees=30),
+    ]
+)
+
+
+train_dataset = mci_ut_d.SunspotDataset(data_folder, dataset_folder, train_df, transform=train_transforms)
 val_dataset = mci_ut_d.SunspotDataset(data_folder, dataset_folder, val_df)
 test_dataset = mci_ut_d.SunspotDataset(data_folder, dataset_folder, test_df)
 
@@ -96,7 +118,7 @@ criterion_P = nn.CrossEntropyLoss(weight=p_weights.to(device))
 criterion_C = nn.CrossEntropyLoss(weight=c_weights.to(device))
 
 # Optimizer
-optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
 cuda_version = torch.version.cuda
 if cuda_version and float(cuda_version) < 11.8:
     scaler = torch.cuda.amp.GradScaler()
@@ -108,8 +130,12 @@ train_losses = []
 train_accuracies = []
 val_losses = []
 val_accuracies = []
+best_val_metric = 0.0
+patience_counter = 0
+epochs_used = 0
 
 for epoch in range(EPOCHS):
+    epochs_used += 1
     train_loss, train_acc = mci_ut_t.train(
         model, device, train_loader, optimizer, criterion_Z, criterion_P, criterion_C, scaler
     )
@@ -120,6 +146,12 @@ for epoch in range(EPOCHS):
     train_accuracies.append(train_acc)
     val_losses.append(val_loss)
     val_accuracies.append(val_acc)
+
+    best_val_metric, patience_counter, stop_training = mci_ut_t.check_early_stopping(
+        val_acc, best_val_metric, patience_counter, model, weights_dir, patience
+    )
+    if stop_training:
+        break
 
     print(
         f"Epoch [{epoch+1}/{EPOCHS}] "
@@ -133,8 +165,8 @@ plt.figure(figsize=(12, 5))
 
 # Loss plot
 plt.subplot(1, 2, 1)
-plt.plot(range(1, EPOCHS + 1), train_losses, label="Train Loss")
-plt.plot(range(1, EPOCHS + 1), val_losses, label="Validation Loss")
+plt.plot(range(1, epochs_used + 1), train_losses, label="Train Loss")
+plt.plot(range(1, epochs_used + 1), val_losses, label="Validation Loss")
 plt.xlabel("Epoch")
 plt.ylabel("Loss")
 plt.title("Loss over Epochs")
@@ -142,8 +174,8 @@ plt.legend()
 
 # Accuracy plot
 plt.subplot(1, 2, 2)
-plt.plot(range(1, EPOCHS + 1), train_accuracies, label="Train Accuracy")
-plt.plot(range(1, EPOCHS + 1), val_accuracies, label="Validation Accuracy")
+plt.plot(range(1, epochs_used + 1), train_accuracies, label="Train Accuracy")
+plt.plot(range(1, epochs_used + 1), val_accuracies, label="Validation Accuracy")
 plt.xlabel("Epoch")
 plt.ylabel("Accuracy")
 plt.title("Accuracy over Epochs")
@@ -153,10 +185,14 @@ plt.tight_layout()
 plt.show()
 
 # %%
+model = ut_t.load_model_test(weights_dir, model, device)
 (
     test_accuracy_z,
     test_accuracy_p,
     test_accuracy_c,
+    f1_z,
+    f1_p,
+    f1_c,
     true_labels_z,
     pred_labels_z,
     true_labels_p,
@@ -166,9 +202,7 @@ plt.show()
 ) = mci_ut_t.test(model, device, test_loader)
 
 print("\n=== Test Results ===")
-print(f"Test Accuracy - Z Component: {test_accuracy_z:.4f}")
-print(f"Test Accuracy - P Component: {test_accuracy_p:.4f}")
-print(f"Test Accuracy - C Component: {test_accuracy_c:.4f}")
+mci_ut_t.print_test_scores(test_accuracy_z, test_accuracy_p, test_accuracy_c, f1_z, f1_p, f1_c)
 
 # %%
 # Get label names from encoders
@@ -184,7 +218,7 @@ cm_c = confusion_matrix(true_labels_c, pred_labels_c)
 # %%
 # Plot confusion matrices
 ut_v.plot_confusion_matrix(cm_z, labels_z, "Confusion Matrix - Z Component", figsize=(6, 6))
-ut_v.plot_confusion_matrix(cm_p, labels_p, "Confusion Matrix - Z Component", figsize=(6, 6))
-ut_v.plot_confusion_matrix(cm_c, labels_c, "Confusion Matrix - Z Component", figsize=(6, 6))
+ut_v.plot_confusion_matrix(cm_p, labels_p, "Confusion Matrix - p Component", figsize=(6, 6))
+ut_v.plot_confusion_matrix(cm_c, labels_c, "Confusion Matrix - c Component", figsize=(6, 6))
 
 # %%
