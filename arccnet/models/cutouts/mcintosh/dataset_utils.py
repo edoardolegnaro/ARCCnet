@@ -1,15 +1,19 @@
 import os
-import numpy as np
-import torch
-from torch.utils.data import Dataset
-from astropy.io import fits
-from typing import Tuple, Dict, Any, Optional
-import pandas as pd
-from sklearn.preprocessing import LabelEncoder
-from sklearn.model_selection import GroupShuffleSplit
+from typing import Any, Optional
 
-from arccnet.visualisation import utils as ut_v
+import numpy as np
+import pandas as pd
+import torch
+from sklearn.model_selection import GroupShuffleSplit
+from sklearn.preprocessing import LabelEncoder
+from sklearn.utils.class_weight import compute_class_weight
+from torch.utils.data import Dataset
+
+from astropy.io import fits
+
 from arccnet.models import dataset_utils as ut_d
+from arccnet.visualisation import utils as ut_v
+
 
 def display_sample_image(data_folder: str, dataset_folder: str, df: pd.DataFrame, index: int = 15):
     """
@@ -23,28 +27,30 @@ def display_sample_image(data_folder: str, dataset_folder: str, df: pd.DataFrame
     """
     import matplotlib.pyplot as plt
     import numpy as np
+
     from astropy.io import fits
 
     row = df.iloc[index]
     path_key = "path_image_cutout_hmi" if row["path_image_cutout_hmi"] != "" else "path_image_cutout_mdi"
     fits_file_path = os.path.join(data_folder, dataset_folder, row[path_key])
-    
+
     with fits.open(fits_file_path, memmap=True) as img_fits:
         image_data = np.array(img_fits[1].data, dtype=np.float32)
-    
+
     plt.figure(figsize=(10, 6))
-    plt.imshow(image_data, cmap='gray')
+    plt.imshow(image_data, cmap="gray")
     plt.colorbar()
     plt.title(f"{row['date_only']} - {row['magnetic_class']} - McI: {row['mcintosh_class']} ")
     plt.show()
+
 
 def process_ar_dataset(
     data_folder: Optional[str] = None,
     dataset_folder: str = "arccnet-cutout-dataset-v20240715",
     df_name: str = "cutout-magnetic-catalog-v20240715.parq",
     plot_histograms: bool = True,
-    histogram_params: Optional[Dict[str, Any]] = None
-) -> Tuple[pd.DataFrame, Dict[str, LabelEncoder], Dict[str, Dict[str, str]]]:
+    histogram_params: Optional[dict[str, Any]] = None,
+) -> tuple[pd.DataFrame, dict[str, LabelEncoder], dict[str, dict[str, str]]]:
     """
     Processes the AR dataset by loading, filtering, grouping, encoding, and optionally visualizing class distributions.
 
@@ -97,21 +103,21 @@ def process_ar_dataset(
             y_off=default_hist_params["Z_component"].get("y_off", 50),
             ylim=default_hist_params["Z_component"].get("ylim", None),
             figsz=default_hist_params["Z_component"].get("figsz", (10, 6)),
-            title=default_hist_params["Z_component"].get("title", "Z McIntosh Component")
+            title=default_hist_params["Z_component"].get("title", "Z McIntosh Component"),
         )
         ut_v.make_classes_histogram(
             AR_df["p_component"],
             y_off=default_hist_params["p_component"].get("y_off", 50),
             ylim=default_hist_params["p_component"].get("ylim", None),
             figsz=default_hist_params["p_component"].get("figsz", (9, 6)),
-            title=default_hist_params["p_component"].get("title", "p McIntosh Component")
+            title=default_hist_params["p_component"].get("title", "p McIntosh Component"),
         )
         ut_v.make_classes_histogram(
             AR_df["c_component"],
             y_off=default_hist_params["c_component"].get("y_off", 50),
             ylim=default_hist_params["c_component"].get("ylim", None),
             figsz=default_hist_params["c_component"].get("figsz", (6, 6)),
-            title=default_hist_params["c_component"].get("title", "c McIntosh Component")
+            title=default_hist_params["c_component"].get("title", "c McIntosh Component"),
         )
 
     # Define grouping mappings
@@ -134,17 +140,12 @@ def process_ar_dataset(
         "k": "asym",
     }
 
-    c_component_mapping = {
-        "x": "x",
-        "o": "o",
-        "i": "frag",  # Merge i and c into frag
-        "c": "frag"
-    }
+    c_component_mapping = {"x": "x", "o": "o", "i": "frag", "c": "frag"}  # Merge i and c into frag
 
     mappings = {
         "Z_component": z_component_mapping,
         "p_component": p_component_mapping,
-        "c_component": c_component_mapping
+        "c_component": c_component_mapping,
     }
 
     # Apply the mappings to the respective columns
@@ -155,22 +156,13 @@ def process_ar_dataset(
     # Plot histograms for grouped components
     if plot_histograms:
         ut_v.make_classes_histogram(
-            AR_df["Z_component_grouped"],
-            y_off=50,
-            figsz=(7, 6),
-            title="Z McIntosh Component (Grouped)"
+            AR_df["Z_component_grouped"], y_off=50, figsz=(7, 6), title="Z McIntosh Component (Grouped)"
         )
         ut_v.make_classes_histogram(
-            AR_df["p_component_grouped"],
-            y_off=50,
-            figsz=(6, 6),
-            title="p McIntosh Component (Grouped)"
+            AR_df["p_component_grouped"], y_off=50, figsz=(6, 6), title="p McIntosh Component (Grouped)"
         )
         ut_v.make_classes_histogram(
-            AR_df["c_component_grouped"],
-            y_off=50,
-            figsz=(5, 6),
-            title="c McIntosh Component (Grouped)"
+            AR_df["c_component_grouped"], y_off=50, figsz=(5, 6), title="c McIntosh Component (Grouped)"
         )
 
     # Initialize LabelEncoders
@@ -189,11 +181,7 @@ def process_ar_dataset(
     print("c Component Label Encoding:", dict(zip(c_encoder.classes_, c_encoder.transform(c_encoder.classes_))))
 
     # Compile encoders into a dictionary for easy access
-    encoders = {
-        "Z_encoder": z_encoder,
-        "p_encoder": p_encoder,
-        "c_encoder": c_encoder
-    }
+    encoders = {"Z_encoder": z_encoder, "p_encoder": p_encoder, "c_encoder": c_encoder}
 
     return AR_df, encoders, mappings
 
@@ -206,8 +194,8 @@ def split_dataset(
     val_size: float = 0.15,
     test_size: float = 0.15,
     random_state: int = 42,
-    verbose: bool = True
-) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    verbose: bool = True,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
     Splits the dataset into training, validation, and testing subsets based on group constraints.
     Optionally plots histograms of class distributions for each split.
@@ -227,26 +215,17 @@ def split_dataset(
 
     Returns:
         Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]: A tuple containing the training, validation, and testing DataFrames.
-    
+
     Raises:
         ValueError: If the sum of train_size, val_size, and test_size does not equal 1.0.
         AssertionError: If there is an overlap in groups across the splits.
     """
     histogram_params = {
-        "train": {
-            "figsz": (12, 8),
-            "title_prefix": "Train Set"
-        },
-        "val": {
-            "figsz": (10, 6),
-            "title_prefix": "Validation Set"
-        },
-        "test": {
-            "figsz": (8, 5),
-            "title_prefix": "Test Set"
-        }
+        "train": {"figsz": (12, 8), "title_prefix": "Train Set"},
+        "val": {"figsz": (10, 6), "title_prefix": "Validation Set"},
+        "test": {"figsz": (8, 5), "title_prefix": "Test Set"},
     }
-    
+
     # Validate split ratios
     total = train_size + val_size + test_size
     if not abs(total - 1.0) < 1e-6:
@@ -312,11 +291,7 @@ def split_dataset(
                     default_split_hist_params[split] = params
 
         # Define the splits and corresponding DataFrames
-        splits = {
-            "train": train_df,
-            "val": val_df,
-            "test": test_df
-        }
+        splits = {"train": train_df, "val": val_df, "test": test_df}
 
         # Iterate over each split and plot histograms
         for split_name, split_df in splits.items():
@@ -329,21 +304,21 @@ def split_dataset(
                 y_off=params.get("y_off", 50),
                 ylim=params.get("ylim", None),
                 figsz=params.get("figsz", (10, 6)),
-                title=f"{prefix} - Z McIntosh Component"
+                title=f"{prefix} - Z McIntosh Component",
             )
             ut_v.make_classes_histogram(
                 split_df["p_component"],
                 y_off=params.get("y_off", 50),
                 ylim=params.get("ylim", None),
                 figsz=params.get("figsz", (9, 6)),
-                title=f"{prefix} - p McIntosh Component"
+                title=f"{prefix} - p McIntosh Component",
             )
             ut_v.make_classes_histogram(
                 split_df["c_component"],
                 y_off=params.get("y_off", 50),
                 ylim=params.get("ylim", None),
                 figsz=params.get("figsz", (6, 6)),
-                title=f"{prefix} - c McIntosh Component"
+                title=f"{prefix} - c McIntosh Component",
             )
 
             # Plot histograms for grouped components in the split
@@ -351,27 +326,29 @@ def split_dataset(
                 split_df["Z_component_grouped"],
                 y_off=params.get("y_off", 50),
                 figsz=(7, 6),
-                title=f"{prefix} - Z McIntosh Component (Grouped)"
+                title=f"{prefix} - Z McIntosh Component (Grouped)",
             )
             ut_v.make_classes_histogram(
                 split_df["p_component_grouped"],
                 y_off=params.get("y_off", 50),
                 figsz=(6, 6),
-                title=f"{prefix} - p McIntosh Component (Grouped)"
+                title=f"{prefix} - p McIntosh Component (Grouped)",
             )
             ut_v.make_classes_histogram(
                 split_df["c_component_grouped"],
                 y_off=params.get("y_off", 50),
                 figsz=(5, 6),
-                title=f"{prefix} - c McIntosh Component (Grouped)"
+                title=f"{prefix} - c McIntosh Component (Grouped)",
             )
 
     return train_df, val_df, test_df
+
 
 class SunspotDataset(Dataset):
     """
     PyTorch Dataset for Sunspot AR images and hierarchical labels.
     """
+
     def __init__(
         self,
         data_folder: str,
@@ -380,7 +357,7 @@ class SunspotDataset(Dataset):
         transform: Optional[callable] = None,
         target_height: int = 100,
         target_width: int = 200,
-        divisor: float = 800.0
+        divisor: float = 800.0,
     ):
         """
         Initializes the SunspotDataset.
@@ -405,7 +382,7 @@ class SunspotDataset(Dataset):
     def __len__(self) -> int:
         return len(self.df)
 
-    def _load_image(self, row: pd.Series) -> Tuple[torch.Tensor, Tuple[int, int, int]]:
+    def _load_image(self, row: pd.Series) -> tuple[torch.Tensor, tuple[int, int, int]]:
         """
         Loads and preprocesses an image from a FITS file.
         """
@@ -419,9 +396,7 @@ class SunspotDataset(Dataset):
         image_data = np.nan_to_num(image_data, nan=0.0)
 
         # Apply transformations
-        image_data = ut_v.hardtanh_transform_npy(
-            image_data, divisor=self.divisor, min_val=-1.0, max_val=1.0
-        )
+        image_data = ut_v.hardtanh_transform_npy(image_data, divisor=self.divisor, min_val=-1.0, max_val=1.0)
         image_data = ut_v.pad_resize_normalize(
             image_data, target_height=self.target_height, target_width=self.target_width
         )
@@ -430,15 +405,11 @@ class SunspotDataset(Dataset):
         image = torch.from_numpy(image_data).unsqueeze(0)  # Shape: (1, H, W)
 
         # Extract labels
-        label = (
-            int(row["Z_grouped_encoded"]),
-            int(row["p_grouped_encoded"]),
-            int(row["c_grouped_encoded"])
-        )
+        label = (int(row["Z_grouped_encoded"]), int(row["p_grouped_encoded"]), int(row["c_grouped_encoded"]))
 
         return image, label
 
-    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, Tuple[int, int, int]]:
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, tuple[int, int, int]]:
         """
         Retrieves the image and label at the specified index, returning processed image tensor and label tuple (Z, P, C).
         """
@@ -449,3 +420,22 @@ class SunspotDataset(Dataset):
             image = self.transform(image)
 
         return image, label
+
+
+def compute_weights(labels, num_classes):
+    """
+    Compute class weights using sklearn's compute_class_weight function.
+
+    Args:
+        labels (list or array-like): Array of labels for the dataset.
+        num_classes (int): Total number of unique classes.
+
+    Returns:
+        torch.Tensor: Tensor of class weights.
+    """
+    class_weights = compute_class_weight(
+        class_weight="balanced",  # Option for balanced weights
+        classes=np.arange(num_classes),  # All class indices
+        y=labels,  # Labels for the dataset
+    )
+    return torch.tensor(class_weights, dtype=torch.float)

@@ -1,10 +1,19 @@
 import torch
 from torch import nn, optim
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-def train(model: nn.Module, device: torch.device, train_loader: DataLoader, optimizer: optim.Optimizer,
-          criterion_z: nn.Module, criterion_p: nn.Module, criterion_c: nn.Module, scaler: torch.cuda.amp.GradScaler = None) -> tuple:
+
+def train(
+    model: nn.Module,
+    device: torch.device,
+    train_loader: DataLoader,
+    optimizer: optim.Optimizer,
+    criterion_z: nn.Module,
+    criterion_p: nn.Module,
+    criterion_c: nn.Module,
+    scaler: torch.cuda.amp.GradScaler = None,
+) -> tuple:
     """
     Trains the model for one epoch.
 
@@ -38,7 +47,7 @@ def train(model: nn.Module, device: torch.device, train_loader: DataLoader, opti
 
         if scaler:
             # Mixed Precision
-            with torch.amp.autocast('cuda'):
+            with torch.amp.autocast("cuda"):
                 output_z, output_p, output_c = model(inputs)
                 loss_z = criterion_z(output_z, labels_z)
                 loss_p = criterion_p(output_p, labels_p)
@@ -78,8 +87,14 @@ def train(model: nn.Module, device: torch.device, train_loader: DataLoader, opti
     return avg_loss, accuracy
 
 
-def evaluate(model: nn.Module, device: torch.device, loader: DataLoader,
-             criterion_z: nn.Module, criterion_p: nn.Module, criterion_c: nn.Module) -> tuple:
+def evaluate(
+    model: nn.Module,
+    device: torch.device,
+    loader: DataLoader,
+    criterion_z: nn.Module,
+    criterion_p: nn.Module,
+    criterion_c: nn.Module,
+) -> tuple:
     """
     Evaluates the model on a validation or test set.
 
@@ -135,6 +150,7 @@ def evaluate(model: nn.Module, device: torch.device, loader: DataLoader,
 def test(model: nn.Module, device: torch.device, loader: DataLoader) -> tuple:
     """
     Tests the model and computes accuracy for each component.
+    Also collects true and predicted labels for confusion matrices.
 
     Args:
         model (nn.Module): The neural network model.
@@ -142,7 +158,8 @@ def test(model: nn.Module, device: torch.device, loader: DataLoader) -> tuple:
         loader (DataLoader): DataLoader for test data.
 
     Returns:
-        tuple: Accuracy for Z, P, and C components respectively.
+        tuple: Accuracy for Z, P, and C components respectively,
+               and lists of true and predicted labels for each component.
     """
     model.eval()
     correct_z = 0
@@ -152,6 +169,13 @@ def test(model: nn.Module, device: torch.device, loader: DataLoader) -> tuple:
     total_z = 0
     total_p = 0
     total_c = 0
+
+    true_labels_z = []
+    pred_labels_z = []
+    true_labels_p = []
+    pred_labels_p = []
+    true_labels_c = []
+    pred_labels_c = []
 
     with torch.no_grad():
         for inputs, (labels_z, labels_p, labels_c) in tqdm(loader, desc="Testing", unit="batch"):
@@ -170,12 +194,32 @@ def test(model: nn.Module, device: torch.device, loader: DataLoader) -> tuple:
             correct_p += (predicted_p == labels_p).sum().item()
             correct_c += (predicted_c == labels_c).sum().item()
 
-            total_z += len(labels_z)
-            total_p += len(labels_p)
-            total_c += len(labels_c)
+            total_z += labels_z.size(0)
+            total_p += labels_p.size(0)
+            total_c += labels_c.size(0)
+
+            # Collect labels for confusion matrix
+            true_labels_z.extend(labels_z.cpu().numpy())
+            pred_labels_z.extend(predicted_z.cpu().numpy())
+
+            true_labels_p.extend(labels_p.cpu().numpy())
+            pred_labels_p.extend(predicted_p.cpu().numpy())
+
+            true_labels_c.extend(labels_c.cpu().numpy())
+            pred_labels_c.extend(predicted_c.cpu().numpy())
 
     accuracy_z = correct_z / total_z if total_z > 0 else 0
     accuracy_p = correct_p / total_p if total_p > 0 else 0
     accuracy_c = correct_c / total_c if total_c > 0 else 0
 
-    return accuracy_z, accuracy_p, accuracy_c
+    return (
+        accuracy_z,
+        accuracy_p,
+        accuracy_c,
+        true_labels_z,
+        pred_labels_z,
+        true_labels_p,
+        pred_labels_p,
+        true_labels_c,
+        pred_labels_c,
+    )

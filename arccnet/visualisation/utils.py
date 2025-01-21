@@ -4,6 +4,7 @@ import matplotlib  # noqa: F401
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
+import seaborn as sns
 import sunpy.map
 import torch
 import torch.nn.functional as F
@@ -821,3 +822,35 @@ def plot_fd(row, df, local_path_root):
             )
 
         plt.show()
+
+
+def plot_confusion_matrix(cmc, labels, title, figsize=(10, 8)):
+    """
+    Plots a confusion matrix with counts and percentages.
+
+    Args:
+        cmc (numpy.ndarray): Confusion matrix counts.
+        labels (list): List of label names.
+        title (str): Title of the plot.
+    """
+    # Calculate the row percentages
+    row_sums = cmc.sum(axis=1, keepdims=True)
+    cm_percentage = cmc / row_sums * 100
+
+    # Create a custom annotation that includes both count and percentage
+    annotations = np.empty_like(cmc).astype(str)
+
+    for i in range(cmc.shape[0]):
+        for j in range(cmc.shape[1]):
+            annotations[i, j] = f"{cmc[i, j]}\n({cm_percentage[i, j]:.1f}%)"
+
+    # Plot the heatmap with the annotations, using cm_percentage for the color mapping
+    plt.figure(figsize=figsize)
+    sns.heatmap(
+        cm_percentage, annot=annotations, fmt="", cmap="Blues", xticklabels=labels, yticklabels=labels, cbar=False
+    )
+    plt.title(title)
+    plt.xlabel("Predicted")
+    plt.ylabel("True")
+    plt.tight_layout()
+    plt.show()
