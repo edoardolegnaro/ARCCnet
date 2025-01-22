@@ -22,6 +22,8 @@ import socket
 import pandas as pd
 import torch
 import torch.nn as nn
+from comet_ml import Experiment
+from comet_ml.integration.pytorch import log_model
 from sklearn.metrics import confusion_matrix
 from torch.utils.data import DataLoader
 
@@ -37,11 +39,24 @@ pd.set_option("display.max_columns", None)
 # %%
 device = f"cuda:{config.gpu_index}" if torch.cuda.is_available() else "cpu"
 
+experiment = None
+if config.use_comet:
+    experiment = Experiment(project_name=config.project_name, workspace=config.workspace)
+    experiment.log_parameters(
+        {
+            "learning_rate": config.learning_rate,
+            "batch_size": config.batch_size,
+            "epochs": config.epochs,
+            "model": config.resnet_version,
+        }
+    )
+
 # %%
 t = time.localtime()
 current_time = time.strftime("%Y%m%d-%H%M%S", t)
 run_id = f"{current_time}_mcintosh_GPU{torch.cuda.get_device_name()}_{socket.gethostname()}"
-weights_dir = os.path.join(os.path.dirname(os.path.abspath(ut_t.__file__)), "weights", f"{run_id}")
+ut_t_file_path = os.path.abspath(ut_t.__file__)
+weights_dir = os.path.join(os.path.dirname(ut_t_file_path), "weights", f"{run_id}")
 os.makedirs(weights_dir, exist_ok=True)
 
 # %%
@@ -92,6 +107,12 @@ model = HierarchicalResNet(
 ).to(device)
 
 ut_t.replace_activations(model, nn.ReLU, nn.LeakyReLU, negative_slope=0.01)
+num_params = ut_t.count_trainable_parameters(model, print_num=True)
+
+if experiment:
+    experiment.set_model_graph(str(model))
+    experiment.log_metric("trainable_parameters", num_params)
+
 
 # Loss functions
 z_weights = mci_ut_d.compute_weights(train_df["Z_grouped_encoded"], num_classes_Z)
@@ -152,6 +173,18 @@ for epoch in range(config.epochs):
         criterion_c=criterion_C,
     )
 
+    if experiment:
+        experiment.log_metrics(
+            {
+                "avg_train_loss": train_loss,
+                "train_accuracy": train_acc,
+                "avg_val_loss": val_loss,
+                "val_accuracy": val_acc,
+                "teacher_forcing_ratio": teacher_forcing_ratio if teacher_forcing_ratio else 0,
+            },
+            epoch=epoch,
+        )
+
     if teacher_forcing_ratio:
         print(f"Epoch {epoch + 1}/{config.epochs}: Teacher Forcing Ratio = {teacher_forcing_ratio:.3f}")
     else:
@@ -202,6 +235,19 @@ model = ut_t.load_model_test(weights_dir, model, device)
     loader=test_loader,
 )
 
+if experiment:
+    log_model(experiment, model=model, model_name=config.model_name)
+    experiment.log_metrics(
+        {
+            "accuracy_z": accuracy_z,
+            "accuracy_p": accuracy_p,
+            "accuracy_c": accuracy_c,
+            "f1_score_z": f1_score_z,
+            "f1_score_p": f1_score_p,
+            "f1_score_c": f1_score_c,
+        }
+    )
+
 # %%
 # Print test results
 mci_ut_t.print_test_scores(accuracy_z, accuracy_p, accuracy_c, f1_score_z, f1_score_p, f1_score_c)
@@ -213,15 +259,39 @@ labels_p = encoders["p_encoder"].classes_
 labels_c = encoders["c_encoder"].classes_
 
 figsize = (6, 6)
+z_cm_path = os.path.join(os.path.dirname(ut_t_file_path), "confusion_matrix_z.png")
+p_cm_path = os.path.join(os.path.dirname(ut_t_file_path), "confusion_matrix_p.png")
+c_cm_path = os.path.join(os.path.dirname(ut_t_file_path), "confusion_matrix_c.png")
 
-ut_v.plot_confusion_matrix(
-    confusion_matrix(true_labels_z, pred_labels_z), labels_z, "Confusion Matrix - Z Component", figsize=figsize
-)
-ut_v.plot_confusion_matrix(
-    confusion_matrix(true_labels_p, pred_labels_p), labels_p, "Confusion Matrix - P Component", figsize=figsize
-)
-ut_v.plot_confusion_matrix(
-    confusion_matrix(true_labels_c, pred_labels_c), labels_c, "Confusion Matrix - C Component", figsize=figsize
-)
+cm_z = confusion_matrix(true_labels_z, pred_labels_z)
+cm_p = confusion_matrix(true_labels_p, pred_labels_p)
+cm_c = confusion_matrix(true_labels_c, pred_labels_c)
+
+ut_v.plot_confusion_matrix(cm_z, labels_z, "Z Component", figsize=figsize, save_path=z_cm_path)
+ut_v.plot_confusion_matrix(cm_p, labels_p, "p Component", figsize=figsize, save_path=p_cm_path)
+ut_v.plot_confusion_matrix(cm_c, labels_c, "c Component", figsize=figsize, save_path=c_cm_path)
+if experiment:
+    experiment.log_image(z_cm_path, name="Z Component")
+    experiment.log_image(p_cm_path, name="p Component")
+    experiment.log_image(c_cm_path, name="c Component")
+
+    experiment.log_confusion_matrix(
+        matrix=cm_z,
+        title="Confusion Matrix at best val epoch - Z Component",
+        file_name="test_confusion_matrix_Z.json",
+        labels=labels_z,
+    )
+    experiment.log_confusion_matrix(
+        matrix=cm_p,
+        title="Confusion Matrix at best val epoch - p Component",
+        file_name="test_confusion_matrix_p.json",
+        labels=labels_p,
+    )
+    experiment.log_confusion_matrix(
+        matrix=cm_c,
+        title="Confusion Matrix at best val epoch - c Component",
+        file_name="test_confusion_matrix_c.json",
+        labels=labels_c,
+    )
 
 # %%

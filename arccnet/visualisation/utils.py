@@ -824,15 +824,18 @@ def plot_fd(row, df, local_path_root):
         plt.show()
 
 
-def plot_confusion_matrix(cmc, labels, title, figsize=(10, 8)):
+def plot_confusion_matrix(cmc, labels, title, figsize=(6, 6), save_path=None):
     """
-    Plots a confusion matrix with counts and percentages.
+    Plots a confusion matrix with counts and percentages, and optionally saves the figure.
 
     Args:
         cmc (numpy.ndarray): Confusion matrix counts.
         labels (list): List of label names.
         title (str): Title of the plot.
+        figsize (tuple): Figure size for the plot.
+        save_path (str): Path to save the figure. If None, the figure will not be saved.
     """
+
     # Calculate the row percentages
     row_sums = cmc.sum(axis=1, keepdims=True)
     cm_percentage = cmc / row_sums * 100
@@ -853,4 +856,7 @@ def plot_confusion_matrix(cmc, labels, title, figsize=(10, 8)):
     plt.xlabel("Predicted")
     plt.ylabel("True")
     plt.tight_layout()
-    plt.show()
+
+    # Save the figure if save_path is provided
+    if save_path:
+        plt.savefig(save_path, bbox_inches="tight", dpi=300)
