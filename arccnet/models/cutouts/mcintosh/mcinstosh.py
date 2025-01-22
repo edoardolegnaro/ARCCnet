@@ -32,9 +32,9 @@ from torch.utils.data import DataLoader
 from torchvision.transforms import v2
 
 import arccnet.models.cutouts.mcintosh.dataset_utils as mci_ut_d
+import arccnet.models.cutouts.mcintosh.models as models
 import arccnet.models.cutouts.mcintosh.train_utils as mci_ut_t
 from arccnet.models import train_utils as ut_t
-from arccnet.models.cutouts.mcintosh.models import HierarchicalResNet18
 from arccnet.visualisation import utils as ut_v
 
 pd.set_option("display.max_columns", None)
@@ -105,8 +105,10 @@ num_classes_Z = len(AR_df["Z_component_grouped"].unique())
 num_classes_P = len(AR_df["p_component_grouped"].unique())
 num_classes_C = len(AR_df["c_component_grouped"].unique())
 
-model = HierarchicalResNet18(num_classes_Z=num_classes_Z, num_classes_P=num_classes_P, num_classes_C=num_classes_C)
-ut_t.replace_activations(model, nn.ReLU, nn.LeakyReLU, negative_slope=0.1)
+model = models.TeacherForcingResNet18(
+    num_classes_Z=num_classes_Z, num_classes_P=num_classes_P, num_classes_C=num_classes_C
+)
+ut_t.replace_activations(model, nn.ReLU, nn.LeakyReLU, negative_slope=0.01)
 model.to(device)
 
 # Loss functions
@@ -130,22 +132,49 @@ train_losses = []
 train_accuracies = []
 val_losses = []
 val_accuracies = []
+teacher_forcing_ratios = []
+
 best_val_metric = 0.0
 patience_counter = 0
 epochs_used = 0
+initial_teacher_forcing_ratio = 1.0
+decay_rate = 0.95
+min_teacher_forcing_ratio = 0.5
+teacher_forcing_ratio = initial_teacher_forcing_ratio
 
 for epoch in range(EPOCHS):
     epochs_used += 1
-    train_loss, train_acc = mci_ut_t.train(
-        model, device, train_loader, optimizer, criterion_Z, criterion_P, criterion_C, scaler
+    train_loss, train_acc = mci_ut_t.train_teacher(
+        model=model,
+        device=device,
+        train_loader=train_loader,
+        optimizer=optimizer,
+        criterion_z=criterion_Z,
+        criterion_p=criterion_P,
+        criterion_c=criterion_C,
+        teacher_forcing_ratio=teacher_forcing_ratio,  # Pass the current ratio
+        scaler=scaler,
     )
-    val_loss, val_acc = mci_ut_t.evaluate(model, device, val_loader, criterion_Z, criterion_P, criterion_C)
 
-    # Append metrics to lists (optional)
+    val_loss, val_acc = mci_ut_t.evaluate_teacher(
+        model=model,
+        device=device,
+        loader=val_loader,
+        criterion_z=criterion_Z,
+        criterion_p=criterion_P,
+        criterion_c=criterion_C,
+    )
+
+    # Append metrics to lists
     train_losses.append(train_loss)
     train_accuracies.append(train_acc)
     val_losses.append(val_loss)
     val_accuracies.append(val_acc)
+    teacher_forcing_ratios.append(teacher_forcing_ratio)
+
+    print(f"Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.4f}")
+    print(f"Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.4f}")
+    print(f"Teacher Forcing Ratio: {teacher_forcing_ratio:.4f}")
 
     best_val_metric, patience_counter, stop_training = mci_ut_t.check_early_stopping(
         val_acc, best_val_metric, patience_counter, model, weights_dir, patience
@@ -153,11 +182,7 @@ for epoch in range(EPOCHS):
     if stop_training:
         break
 
-    print(
-        f"Epoch [{epoch+1}/{EPOCHS}] "
-        f"Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.4f} | "
-        f"Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.4f}"
-    )
+    teacher_forcing_ratio = max(teacher_forcing_ratio * decay_rate, min_teacher_forcing_ratio)
 
 # %%
 # Plotting the metrics
@@ -199,7 +224,7 @@ model = ut_t.load_model_test(weights_dir, model, device)
     pred_labels_p,
     true_labels_c,
     pred_labels_c,
-) = mci_ut_t.test(model, device, test_loader)
+) = mci_ut_t.test_teacher(model, device, test_loader)
 
 print("\n=== Test Results ===")
 mci_ut_t.print_test_scores(test_accuracy_z, test_accuracy_p, test_accuracy_c, f1_z, f1_p, f1_c)
