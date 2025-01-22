@@ -29,5 +29,5 @@ patience = 5
 
 ### Comet ###
 use_comet = True
-project_name = ("arcaff-mcintosh",)
+project_name = "arcaff-mcintosh"
 workspace = "arcaff"

@@ -15,6 +15,9 @@
 # ---
 
 # %%
+from comet_ml import Experiment  # isort: skip
+from comet_ml.integration.pytorch import log_model  # isort: skip
+
 import os
 import time
 import socket
@@ -22,8 +25,6 @@ import socket
 import pandas as pd
 import torch
 import torch.nn as nn
-from comet_ml import Experiment
-from comet_ml.integration.pytorch import log_model
 from sklearn.metrics import confusion_matrix
 from torch.utils.data import DataLoader
 
