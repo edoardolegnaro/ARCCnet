@@ -80,7 +80,9 @@ train_df, val_df, test_df = mci_ut_d.split_dataset(
     verbose=True,
 )
 
-train_dataset = mci_ut_d.SunspotDataset(config.data_folder, config.dataset_folder, train_df)
+train_dataset = mci_ut_d.SunspotDataset(
+    config.data_folder, config.dataset_folder, train_df, transform=config.train_transforms
+)
 val_dataset = mci_ut_d.SunspotDataset(config.data_folder, config.dataset_folder, val_df)
 test_dataset = mci_ut_d.SunspotDataset(config.data_folder, config.dataset_folder, test_df)
 
@@ -237,7 +239,7 @@ model = ut_t.load_model_test(weights_dir, model, device)
 )
 
 if experiment:
-    log_model(experiment, model=model, model_name=config.model_name)
+    log_model(experiment, model=model, model_name=config.resnet_version)
     experiment.log_metrics(
         {
             "accuracy_z": accuracy_z,
