@@ -30,7 +30,7 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
-from sklearn.metrics import confusion_matrix
+from sklearn.metrics import confusion_matrix, f1_score
 from sklearn.preprocessing import LabelEncoder
 from torch.utils.data import DataLoader
 
@@ -354,6 +354,20 @@ ut_v.plot_confusion_matrix(
     save_path=grouped_cm_path,
 )
 
+# Compute grouped accuracy and F1 score macro
+grouped_accuracy = np.mean(np.array(encoded_true) == np.array(encoded_pred))
+grouped_f1_score = f1_score(encoded_true, encoded_pred, average="macro")
+
+print(f"Grouped Accuracy: {grouped_accuracy:.4f}")
+print(f"Grouped F1 Score (Macro): {grouped_f1_score:.4f}")
+
+if experiment:
+    experiment.log_metrics(
+        {
+            "grouped_accuracy": grouped_accuracy,
+            "grouped_f1_score_macro": grouped_f1_score,
+        }
+    )
 
 if experiment:
     experiment.log_image("confusion_matrix_grouped.png", name="Grouped Confusion Matrix")
