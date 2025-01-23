@@ -868,8 +868,8 @@ def plot_confusion_matrix(cmc, labels, title, figsize=(10, 10), save_path=None):
         xticklabels=labels,
         yticklabels=labels,
         cbar=False,
-        linewidths=0.5,
-        linecolor="gray",
+        linewidths=0,
+        linecolor="none",
     )
 
     # Set plot labels and title

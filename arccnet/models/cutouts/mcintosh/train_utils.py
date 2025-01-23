@@ -318,54 +318,25 @@ def print_test_scores(accuracy_z, accuracy_p, accuracy_c, f1_z, f1_p, f1_c):
     return df
 
 
-def inference(
-    model: nn.Module,
-    device: torch.device,
-    loader: DataLoader,
-    teacher_forcing_ratio=None,
-) -> list:
-    """
-    Performs inference on the given DataLoader and returns predictions with optional Teacher Forcing.
-
-    Args:
-        model (nn.Module): The trained neural network model.
-        device (torch.device): The device to run inference on.
-        loader (DataLoader): DataLoader for inference data.
-        teacher_forcing_ratio (float or None): Probability of using ground truth labels for Teacher Forcing.
-                                               If None, Teacher Forcing is disabled.
-
-    Returns:
-        list: A list of tuples containing (Z_pred, P_pred, C_pred) for each sample.
-    """
+def predict_region_class(model, region_input, encoders, device):
     model.eval()
-    predictions = []
-
     with torch.no_grad():
-        for inputs in tqdm(loader, desc="Inference", unit="batch"):
-            # Move inputs to device
-            inputs = inputs.to(device)
+        outputs_z, outputs_p, outputs_c = model(region_input.to(device))
 
-            # Determine if teacher forcing is enabled
-            use_teacher_forcing = teacher_forcing_ratio is not None
+    # Get predicted indices
+    _, pred_z = torch.max(outputs_z, 1)
+    _, pred_p = torch.max(outputs_p, 1)
+    _, pred_c = torch.max(outputs_c, 1)
 
-            # Forward pass with or without Teacher Forcing
-            output_z, output_p, output_c = model(
-                inputs,
-                Z_true=None if not use_teacher_forcing else None,  # No labels available for inference
-                P_true=None if not use_teacher_forcing else None,
-                teacher_forcing_ratio=teacher_forcing_ratio if use_teacher_forcing else 0.0,
-            )
+    # Map indices to class labels
+    final_class_z = encoders["Z_encoder"].inverse_transform(pred_z.cpu().numpy())
+    final_class_p = encoders["p_encoder"].inverse_transform(pred_p.cpu().numpy())
+    final_class_c = encoders["c_encoder"].inverse_transform(pred_c.cpu().numpy())
 
-            # Get predictions
-            _, predicted_z = torch.max(output_z, 1)
-            _, predicted_p = torch.max(output_p, 1)
-            _, predicted_c = torch.max(output_c, 1)
+    # Combine predictions into a final class
+    final_class = [(z, p, c) for z, p, c in zip(final_class_z, final_class_p, final_class_c)]
 
-            # Append predictions to the list
-            for z, p, c in zip(predicted_z.cpu().numpy(), predicted_p.cpu().numpy(), predicted_c.cpu().numpy()):
-                predictions.append((z, p, c))
-
-    return predictions
+    return final_class
 
 
 def calculate_f1_macro(model: nn.Module, loader: DataLoader, device: torch.device) -> tuple:

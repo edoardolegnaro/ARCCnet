@@ -86,6 +86,12 @@ train_df, val_df, test_df = mci_ut_d.split_dataset(
     verbose=True,
 )
 
+
+if experiment:
+    experiment.log_dataset_hash(train_df, name="train_dataset")
+    experiment.log_dataset_hash(val_df, name="val_dataset")
+    experiment.log_dataset_hash(test_df, name="test_dataset")
+
 train_dataset = mci_ut_d.SunspotDataset(
     config.data_folder, config.dataset_folder, train_df, transform=config.train_transforms
 )
@@ -268,9 +274,9 @@ labels_p = [str(label) for label in encoders["p_encoder"].classes_]
 labels_c = [str(label) for label in encoders["c_encoder"].classes_]
 
 figsize = (6, 6)
-z_cm_path = os.path.join(os.path.dirname(ut_t_file_path), "confusion_matrix_z.png")
-p_cm_path = os.path.join(os.path.dirname(ut_t_file_path), "confusion_matrix_p.png")
-c_cm_path = os.path.join(os.path.dirname(ut_t_file_path), "confusion_matrix_c.png")
+z_cm_path = os.path.join(os.path.dirname(ut_t_file_path), "temp", "confusion_matrix_z.png")
+p_cm_path = os.path.join(os.path.dirname(ut_t_file_path), "temp", "confusion_matrix_p.png")
+c_cm_path = os.path.join(os.path.dirname(ut_t_file_path), "temp", "confusion_matrix_c.png")
 
 cm_z = confusion_matrix(true_labels_z, pred_labels_z)
 cm_p = confusion_matrix(true_labels_p, pred_labels_p)
@@ -337,6 +343,7 @@ for pred in pred_grouped_labels:
 print(f"Number of 'unknown' predictions: {unknown_count}")
 
 # Confusion matrix
+grouped_cm_path = os.path.join(os.path.dirname(ut_t_file_path), "temp", "confusion_matrix_grouped.png")
 all_classes = list(encoder.classes_) + ["unknown"]  # Include "unknown" class
 cm = confusion_matrix(encoded_true, encoded_pred, labels=range(len(all_classes)))
 ut_v.plot_confusion_matrix(
@@ -344,31 +351,12 @@ ut_v.plot_confusion_matrix(
     labels=all_classes,
     title="Confusion Matrix for Grouped Classes",
     figsize=(12, 12),
-    save_path="confusion_matrix_grouped.png",
+    save_path=grouped_cm_path,
 )
 
 
-# %%
-def predict_region_class(model, region_input, encoders, device):
-    model.eval()
-    with torch.no_grad():
-        outputs_z, outputs_p, outputs_c = model(region_input.to(device))
-
-    # Get predicted indices
-    _, pred_z = torch.max(outputs_z, 1)
-    _, pred_p = torch.max(outputs_p, 1)
-    _, pred_c = torch.max(outputs_c, 1)
-
-    # Map indices to class labels
-    final_class_z = encoders["Z_encoder"].inverse_transform(pred_z.cpu().numpy())
-    final_class_p = encoders["p_encoder"].inverse_transform(pred_p.cpu().numpy())
-    final_class_c = encoders["c_encoder"].inverse_transform(pred_c.cpu().numpy())
-
-    # Combine predictions into a final class
-    final_class = [(z, p, c) for z, p, c in zip(final_class_z, final_class_p, final_class_c)]
-
-    return final_class
-
+if experiment:
+    experiment.log_image("confusion_matrix_grouped.png", name="Grouped Confusion Matrix")
 
 # %%
 idx = 3567
