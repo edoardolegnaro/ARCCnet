@@ -3,7 +3,8 @@ import os
 ### General ###
 resnet_version = "resnet18"
 gpu_index = 0
-epochs = 5
+epochs = 50
+patience = 10
 batch_size = 32
 num_workers = os.cpu_count()
 learning_rate = 1e-4
@@ -34,7 +35,6 @@ test_size = 0.15
 
 ### Logging ###
 plot_histograms = False
-patience = 5
 
 ### Comet ###
 use_comet = True
