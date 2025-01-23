@@ -345,9 +345,9 @@ print(f"Number of 'unknown' predictions: {unknown_count}")
 # Confusion matrix
 grouped_cm_path = os.path.join(os.path.dirname(ut_t_file_path), "temp", "confusion_matrix_grouped.png")
 all_classes = list(encoder.classes_) + ["unknown"]  # Include "unknown" class
-cm = confusion_matrix(encoded_true, encoded_pred, labels=range(len(all_classes)))
+cm_gr = confusion_matrix(encoded_true, encoded_pred, labels=range(len(all_classes)))
 ut_v.plot_confusion_matrix(
-    cmc=cm,
+    cmc=cm_gr,
     labels=all_classes,
     title="Confusion Matrix for Grouped Classes",
     figsize=(12, 12),
@@ -370,7 +370,13 @@ if experiment:
     )
 
 if experiment:
-    experiment.log_image("confusion_matrix_grouped.png", name="Grouped Confusion Matrix")
+    experiment.log_image(grouped_cm_path, name="Grouped Confusion Matrix")
+    experiment.log_confusion_matrix(
+        matrix=np.array(cm_gr),
+        title="Confusion Matrix at best val epoch - Grouped Classes",
+        file_name="grouped_confusion_matrix.json",
+        labels=all_classes,
+    )
 
 # %%
 idx = 3567
