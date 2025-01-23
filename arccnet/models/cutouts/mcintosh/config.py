@@ -1,23 +1,23 @@
 import os
 
-from torchvision.transforms import v2
-
 ### General ###
 resnet_version = "resnet18"
 gpu_index = 0
-epochs = 500
+epochs = 5
 batch_size = 32
 num_workers = os.cpu_count()
 learning_rate = 1e-4
 random_state = 42
-train_transforms = v2.Compose(
-    [
-        v2.RandomVerticalFlip(),
-        v2.RandomHorizontalFlip(),
-        v2.RandomPerspective(distortion_scale=0.1, p=0.25),
-        v2.RandomAffine(degrees=30, translate=(0.05, 0.05), scale=(0.95, 1.05), shear=5),
-    ]
-)
+train_transforms = None
+# train_transforms = v2.Compose(
+#     [
+#         v2.RandomVerticalFlip(),
+#         v2.RandomHorizontalFlip(),
+#         v2.RandomPerspective(distortion_scale=0.1, p=0.25),
+#         v2.RandomAffine(degrees=30, translate=(0.05, 0.05), scale=(0.95, 1.05), shear=5),
+#     ]
+# )
+
 ### Teacher Forcing ###
 initial_teacher_forcing_ratio = 1.0
 min_teacher_forcing_ratio = 0.0

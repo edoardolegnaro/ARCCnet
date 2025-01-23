@@ -824,7 +824,7 @@ def plot_fd(row, df, local_path_root):
         plt.show()
 
 
-def plot_confusion_matrix(cmc, labels, title, figsize=(6, 6), save_path=None):
+def plot_confusion_matrix(cmc, labels, title, figsize=(10, 10), save_path=None):
     """
     Plots a confusion matrix with counts and percentages, and optionally saves the figure.
 
@@ -836,27 +836,53 @@ def plot_confusion_matrix(cmc, labels, title, figsize=(6, 6), save_path=None):
         save_path (str): Path to save the figure. If None, the figure will not be saved.
     """
 
-    # Calculate the row percentages
+    # Calculate the row sums
     row_sums = cmc.sum(axis=1, keepdims=True)
-    cm_percentage = cmc / row_sums * 100
 
-    # Create a custom annotation that includes both count and percentage
+    # Avoid division by zero by setting row sums that are zero to one temporarily
+    # This prevents NaNs in cm_percentage
+    safe_row_sums = np.where(row_sums == 0, 1, row_sums)
+
+    # Calculate the percentages
+    cm_percentage = cmc / safe_row_sums * 100
+
+    # For rows where the original sum was zero, set percentages to zero
+    cm_percentage = np.where(row_sums == 0, 0, cm_percentage)
+
+    # Create annotations with count and percentage
     annotations = np.empty_like(cmc).astype(str)
 
     for i in range(cmc.shape[0]):
         for j in range(cmc.shape[1]):
             annotations[i, j] = f"{cmc[i, j]}\n({cm_percentage[i, j]:.1f}%)"
 
-    # Plot the heatmap with the annotations, using cm_percentage for the color mapping
+    # Initialize the matplotlib figure
     plt.figure(figsize=figsize)
+
+    # Create the heatmap
     sns.heatmap(
-        cm_percentage, annot=annotations, fmt="", cmap="Blues", xticklabels=labels, yticklabels=labels, cbar=False
+        cm_percentage,
+        annot=annotations,
+        fmt="",
+        cmap="Blues",
+        xticklabels=labels,
+        yticklabels=labels,
+        cbar=False,
+        linewidths=0.5,
+        linecolor="gray",
     )
+
+    # Set plot labels and title
     plt.title(title)
-    plt.xlabel("Predicted")
-    plt.ylabel("True")
+    plt.xlabel("Predicted Labels")
+    plt.ylabel("True Labels")
+
+    # Improve layout
     plt.tight_layout()
 
     # Save the figure if save_path is provided
     if save_path:
         plt.savefig(save_path, bbox_inches="tight", dpi=300)
+
+    # Show the plot
+    plt.show()

@@ -15,6 +15,10 @@
 # ---
 
 # %%
+# %load_ext autoreload
+# %autoreload 2
+
+# %%
 from comet_ml import Experiment  # isort: skip
 from comet_ml.integration.pytorch import log_model  # isort: skip
 
@@ -22,10 +26,12 @@ import os
 import time
 import socket
 
+import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
 from sklearn.metrics import confusion_matrix
+from sklearn.preprocessing import LabelEncoder
 from torch.utils.data import DataLoader
 
 import arccnet.models.cutouts.mcintosh.dataset_utils as mci_ut_d
@@ -257,9 +263,9 @@ mci_ut_t.print_test_scores(accuracy_z, accuracy_p, accuracy_c, f1_score_z, f1_sc
 
 # %%
 # Compute confusion matrices
-labels_z = encoders["Z_encoder"].classes_
-labels_p = encoders["p_encoder"].classes_
-labels_c = encoders["c_encoder"].classes_
+labels_z = [str(label) for label in encoders["Z_encoder"].classes_]
+labels_p = [str(label) for label in encoders["p_encoder"].classes_]
+labels_c = [str(label) for label in encoders["c_encoder"].classes_]
 
 figsize = (6, 6)
 z_cm_path = os.path.join(os.path.dirname(ut_t_file_path), "confusion_matrix_z.png")
@@ -279,22 +285,117 @@ if experiment:
     experiment.log_image(c_cm_path, name="c Component")
 
     experiment.log_confusion_matrix(
-        matrix=cm_z,
+        matrix=np.array(cm_z),
         title="Confusion Matrix at best val epoch - Z Component",
         file_name="test_confusion_matrix_Z.json",
         labels=labels_z,
     )
     experiment.log_confusion_matrix(
-        matrix=cm_p,
+        matrix=np.array(cm_p),
         title="Confusion Matrix at best val epoch - p Component",
         file_name="test_confusion_matrix_p.json",
         labels=labels_p,
     )
     experiment.log_confusion_matrix(
-        matrix=cm_c,
+        matrix=np.array(cm_c),
         title="Confusion Matrix at best val epoch - c Component",
         file_name="test_confusion_matrix_c.json",
         labels=labels_c,
     )
+
+# %%
+true_grouped = [(true_labels_z[i], true_labels_p[i], true_labels_c[i]) for i in range(len(true_labels_z))]
+pred_grouped = [(pred_labels_z[i], pred_labels_p[i], pred_labels_c[i]) for i in range(len(pred_labels_z))]
+
+true_grouped_labels = [
+    labels_z[true_grouped[i][0]] + labels_p[true_grouped[i][1]] + labels_c[true_grouped[i][2]]
+    for i in range(len(true_grouped))
+]
+pred_grouped_labels = [
+    labels_z[pred_grouped[i][0]] + labels_p[pred_grouped[i][1]] + labels_c[pred_grouped[i][2]]
+    for i in range(len(pred_grouped))
+]
+
+# Encode valid true_grouped classes
+encoder = LabelEncoder()
+encoder.fit(true_grouped_labels)  # Fit only on valid true classes
+class_mapping = {label: idx for idx, label in enumerate(encoder.classes_)}
+unknown_class_index = len(encoder.classes_)  # Index for "unknown"
+
+encoded_true = encoder.transform(true_grouped_labels)  # Encode true labels
+
+# Encode predictions, assigning "unknown" index if not found in true classes
+encoded_pred = []
+unknown_count = 0  # Counter for unknown predictions
+for pred in pred_grouped_labels:
+    if pred in class_mapping:
+        encoded_pred.append(class_mapping[pred])
+    else:
+        encoded_pred.append(unknown_class_index)
+        unknown_count += 1
+
+print(f"Number of 'unknown' predictions: {unknown_count}")
+
+# Confusion matrix
+all_classes = list(encoder.classes_) + ["unknown"]  # Include "unknown" class
+cm = confusion_matrix(encoded_true, encoded_pred, labels=range(len(all_classes)))
+ut_v.plot_confusion_matrix(
+    cmc=cm,
+    labels=all_classes,
+    title="Confusion Matrix for Grouped Classes",
+    figsize=(12, 12),
+    save_path="confusion_matrix_grouped.png",
+)
+
+
+# %%
+def predict_region_class(model, region_input, encoders, device):
+    model.eval()
+    with torch.no_grad():
+        outputs_z, outputs_p, outputs_c = model(region_input.to(device))
+
+    # Get predicted indices
+    _, pred_z = torch.max(outputs_z, 1)
+    _, pred_p = torch.max(outputs_p, 1)
+    _, pred_c = torch.max(outputs_c, 1)
+
+    # Map indices to class labels
+    final_class_z = encoders["Z_encoder"].inverse_transform(pred_z.cpu().numpy())
+    final_class_p = encoders["p_encoder"].inverse_transform(pred_p.cpu().numpy())
+    final_class_c = encoders["c_encoder"].inverse_transform(pred_c.cpu().numpy())
+
+    # Combine predictions into a final class
+    final_class = [(z, p, c) for z, p, c in zip(final_class_z, final_class_p, final_class_c)]
+
+    return final_class
+
+
+# %%
+idx = 3567
+
+row = test_df.iloc[idx]
+
+test_dataset = test_loader.dataset
+region_input, label = test_dataset[idx]
+region_input = region_input.unsqueeze(0)  # Add batch dimension (1, C, H, W)
+
+model.eval()
+with torch.no_grad():
+    outputs_z, outputs_p, outputs_c = model(region_input.to(device))
+
+_, pred_z = torch.max(outputs_z, 1)
+_, pred_p = torch.max(outputs_p, 1)
+_, pred_c = torch.max(outputs_c, 1)
+
+final_class_z = encoders["Z_encoder"].inverse_transform(pred_z.cpu().numpy())
+final_class_p = encoders["p_encoder"].inverse_transform(pred_p.cpu().numpy())
+final_class_c = encoders["c_encoder"].inverse_transform(pred_c.cpu().numpy())
+final_class = final_class_z[0] + final_class_p[0] + final_class_c[0]
+
+print(f"Original class: {row['mcintosh_class']}")
+print(f"Original Grouped class: {row['Z_component_grouped']}{row['p_component_grouped']}{row['c_component_grouped']}")
+print(f"Predicted Final Class: {final_class}")
+
+mci_ut_d.display_sample_image(config.data_folder, config.dataset_folder, test_df, idx)
 
 # %%

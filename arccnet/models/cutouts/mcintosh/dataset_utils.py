@@ -38,7 +38,8 @@ def display_sample_image(data_folder: str, dataset_folder: str, df: pd.DataFrame
         image_data = np.array(img_fits[1].data, dtype=np.float32)
 
     plt.figure(figsize=(10, 6))
-    plt.imshow(image_data, cmap="gray")
+    vlim = np.max(np.abs(image_data))
+    plt.imshow(image_data, cmap=ut_v.magnetic_map, vmin=-vlim, vmax=vlim)
     plt.colorbar()
     plt.title(f"{row['date_only']} - {row['magnetic_class']} - McI: {row['mcintosh_class']} ")
     plt.show()
