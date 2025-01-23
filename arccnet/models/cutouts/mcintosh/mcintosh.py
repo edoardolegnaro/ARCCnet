@@ -88,9 +88,9 @@ train_df, val_df, test_df = mci_ut_d.split_dataset(
 
 
 if experiment:
-    experiment.log_dataset_hash(train_df, name="train_dataset")
-    experiment.log_dataset_hash(val_df, name="val_dataset")
-    experiment.log_dataset_hash(test_df, name="test_dataset")
+    experiment.log_dataset_hash(train_df)
+    experiment.log_dataset_hash(val_df)
+    experiment.log_dataset_hash(test_df)
 
 train_dataset = mci_ut_d.SunspotDataset(
     config.data_folder, config.dataset_folder, train_df, transform=config.train_transforms
