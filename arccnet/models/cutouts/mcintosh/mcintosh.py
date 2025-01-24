@@ -57,6 +57,12 @@ if config.use_comet:
             "model": config.resnet_version,
         }
     )
+    experiment.log_code(config.__file__)
+    experiment.log_code(mci_ut_t.__file__)
+    experiment.log_code(mci_ut_d.__file__)
+    experiment.log_code(mci_ut_d.__file__)
+    augmentation_tags = [type(transform).__name__ for transform in config.train_transforms.transforms]
+    experiment.add_tags(augmentation_tags)
 
 # %%
 t = time.localtime()

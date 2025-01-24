@@ -1,4 +1,5 @@
 import os
+
 import torchvision.transforms as v2
 
 ### General ###
@@ -10,15 +11,14 @@ batch_size = 32
 num_workers = os.cpu_count()
 learning_rate = 1e-4
 random_state = 42
-#train_transforms = None
+
 train_transforms = v2.Compose(
-     [
-         v2.RandomVerticalFlip(),
-         v2.RandomHorizontalFlip(),
-         v2.RandomPerspective(distortion_scale=0.1, p=0.25),
-         v2.RandomAffine(degrees=30, translate=(0.05, 0.05), scale=(0.95, 1.05), shear=5),
-     ]
- )
+    [
+        #         v2.RandomVerticalFlip(),
+        #         v2.RandomHorizontalFlip(),
+        v2.RandomAffine(degrees=15, translate=(0.05, 0.05), scale=(0.98, 1.02)),
+    ]
+)
 
 ### Teacher Forcing ###
 initial_teacher_forcing_ratio = 1.0

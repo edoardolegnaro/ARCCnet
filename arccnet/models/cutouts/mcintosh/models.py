@@ -20,7 +20,7 @@ from torchvision.models import (
 class HierarchicalResNet(nn.Module):
     def __init__(self, num_classes_Z: int, num_classes_P: int, num_classes_C: int, resnet_version: str = "resnet18"):
         """
-        Unified ResNet model for multi-level classification with optional Teacher Forcing.
+        ResNet model for multi-level classification with optional Teacher Forcing.
 
         Args:
             num_classes_Z (int): Number of classes for the Z component.
