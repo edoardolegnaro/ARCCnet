@@ -38,6 +38,6 @@ test_size = 0.15
 plot_histograms = False
 
 ### Comet ###
-use_comet = True
+use_comet = False
 project_name = "arcaff-mcintosh"
 workspace = "arcaff"

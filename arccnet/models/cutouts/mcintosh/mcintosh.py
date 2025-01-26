@@ -43,6 +43,7 @@ from arccnet.visualisation import utils as ut_v
 
 pd.set_option("display.max_columns", None)
 
+
 # %%
 device = f"cuda:{config.gpu_index}" if torch.cuda.is_available() else "cpu"
 
@@ -73,7 +74,6 @@ weights_dir = os.path.join(os.path.dirname(ut_t_file_path), "weights", f"{run_id
 os.makedirs(weights_dir, exist_ok=True)
 
 # %%
-
 AR_df, encoders, mappings = mci_ut_d.process_ar_dataset(
     data_folder=config.data_folder,
     dataset_folder=config.dataset_folder,
@@ -91,7 +91,6 @@ train_df, val_df, test_df = mci_ut_d.split_dataset(
     random_state=42,
     verbose=True,
 )
-
 
 if experiment:
     experiment.log_dataset_hash(train_df)
@@ -112,6 +111,30 @@ val_loader = DataLoader(
 )
 test_loader = DataLoader(
     test_dataset, batch_size=config.batch_size, shuffle=False, num_workers=config.num_workers, pin_memory=True
+)
+
+# %%
+ut_v.make_classes_histogram(
+    AR_df["Z_component_grouped"] + AR_df["p_component_grouped"] + AR_df["c_component_grouped"],
+    figsz=(21, 8),
+    y_off=25,
+    text_fontsize=8,
+)
+
+# %%
+valid_combined_classes = sorted(
+    list(
+        set(
+            [
+                (
+                    AR_df["Z_component_grouped"].iloc[i],
+                    AR_df["p_component_grouped"].iloc[i],
+                    AR_df["c_component_grouped"].iloc[i],
+                )
+                for i in range(len(AR_df))
+            ]
+        )
+    )
 )
 
 # %%
