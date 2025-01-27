@@ -8,7 +8,7 @@ gpu_index = 0
 epochs = 50
 patience = 10
 batch_size = 32
-num_workers = os.cpu_count()
+num_workers = 12  # os.cpu_count()
 learning_rate = 1e-4
 random_state = 42
 
@@ -21,9 +21,9 @@ train_transforms = v2.Compose(
 )
 
 ### Teacher Forcing ###
-initial_teacher_forcing_ratio = 1.0
+initial_teacher_forcing_ratio = 0.8
 min_teacher_forcing_ratio = 0.0
-teacher_forcing_decay = 0.95
+teacher_forcing_decay = 0.9
 teacher_forcing = True
 
 ### Dataset ###

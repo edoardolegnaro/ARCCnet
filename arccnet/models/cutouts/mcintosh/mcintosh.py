@@ -25,6 +25,7 @@ from comet_ml.integration.pytorch import log_model  # isort: skip
 import os
 import time
 import socket
+from collections import defaultdict
 
 import numpy as np
 import pandas as pd
@@ -137,6 +138,20 @@ valid_combined_classes = sorted(
     )
 )
 
+valid_p_for_z = defaultdict(set)
+valid_c_for_zp = defaultdict(set)
+
+for z, p, c in valid_combined_classes:
+    z_idx = encoders["Z_encoder"].transform([z])[0]
+    p_idx = encoders["p_encoder"].transform([p])[0]
+    c_idx = encoders["c_encoder"].transform([c])[0]
+
+    valid_p_for_z[z_idx].add(p_idx)  # Map Z to valid P
+    valid_c_for_zp[(z_idx, p_idx)].add(c_idx)  # Map (Z, P) to valid C
+
+valid_p_for_z = {k: sorted(v) for k, v in valid_p_for_z.items()}
+valid_c_for_zp = {k: sorted(v) for k, v in valid_c_for_zp.items()}
+
 # %%
 num_classes_Z = len(AR_df["Z_component_grouped"].unique())
 num_classes_P = len(AR_df["p_component_grouped"].unique())
@@ -195,7 +210,7 @@ for epoch in range(config.epochs):
     epochs_used += 1
 
     # Training
-    train_loss, train_acc = mci_ut_t.train(
+    train_dict = mci_ut_t.train(
         model=model,
         device=device,
         train_loader=train_loader,
@@ -208,7 +223,7 @@ for epoch in range(config.epochs):
     )
 
     # Validation
-    val_loss, val_acc = mci_ut_t.evaluate(
+    val_dict = mci_ut_t.evaluate(
         model=model,
         device=device,
         loader=val_loader,
@@ -218,16 +233,20 @@ for epoch in range(config.epochs):
     )
 
     if experiment:
-        experiment.log_metrics(
-            {
-                "avg_train_loss": train_loss,
-                "train_accuracy": train_acc,
-                "avg_val_loss": val_loss,
-                "val_accuracy": val_acc,
-                "teacher_forcing_ratio": teacher_forcing_ratio if teacher_forcing_ratio else 0,
-            },
-            epoch=epoch,
-        )
+        metrics = {
+            "avg_train_loss": train_dict["train_loss"],
+            "train_accuracy": train_dict["avg_train_accuracy"],
+            "train_accuracy_z": train_dict["train_accuracy_z"],
+            "train_accuracy_p": train_dict["train_accuracy_p"],
+            "train_accuracy_c": train_dict["train_accuracy_c"],
+            "avg_val_loss": val_dict["val_loss"],
+            "val_accuracy": val_dict["avg_val_accuracy"],
+            "val_accuracy_z": val_dict["val_accuracy_z"],
+            "val_accuracy_p": val_dict["val_accuracy_p"],
+            "val_accuracy_c": val_dict["val_accuracy_c"],
+            "teacher_forcing_ratio": teacher_forcing_ratio or 0,
+        }
+        experiment.log_metrics(metrics, epoch=epoch)
 
     if teacher_forcing_ratio:
         print(f"Epoch {epoch + 1}/{config.epochs}: Teacher Forcing Ratio = {teacher_forcing_ratio:.3f}")
@@ -235,7 +254,10 @@ for epoch in range(config.epochs):
         print(f"Epoch {epoch + 1}/{config.epochs}")
     # Log the metrics
     print(
-        f"Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.4f} | Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.4f}"
+        f"Train Loss: {train_dict['train_loss']:.4f}, Train Acc: {train_dict['avg_train_accuracy']:.4f}, Train Acc Z/p/c: {train_dict['train_accuracy_z']:.4f}/{train_dict['train_accuracy_p']:.4f}/{train_dict['train_accuracy_c']:.4f}"
+    )
+    print(
+        f"Val   Loss: {val_dict['val_loss']:.4f}, Val   Acc: {val_dict['avg_val_accuracy']:.4f}, Val   Acc Z/p/c: {val_dict['val_accuracy_z']:.4f}/{val_dict['val_accuracy_p']:.4f}/{val_dict['val_accuracy_c']:.4f}"
     )
 
     # Append the current teacher forcing ratio to the list
@@ -243,7 +265,7 @@ for epoch in range(config.epochs):
 
     # Early stopping logic
     best_val_metric, patience_counter, stop_training = mci_ut_t.check_early_stopping(
-        val_acc, best_val_metric, patience_counter, model, weights_dir, config.patience
+        val_dict["avg_val_accuracy"], best_val_metric, patience_counter, model, weights_dir, config.patience
     )
     if stop_training:
         break
@@ -277,18 +299,20 @@ model = ut_t.load_model_test(weights_dir, model, device)
     model=model,
     device=device,
     loader=test_loader,
+    valid_p_for_z=valid_p_for_z,
+    valid_c_for_zp=valid_c_for_zp,
 )
 
 if experiment:
     log_model(experiment, model=model, model_name=config.resnet_version)
     experiment.log_metrics(
         {
-            "accuracy_z": accuracy_z,
-            "accuracy_p": accuracy_p,
-            "accuracy_c": accuracy_c,
-            "f1_score_z": f1_score_z,
-            "f1_score_p": f1_score_p,
-            "f1_score_c": f1_score_c,
+            "test_accuracy_z": accuracy_z,
+            "test_accuracy_p": accuracy_p,
+            "test_accuracy_c": accuracy_c,
+            "test_f1_score_z": f1_score_z,
+            "test_f1_score_p": f1_score_p,
+            "test_f1_score_c": f1_score_c,
         }
     )
 
@@ -355,29 +379,19 @@ pred_grouped_labels = [
 encoder = LabelEncoder()
 encoder.fit(true_grouped_labels)  # Fit only on valid true classes
 class_mapping = {label: idx for idx, label in enumerate(encoder.classes_)}
-unknown_class_index = len(encoder.classes_)  # Index for "unknown"
 
 encoded_true = encoder.transform(true_grouped_labels)  # Encode true labels
 
-# Encode predictions, assigning "unknown" index if not found in true classes
 encoded_pred = []
-unknown_count = 0  # Counter for unknown predictions
 for pred in pred_grouped_labels:
-    if pred in class_mapping:
-        encoded_pred.append(class_mapping[pred])
-    else:
-        encoded_pred.append(unknown_class_index)
-        unknown_count += 1
-
-print(f"Number of 'unknown' predictions: {unknown_count}")
+    encoded_pred.append(class_mapping[pred])
 
 # Confusion matrix
 grouped_cm_path = os.path.join(os.path.dirname(ut_t_file_path), "temp", "confusion_matrix_grouped.png")
-all_classes = list(encoder.classes_) + ["unknown"]  # Include "unknown" class
-cm_gr = confusion_matrix(encoded_true, encoded_pred, labels=range(len(all_classes)))
+cm_gr = confusion_matrix(encoded_true, encoded_pred, labels=range(len(list(encoder.classes_))))
 ut_v.plot_confusion_matrix(
     cmc=cm_gr,
-    labels=all_classes,
+    labels=list(encoder.classes_),
     title="Confusion Matrix for Grouped Classes",
     figsize=(12, 12),
     save_path=grouped_cm_path,
@@ -404,7 +418,7 @@ if experiment:
         matrix=np.array(cm_gr),
         title="Confusion Matrix at best val epoch - Grouped Classes",
         file_name="grouped_confusion_matrix.json",
-        labels=all_classes,
+        labels=list(encoder.classes_),
     )
 
 # %%

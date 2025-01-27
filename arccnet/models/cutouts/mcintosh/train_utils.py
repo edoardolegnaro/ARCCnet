@@ -18,7 +18,7 @@ def train(
     criterion_c: nn.Module,
     teacher_forcing_ratio=None,
     scaler: torch.cuda.amp.GradScaler = None,
-) -> tuple:
+) -> dict:
     """
     Trains the model for one epoch with optional Teacher Forcing.
 
@@ -35,12 +35,13 @@ def train(
         scaler (torch.cuda.amp.GradScaler, optional): GradScaler for mixed precision. Defaults to None.
 
     Returns:
-        tuple: Average loss and accuracy for the epoch.
+        dict: Dictionary containing average loss, accuracies for Z, P, and C components, and average accuracy.
     """
     model.train()
     total_loss = 0.0
-    total_correct = 0
-    total_predictions = 0
+
+    correct_z, correct_p, correct_c = 0, 0, 0
+    total_z, total_p, total_c = 0, 0, 0
 
     for inputs, (labels_z, labels_p, labels_c) in tqdm(train_loader, desc="Training", unit="batch"):
         inputs, labels_z, labels_p, labels_c = (
@@ -91,15 +92,27 @@ def train(
         _, predicted_p = torch.max(output_p.data, 1)
         _, predicted_c = torch.max(output_c.data, 1)
 
-        total_correct += (predicted_z == labels_z).sum().item()
-        total_correct += (predicted_p == labels_p).sum().item()
-        total_correct += (predicted_c == labels_c).sum().item()
+        correct_z += (predicted_z == labels_z).sum().item()
+        correct_p += (predicted_p == labels_p).sum().item()
+        correct_c += (predicted_c == labels_c).sum().item()
 
-        total_predictions += inputs.size(0) * 3
+        total_z += labels_z.size(0)
+        total_p += labels_p.size(0)
+        total_c += labels_c.size(0)
 
     avg_loss = total_loss / len(train_loader.dataset)
-    accuracy = total_correct / total_predictions
-    return avg_loss, accuracy
+    accuracy_z = correct_z / total_z
+    accuracy_p = correct_p / total_p
+    accuracy_c = correct_c / total_c
+    avg_accuracy = (accuracy_z + accuracy_p + accuracy_c) / 3
+
+    return {
+        "train_loss": avg_loss,
+        "train_accuracy_z": accuracy_z,
+        "train_accuracy_p": accuracy_p,
+        "train_accuracy_c": accuracy_c,
+        "avg_train_accuracy": avg_accuracy,
+    }
 
 
 def evaluate(
@@ -110,7 +123,7 @@ def evaluate(
     criterion_p: nn.Module,
     criterion_c: nn.Module,
     teacher_forcing_ratio=None,
-) -> tuple:
+) -> dict:
     """
     Evaluates the model on a validation or test set with optional Teacher Forcing.
 
@@ -125,16 +138,16 @@ def evaluate(
                                                If None, Teacher Forcing is disabled.
 
     Returns:
-        tuple: Average loss and accuracy.
+        dict: Dictionary containing average loss, accuracies for Z, P, and C components, and average accuracy.
     """
     model.eval()
     total_loss = 0.0
-    total_correct = 0
-    total_predictions = 0
+
+    correct_z, correct_p, correct_c = 0, 0, 0
+    total_z, total_p, total_c = 0, 0, 0
 
     with torch.no_grad():
         for inputs, (labels_z, labels_p, labels_c) in tqdm(loader, desc="Evaluating", unit="batch"):
-            # Move inputs and labels to device
             inputs, labels_z, labels_p, labels_c = (
                 inputs.to(device),
                 labels_z.to(device),
@@ -158,26 +171,75 @@ def evaluate(
             loss = loss_z + loss_p + loss_c
             total_loss += loss.item() * inputs.size(0)
 
-            # Compute accuracy
+            # Compute accuracies
             _, predicted_z = torch.max(output_z.data, 1)
             _, predicted_p = torch.max(output_p.data, 1)
             _, predicted_c = torch.max(output_c.data, 1)
 
-            total_correct += (predicted_z == labels_z).sum().item()
-            total_correct += (predicted_p == labels_p).sum().item()
-            total_correct += (predicted_c == labels_c).sum().item()
+            correct_z += (predicted_z == labels_z).sum().item()
+            correct_p += (predicted_p == labels_p).sum().item()
+            correct_c += (predicted_c == labels_c).sum().item()
 
-            total_predictions += inputs.size(0) * 3
+            total_z += labels_z.size(0)
+            total_p += labels_p.size(0)
+            total_c += labels_c.size(0)
 
     avg_loss = total_loss / len(loader.dataset)
-    accuracy = total_correct / total_predictions
-    return avg_loss, accuracy
+    accuracy_z = correct_z / total_z
+    accuracy_p = correct_p / total_p
+    accuracy_c = correct_c / total_c
+    avg_accuracy = (accuracy_z + accuracy_p + accuracy_c) / 3
+
+    return {
+        "val_loss": avg_loss,
+        "val_accuracy_z": accuracy_z,
+        "val_accuracy_p": accuracy_p,
+        "val_accuracy_c": accuracy_c,
+        "avg_val_accuracy": avg_accuracy,
+    }
+
+
+def apply_mask_at_evaluation(output_logits, z_pred, p_pred=None, valid_dict=None):
+    """
+    Applies a mask to logits at evaluation based on predicted Z or (Z, P).
+
+    Args:
+        output_logits (torch.Tensor): Logits for the P or C component (B, num_classes).
+        z_pred (torch.Tensor): Predicted Z label (B,).
+        p_pred (torch.Tensor or None): Predicted P label (B,) (optional, for C-component only).
+        valid_dict (dict): Dictionary mapping Z or (Z, P) to valid classes.
+
+    Returns:
+        torch.Tensor: Masked logits with invalid classes set to -1e4.
+    """
+    batch_size, num_classes = output_logits.size()
+    mask = torch.zeros((batch_size, num_classes), dtype=torch.bool, device=output_logits.device)
+
+    for i in range(batch_size):
+        if p_pred is None:  # Mask for P-component
+            valid_classes = valid_dict.get(z_pred[i].item(), set())
+        else:  # Mask for C-component
+            valid_classes = valid_dict.get((z_pred[i].item(), p_pred[i].item()), set())
+
+        if valid_classes:
+            mask[i, list(valid_classes)] = True
+
+    # Check if all classes are masked out
+    all_masked = (~mask).all(dim=1)
+    if all_masked.any():
+        mask[all_masked] = True  # Allow all classes for these samples to avoid empty logits
+
+    # Apply the mask to logits
+    masked_logits = output_logits.masked_fill(~mask, -1e4)
+    return masked_logits
 
 
 def test(
     model: nn.Module,
     device: torch.device,
     loader: DataLoader,
+    valid_p_for_z: dict,
+    valid_c_for_zp: dict,
     teacher_forcing_ratio=None,
 ) -> tuple:
     """
@@ -187,6 +249,8 @@ def test(
         model (nn.Module): The neural network model.
         device (torch.device): The device to run the testing on.
         loader (DataLoader): DataLoader for test data.
+        valid_p_for_z (dict): Mapping of Z-labels to valid P-labels.
+        valid_c_for_zp (dict): Mapping of (Z, P)-labels to valid C-labels.
         teacher_forcing_ratio (float or None): Probability of using ground truth labels for Teacher Forcing.
                                                If None, Teacher Forcing is disabled.
 
@@ -228,10 +292,16 @@ def test(
                 teacher_forcing_ratio=teacher_forcing_ratio if use_teacher_forcing else 0.0,
             )
 
-            # Compute predictions
+            # Compute predictions for Z
             _, predicted_z = torch.max(output_z, 1)
-            _, predicted_p = torch.max(output_p, 1)
-            _, predicted_c = torch.max(output_c, 1)
+
+            # Apply masking for P logits
+            masked_logits_p = apply_mask_at_evaluation(output_p, predicted_z, valid_dict=valid_p_for_z)
+            _, predicted_p = torch.max(masked_logits_p, 1)
+
+            # Apply masking for C logits
+            masked_logits_c = apply_mask_at_evaluation(output_c, predicted_z, predicted_p, valid_dict=valid_c_for_zp)
+            _, predicted_c = torch.max(masked_logits_c, 1)
 
             # Count correct predictions
             correct_z += (predicted_z == labels_z).sum().item()
