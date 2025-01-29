@@ -3,25 +3,25 @@ import os
 import torchvision.transforms as v2
 
 ### General ###
-resnet_version = "resnet34"
+resnet_version = "wide_resnet50_2"
 gpu_index = 0
-epochs = 50
-patience = 10
+epochs = 500
+patience = 20
 batch_size = 32
 num_workers = 12  # os.cpu_count()
-learning_rate = 1e-4
+learning_rate = 1e-5
 random_state = 42
 
 train_transforms = v2.Compose(
     [
         #         v2.RandomVerticalFlip(),
         #         v2.RandomHorizontalFlip(),
-        v2.RandomAffine(degrees=15, translate=(0.05, 0.05), scale=(0.98, 1.02)),
+        v2.RandomAffine(degrees=10, translate=(0.05, 0.05), scale=(0.98, 1.02)),
     ]
 )
 
 ### Teacher Forcing ###
-initial_teacher_forcing_ratio = 0.8
+initial_teacher_forcing_ratio = 0.75
 min_teacher_forcing_ratio = 0.0
 teacher_forcing_decay = 0.9
 teacher_forcing = True
@@ -35,9 +35,9 @@ val_size = 0.15
 test_size = 0.15
 
 ### Logging ###
-plot_histograms = False
+plot_histograms = True
 
 ### Comet ###
-use_comet = False
+use_comet = True
 project_name = "arcaff-mcintosh"
 workspace = "arcaff"
