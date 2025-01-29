@@ -3,7 +3,7 @@ import os
 import torchvision.transforms as v2
 
 ### General ###
-resnet_version = "wide_resnet50_2"
+resnet_version = "resnet18"
 gpu_index = 0
 epochs = 500
 patience = 15
