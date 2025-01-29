@@ -4,17 +4,15 @@ from torchvision.transforms import v2
 
 from arccnet.models import labels
 
-classes = "qs-ia-a-b-bg"
-project_name = "arcaff-v2-" + classes
-label_mapping = labels.label_mapping_dict.get(classes)
+project_name = "arcaff-cutouts-from-fulldisk"
 
-batch_size = 32
+batch_size = 16
 num_workers = 40
 num_epochs = 1000
-patience = 15
+patience = 10
 learning_rate = 1e-5
 
-model_name = "swin_small_patch4_window7_224"
+model_name = "deit_small_patch16_224"
 pretrained = True
 gpu_index = 2
 device = "cuda:" + str(gpu_index)

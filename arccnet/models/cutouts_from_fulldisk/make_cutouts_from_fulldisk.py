@@ -13,6 +13,8 @@ import astropy.units as u
 from astropy.io import fits
 from astropy.time import Time
 
+from arccnet.visualisation import utils as ut_v
+
 img_size_dic = {"MDI": 1024, "HMI": 4096}
 
 # %%
@@ -144,23 +146,18 @@ def process_row(row):
 
 # %%
 results = p_map(process_row, [row for _, row in cleaned_df.iterrows()])
-image_arrays, labels = zip(*results)
+image_array, labels = zip(*results)
 
-# Save image arrays and labels to HDF5
-h5py_file_path = os.path.join(base_dir, "dataset.h5")
+processed_data = []
+for image_data in image_array:
+    image_data = np.nan_to_num(image_data, nan=0.0)
+    image_data = ut_v.hardtanh_transform_npy(image_data, divisor=800, min_val=-1.0, max_val=1.0)
+    image_data = ut_v.pad_resize_normalize(
+            image_data, target_height=224, target_width=224
+        )
+    processed_data.append(image_data)
 
-with h5py.File(h5py_file_path, "w") as h5file:
-    # Create a group for the image arrays
-    image_group = h5file.create_group("images")
-
-    # Save each image array as a separate dataset
-    for i, image_array in enumerate(image_arrays):
-        image_group.create_dataset(f"image_{i}", data=image_array, compression="gzip", compression_opts=9)
-
-    # Save the labels as a separate dataset
-    h5file.create_dataset("labels", data=np.array(labels, dtype="S"))  # Save labels as strings
-
-print(f"Dataset saved as {h5py_file_path}")
+np.savez(os.path.join(base_dir,"processed_data.npz"), images=processed_data, labels=labels)
 
 cleaned_df.to_parquet(os.path.join(base_dir, "dataframe.parquet"))
 
