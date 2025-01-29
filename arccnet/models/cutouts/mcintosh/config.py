@@ -30,12 +30,13 @@ teacher_forcing = True
 data_folder = os.getenv("ARCAFF_DATA_FOLDER", "../../../../../data/")
 dataset_folder = "arccnet-cutout-dataset-v20240715"
 df_name = "cutout-magnetic-catalog-v20240715.parq"
+long_limit_deg = 65
 train_size = 0.7
 val_size = 0.15
 test_size = 0.15
 
 ### Logging ###
-plot_histograms = True
+plot_histograms = False
 
 ### Comet ###
 use_comet = True
