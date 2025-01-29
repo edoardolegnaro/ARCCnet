@@ -1,6 +1,7 @@
 import os
 
 import matplotlib  # noqa: F401
+import matplotlib.pyplot as plt
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
@@ -8,7 +9,6 @@ import seaborn as sns
 import sunpy.map
 import torch
 import torch.nn.functional as F
-from matplotlib import pyplot as plt
 from matplotlib.patches import Rectangle
 from p_tqdm import p_map
 from skimage import transform
@@ -71,8 +71,9 @@ def pad_resize_normalize(image, target_height=224, target_width=224):
 
 def make_classes_histogram(
     series,
+    horizontal=False,
     figsz=(13, 5),
-    y_off=300,
+    y_off=None,
     ylim=None,
     title=None,
     ylabel="n° of ARs",
@@ -94,130 +95,138 @@ def make_classes_histogram(
     Parameters:
     - series (pandas.Series):
         The input series containing the class labels.
+    - horizontal (bool, optional):
+        Whether to create a horizontal bar chart. Default is False.
     - figsz (tuple, optional):
         A tuple representing the size of the figure (width, height) in inches.
-        Default is (13, 5).
-    - y_off (int, optional):
-        The vertical offset for the text labels above the bars.
-        Default is 300.
+        Default is (13, 5) for vertical, but consider (10, 16) for horizontal with many classes.
+    - y_off (int or float, optional):
+        The offset for the text labels. For vertical charts, this is the vertical offset;
+        for horizontal charts, this is the horizontal offset. If None, defaults to 300 for vertical
+        and 0.5 for horizontal. Default is None.
+    - ylim (int or float, optional):
+        The maximum value for the y-axis (vertical) or x-axis (horizontal). Default is None.
     - title (str, optional):
         The title of the histogram plot. If `None`, no title will be displayed.
         Default is None.
+    - ylabel (str, optional):
+        The label for the count axis. For vertical charts, this is the y-axis label;
+        for horizontal charts, this is the x-axis label. Default is "n° of ARs".
     - titlesize (int, optional):
         The font size of the title text. Ignored if `title` is `None`.
         Default is 14.
     - x_rotation (int, optional):
-        The rotation angle for the x-axis labels.
+        The rotation angle for the x-axis labels (vertical) or y-axis labels (horizontal).
         Default is 0.
     - fontsize (int, optional):
-        The font size of the x and y axis labels.
-        Default is 11.
+        The font size of the axis labels. Default is 11.
     - bar_color (str, optional):
-        The color of the bars in the histogram.
-        Default is '#4C72B0'.
+        The color of the bars in the histogram. Default is '#4C72B0'.
     - edgecolor (str, optional):
-        The color of the edges of the bars.
-        Default is 'black'.
+        The color of the edges of the bars. Default is 'black'.
     - text_fontsize (int, optional):
-        The font size of the text displayed above the bars.
-        Default is 11.
+        The font size of the text displayed above the bars. Default is 11.
     - style (str, optional):
-        The matplotlib style to be used for the plot.
-        Default is 'seaborn-v0_8-darkgrid'.
+        The matplotlib style to be used for the plot. Default is 'seaborn-v0_8-darkgrid'.
     - show_percentages (bool, optional):
-        Whether to display percentages on top of the bars.
-        Default is True.
+        Whether to display percentages on top of the bars. Default is True.
     - ax (matplotlib.axes.Axes, optional):
         An existing matplotlib Axes object to plot on. If `None`, a new figure and Axes will be created.
         Default is None.
     - save_path (str, optional):
         Path to save the figure. If `None`, the plot will be displayed instead of saved.
         Default is None.
+    - transparent (bool, optional):
+        Whether to save the figure with a transparent background. Default is False.
     """
+    # Determine the default y_off based on horizontal
+    if y_off is None:
+        y_off = 0.5 if horizontal else 300
 
-    # Remove None values before sorting
-    classes_names = sorted(filter(lambda x: x is not None, series.unique()))
+    # Process class names and counts
+    # Filter out None and sort based on horizontal flag
+    classes_names = sorted(filter(lambda x: x is not None, series.unique()), reverse=horizontal)
+    if horizontal:
+        counts = series.value_counts().reindex(classes_names, fill_value=0)
+        classes_names = counts.index.tolist()
+        values = counts.values
+    else:
+        classes_counts = series.value_counts().reindex(classes_names)
+        values = classes_counts.values
 
-    greek_labels = labels.convert_to_greek_label(classes_names)
-    classes_counts = series.value_counts().reindex(classes_names)
-    values = classes_counts.values
     total = np.sum(values)
+    greek_labels = labels.convert_to_greek_label(classes_names)  # Ensure this is defined or imported
 
     with plt.style.context(style):
+        # Create figure and axes if not provided
         if ax is None:
             plt.figure(figsize=figsz)
-            bars = plt.bar(greek_labels, values, color=bar_color, edgecolor=edgecolor)
+            ax = plt.gca()
+
+        # Create bars
+        if horizontal:
+            bars = ax.barh(greek_labels, values, color=bar_color, edgecolor=edgecolor)
         else:
             bars = ax.bar(greek_labels, values, color=bar_color, edgecolor=edgecolor)
 
-        # Add text on top of the bars
+        # Annotate bars with values and percentages
         for bar in bars:
-            yval = bar.get_height()
-            if show_percentages:
-                percentage = f"{yval/total*100:.2f}%" if total > 0 else "0.00%"
-                if ax is None:
-                    plt.text(
-                        bar.get_x() + bar.get_width() / 2,
-                        yval + y_off,
-                        f"{yval} ({percentage})",
-                        ha="center",
-                        va="bottom",
-                        fontsize=text_fontsize,
-                    )
-                else:
-                    ax.text(
-                        bar.get_x() + bar.get_width() / 2,
-                        yval + y_off,
-                        f"{yval} ({percentage})",
-                        ha="center",
-                        va="bottom",
-                        fontsize=text_fontsize,
-                    )
+            if horizontal:
+                value = bar.get_width()
+                y_center = bar.get_y() + bar.get_height() / 2
+                text_x = value + y_off
+                text_y = y_center
+                ha = "left"
+                va = "center"
             else:
-                if ax is None:
-                    plt.text(
-                        bar.get_x() + bar.get_width() / 2,
-                        yval + y_off,
-                        f"{yval}",
-                        ha="center",
-                        va="bottom",
-                        fontsize=text_fontsize,
-                    )
-                else:
-                    ax.text(
-                        bar.get_x() + bar.get_width() / 2,
-                        yval + y_off,
-                        f"{yval}",
-                        ha="center",
-                        va="bottom",
-                        fontsize=text_fontsize,
-                    )
+                value = bar.get_height()
+                text_x = bar.get_x() + bar.get_width() / 2
+                text_y = value + y_off
+                ha = "center"
+                va = "bottom"
 
-        # Setting x and y ticks
-        if ax is None:
-            plt.xticks(rotation=x_rotation, ha="center", fontsize=fontsize)
-            plt.yticks(fontsize=fontsize)
-            plt.ylabel(ylabel, fontsize=fontsize)
-            if ylim:
-                plt.ylim([0, ylim])
+            if show_percentages:
+                percentage = f"{value / total * 100:.2f}%" if total > 0 else "0.00%"
+                text = f"{value} ({percentage})"
+            else:
+                text = f"{value}"
+
+            ax.text(text_x, text_y, text, ha=ha, va=va, fontsize=text_fontsize)
+
+        # Set axis labels and ticks
+        if horizontal:
+            ax.set_yticks(np.arange(len(greek_labels)))
+            ax.set_yticklabels(greek_labels, rotation=x_rotation, ha="right", fontsize=fontsize)
+            ax.set_xlabel(ylabel, fontsize=fontsize)
+            ax.set_ylabel("Class", fontsize=fontsize)
+            if ylim is not None:
+                ax.set_xlim([0, ylim])
         else:
             ax.set_xticks(np.arange(len(greek_labels)))
             ax.set_xticklabels(greek_labels, rotation=x_rotation, ha="center", fontsize=fontsize)
+            ax.set_ylabel(ylabel, fontsize=fontsize)
+            if ylim is not None:
+                ax.set_ylim([0, ylim])
+
+        # Set title
+        if title:
+            ax.set_title(title, fontsize=titlesize)
+
+        # Set tick parameters for the other axis
+        if horizontal:
+            ax.tick_params(axis="x", labelsize=fontsize)
+        else:
             ax.tick_params(axis="y", labelsize=fontsize)
 
-        if title:
-            if ax is None:
-                plt.title(title, fontsize=titlesize)
-            else:
-                ax.set_title(title, fontsize=titlesize)
-
-        # If a new figure was created, show the plot
+        # Save or show the plot if ax is None
         if ax is None:
             if save_path:
                 plt.savefig(save_path, bbox_inches="tight", transparent=transparent)
                 plt.close()
             else:
                 plt.show()
+
+    return ax
 
 
 class HardTanhTransform:

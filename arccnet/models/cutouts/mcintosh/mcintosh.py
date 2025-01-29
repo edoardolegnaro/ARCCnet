@@ -31,6 +31,7 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
+from IPython.display import display
 from sklearn.metrics import confusion_matrix, f1_score
 from sklearn.preprocessing import LabelEncoder
 from torch.utils.data import DataLoader
@@ -82,13 +83,24 @@ AR_df, encoders, mappings = mci_ut_d.process_ar_dataset(
     plot_histograms=config.plot_histograms,
 )
 
+# %%
+lonV = np.deg2rad(np.where(AR_df["path_image_cutout_hmi"] != "", AR_df["longitude_hmi"], AR_df["longitude_mdi"]))
+condition = (lonV < -np.deg2rad(config.long_limit_deg)) | (lonV > np.deg2rad(config.long_limit_deg))
+df_filtered = AR_df[~condition]
+df_rear = AR_df[condition]
+AR_df.loc[df_filtered.index, "location"] = "front"
+AR_df.loc[df_rear.index, "location"] = "rear"
+
+AR_filtered = AR_df[AR_df["location"] != "rear"]
+
+# %%
 train_df, val_df, test_df = mci_ut_d.split_dataset(
-    df=AR_df,
+    df=AR_filtered,
     group_column="number",
     plot_histograms=config.plot_histograms,
-    train_size=0.7,
-    val_size=0.15,
-    test_size=0.15,
+    train_size=config.train_size,
+    val_size=config.val_size,
+    test_size=config.test_size,
     random_state=42,
     verbose=True,
 )
@@ -114,9 +126,38 @@ test_loader = DataLoader(
     test_dataset, batch_size=config.batch_size, shuffle=False, num_workers=config.num_workers, pin_memory=True
 )
 
+
+# %%
+def get_class_distribution_summary(train_df, val_df, test_df, component):
+    train_counts = train_df[component].value_counts()
+    val_counts = val_df[component].value_counts()
+    test_counts = test_df[component].value_counts()
+
+    train_percentages = train_df[component].value_counts(normalize=True) * 100
+    val_percentages = val_df[component].value_counts(normalize=True) * 100
+    test_percentages = test_df[component].value_counts(normalize=True) * 100
+
+    summary_df = pd.DataFrame(
+        {
+            "Train": train_counts.astype(str) + " (" + train_percentages.map("{:.2f}%".format) + ")",
+            "Val": val_counts.astype(str) + " (" + val_percentages.map("{:.2f}%".format) + ")",
+            "Test": test_counts.astype(str) + " (" + test_percentages.map("{:.2f}%".format) + ")",
+        }
+    ).fillna(
+        "0 (0.00%)"
+    )  # Fill missing values with 0
+
+    return summary_df
+
+
+components = ["Z_component_grouped", "p_component_grouped", "c_component_grouped"]
+for component in components:
+    summary_df = get_class_distribution_summary(train_df, val_df, test_df, component)
+    display(summary_df)
+
 # %%
 ut_v.make_classes_histogram(
-    AR_df["Z_component_grouped"] + AR_df["p_component_grouped"] + AR_df["c_component_grouped"],
+    AR_filtered["Z_component_grouped"] + AR_filtered["p_component_grouped"] + AR_filtered["c_component_grouped"],
     figsz=(21, 8),
     y_off=25,
     text_fontsize=8,
@@ -128,11 +169,11 @@ valid_combined_classes = sorted(
         set(
             [
                 (
-                    AR_df["Z_component_grouped"].iloc[i],
-                    AR_df["p_component_grouped"].iloc[i],
-                    AR_df["c_component_grouped"].iloc[i],
+                    AR_filtered["Z_component_grouped"].iloc[i],
+                    AR_filtered["p_component_grouped"].iloc[i],
+                    AR_filtered["c_component_grouped"].iloc[i],
                 )
-                for i in range(len(AR_df))
+                for i in range(len(AR_filtered))
             ]
         )
     )
@@ -153,9 +194,9 @@ valid_p_for_z = {k: sorted(v) for k, v in valid_p_for_z.items()}
 valid_c_for_zp = {k: sorted(v) for k, v in valid_c_for_zp.items()}
 
 # %%
-num_classes_Z = len(AR_df["Z_component_grouped"].unique())
-num_classes_P = len(AR_df["p_component_grouped"].unique())
-num_classes_C = len(AR_df["c_component_grouped"].unique())
+num_classes_Z = len(AR_filtered["Z_component_grouped"].unique())
+num_classes_P = len(AR_filtered["p_component_grouped"].unique())
+num_classes_C = len(AR_filtered["c_component_grouped"].unique())
 
 # Initialize the new model
 model = HierarchicalResNet(
@@ -450,3 +491,5 @@ print(f"Predicted Final Class: {final_class}")
 mci_ut_d.display_sample_image(config.data_folder, config.dataset_folder, test_df, idx)
 
 # %%
+if experiment:
+    experiment.end()
