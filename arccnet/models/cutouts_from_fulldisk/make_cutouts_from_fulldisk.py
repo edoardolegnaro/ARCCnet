@@ -1,7 +1,6 @@
 # %%
 import os
 
-import h5py
 import numpy as np
 import pandas as pd
 import sunpy.map
@@ -152,12 +151,10 @@ processed_data = []
 for image_data in image_array:
     image_data = np.nan_to_num(image_data, nan=0.0)
     image_data = ut_v.hardtanh_transform_npy(image_data, divisor=800, min_val=-1.0, max_val=1.0)
-    image_data = ut_v.pad_resize_normalize(
-            image_data, target_height=224, target_width=224
-        )
+    image_data = ut_v.pad_resize_normalize(image_data, target_height=224, target_width=224)
     processed_data.append(image_data)
 
-np.savez(os.path.join(base_dir,"processed_data.npz"), images=processed_data, labels=labels)
+np.savez(os.path.join(base_dir, "processed_data.npz"), images=processed_data, labels=labels)
 
 cleaned_df.to_parquet(os.path.join(base_dir, "dataframe.parquet"))
 

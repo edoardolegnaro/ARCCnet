@@ -2,8 +2,6 @@ import os
 
 from torchvision.transforms import v2
 
-from arccnet.models import labels
-
 project_name = "arcaff-cutouts-from-fulldisk"
 
 batch_size = 16

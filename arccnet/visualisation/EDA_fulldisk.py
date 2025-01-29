@@ -52,8 +52,9 @@ df["datetime"] = pd.to_datetime(times.iso)
 # ## Classes Counts
 
 # %%
-discarded_df = df[df["filtered"] is True]
-selected_df = df[df["filtered"] is False]
+discarded_df = df[df["filtered"]]
+selected_df = df[~df["filtered"]]
+
 
 # Calculate the percentage of selected items and unique fulldisks
 selected_percentage = len(selected_df) / len(df) * 100

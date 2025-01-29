@@ -1,26 +1,22 @@
 # +
 import os
 
+import numpy as np
 import pandas as pd
+import seaborn as sns
+import timm
 import torch
 import torch.nn as nn
 from comet_ml import Experiment
-import numpy as np
+from matplotlib import pyplot as plt
+from sklearn.preprocessing import LabelEncoder
+from sklearn.utils.class_weight import compute_class_weight
+from torch.utils.data import DataLoader, Dataset
 
 import arccnet.models.cutouts_from_fulldisk.config as config
 import arccnet.models.dataset_utils as ut_d
 import arccnet.models.train_utils as ut_t
-import arccnet.visualisation.utils as ut_v
-
-from matplotlib import pyplot as plt
-
-from torch.utils.data import DataLoader, Dataset
-from sklearn.preprocessing import LabelEncoder
-from sklearn.utils.class_weight import compute_class_weight
-import timm
-
 from arccnet.models import labels as lbs
-import seaborn as sns
 
 # +
 # Generate run ID and weights directory
@@ -49,8 +45,8 @@ if experiment:
 
 # +
 # Load Dataset
-base_dir = '/ARCAFF/data/cutouts_from_fulldisk/'
-df = pd.read_parquet(os.path.join(base_dir, 'dataframe.parquet'))
+base_dir = "/ARCAFF/data/cutouts_from_fulldisk/"
+df = pd.read_parquet(os.path.join(base_dir, "dataframe.parquet"))
 
 label_mapping = {
     "Alpha": "Alpha",
@@ -63,7 +59,7 @@ label_mapping = {
 }
 
 df["grouped_labels"] = df["magnetic_class"].map(label_mapping)
-df['Index'] = range(len(df))
+df["Index"] = range(len(df))
 df
 # -
 
@@ -72,19 +68,19 @@ fold_df = ut_d.split_data(split_df, label_col="grouped_labels", group_col="NOAA"
 df_tr = ut_d.assign_fold_sets(df, fold_df)
 
 # +
-data = np.load(os.path.join(base_dir, 'processed_data.npz'))
-images = data['images']
-labels = np.array(df_tr['grouped_labels'])
+data = np.load(os.path.join(base_dir, "processed_data.npz"))
+images = data["images"]
+labels = np.array(df_tr["grouped_labels"])
 
 label_encoder = LabelEncoder()
 encoded_labels = label_encoder.fit_transform(labels)
 
-df_tr['encoded_labels'] = encoded_labels
+df_tr["encoded_labels"] = encoded_labels
 
 fold_n = 1
-train_df = df_tr[df_tr[f'Fold {fold_n}']=='train']
-val_df = df_tr[df_tr[f'Fold {fold_n}']=='val']
-test_df = df_tr[df_tr[f'Fold {fold_n}']=='test']
+train_df = df_tr[df_tr[f"Fold {fold_n}"] == "train"]
+val_df = df_tr[df_tr[f"Fold {fold_n}"] == "val"]
+test_df = df_tr[df_tr[f"Fold {fold_n}"] == "test"]
 
 print("Mapping:", dict(zip(label_encoder.classes_, range(len(label_encoder.classes_)))))
 # -
@@ -93,10 +89,7 @@ len(images)
 
 
 class Cutouts(Dataset):
-
-    def __init__(
-        self, images, df, transform=None
-    ):
+    def __init__(self, images, df, transform=None):
         self.images = images
         self.df = df
         self.transform = transform
@@ -106,10 +99,10 @@ class Cutouts(Dataset):
 
     def __getitem__(self, idx):
         row = self.df.iloc[idx]
-        image_idx = row['Index']
+        image_idx = row["Index"]
         image = self.images[image_idx]
-        label = row['encoded_labels']
-        
+        label = row["encoded_labels"]
+
         image = torch.from_numpy(image).unsqueeze(0)
         image = image.to(dtype=torch.float32)
 
@@ -293,5 +286,3 @@ encoded_labels
 labels
 
 images
-
-
