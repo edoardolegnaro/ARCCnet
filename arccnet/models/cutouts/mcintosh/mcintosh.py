@@ -491,3 +491,5 @@ print(f"Predicted Final Class: {final_class}")
 mci_ut_d.display_sample_image(config.data_folder, config.dataset_folder, test_df, idx)
 
 # %%
+if experiment:
+    experiment.end()

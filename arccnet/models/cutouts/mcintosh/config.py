@@ -6,7 +6,7 @@ import torchvision.transforms as v2
 resnet_version = "wide_resnet50_2"
 gpu_index = 0
 epochs = 500
-patience = 20
+patience = 15
 batch_size = 32
 num_workers = 12  # os.cpu_count()
 learning_rate = 1e-5
