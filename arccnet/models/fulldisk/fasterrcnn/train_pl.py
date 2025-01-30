@@ -4,23 +4,30 @@ import numpy as np
 import pandas as pd
 import pytorch_lightning as pl
 import torch
+import torchvision
 import torchvision.ops as ops
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 from scipy.ndimage import rotate
 from torch import optim
 from torch.utils.data import DataLoader, Dataset
 from torchmetrics.detection import MeanAveragePrecision
+from torchvision import transforms
 from torchvision.models.detection import fasterrcnn_resnet50_fpn
 from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
-from torchvision.transforms import v2 as transforms
 
 from astropy.io import fits
 from astropy.time import Time
 
+# Disable beta transforms warnings
+torchvision.disable_beta_transforms_warning()
+
+# Set float32 matmul precision
+torch.set_float32_matmul_precision("high")
+
 # Constants
-IMG_SIZE = 800
-BATCH_SIZE = 8
-NUM_WORKERS = os.cpu_count()
+IMG_SIZE = 512
+BATCH_SIZE = 4
+NUM_WORKERS = os.cpu_count() // 2
 NUM_CLASSES = 4  # Background + 3 classes (Alpha, Beta, Beta-Gamma)
 
 
@@ -34,7 +41,15 @@ class FullDiskDataModule(pl.LightningDataModule):
             [transforms.RandomHorizontalFlip(p=0.5), transforms.RandomVerticalFlip(p=0.5)]
         )
 
-    def prepare_data(self):
+    def _group_boxes_by_image(self, df):
+        grouped = (
+            df.groupby("path")
+            .agg({"bottom_left_cutout": list, "top_right_cutout": list, "encoded_label": list, "instrument": "first"})
+            .reset_index()
+        )
+        return grouped
+
+    def setup(self, stage=None):
         # Load and preprocess dataframe
         df = pd.read_parquet(self.df_path)
 
@@ -75,7 +90,7 @@ class FullDiskDataModule(pl.LightningDataModule):
         unique_labels = cleaned_df["magnetic_class"].map(label_mapping).unique()
         label_to_index = {label: idx for idx, label in enumerate(unique_labels, start=1)}  # Start from 1
         cleaned_df["grouped_label"] = cleaned_df["magnetic_class"].map(label_mapping)
-        cleaned_df = cleaned_df[cleaned_df["grouped_label"] != "None"].copy()  # Exclude 'None' labels if necessary
+        cleaned_df = cleaned_df[cleaned_df["grouped_label"] != "None"].copy()
         cleaned_df["encoded_label"] = cleaned_df["grouped_label"].map(label_to_index)
 
         df = self._group_boxes_by_image(cleaned_df)
@@ -84,15 +99,7 @@ class FullDiskDataModule(pl.LightningDataModule):
         self.train_df = df[:split_idx]
         self.val_df = df[split_idx:]
 
-    def _group_boxes_by_image(self, df):
-        grouped = (
-            df.groupby("path")
-            .agg({"bottom_left_cutout": list, "top_right_cutout": list, "encoded_label": list, "instrument": "first"})
-            .reset_index()
-        )
-        return grouped
-
-    def setup(self, stage=None):
+        # Create datasets
         self.train_ds = FullDiskDataset(self.train_df, self.data_root, transform=self.transform)
         self.val_ds = FullDiskDataset(self.val_df, self.data_root)
 
@@ -164,6 +171,11 @@ class FasterRCNNModel(pl.LightningModule):
         self.model.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes)
         self.lr = lr
         self.map_metric = MeanAveragePrecision()
+        # No need to move map_metric here
+
+    def on_fit_start(self):
+        # Move metric to the correct device
+        self.map_metric = self.map_metric.to(self.device)
 
     def forward(self, x):
         return self.model(x)
@@ -180,7 +192,6 @@ class FasterRCNNModel(pl.LightningModule):
         preds = self.model(images)
         self.map_metric.update(preds, targets)
 
-        # Calculate validation IoU
         ious = []
         for pred, target in zip(preds, targets):
             if len(pred["boxes"]) > 0 and len(target["boxes"]) > 0:
@@ -189,13 +200,17 @@ class FasterRCNNModel(pl.LightningModule):
                 ious.append(matched_iou)
 
         if ious:
-            self.log("val_iou", torch.tensor(ious).mean(), prog_bar=True)
+            ious_tensor = torch.as_tensor(ious, device=self.device)
+            self.log("val_iou", ious_tensor.mean(), prog_bar=True, sync_dist=True)
+        else:
+            self.log("val_iou", torch.as_tensor(0.0, device=self.device), prog_bar=True, sync_dist=True)
 
     def on_validation_epoch_end(self):
         map_metrics = self.map_metric.compute()
         self.log_dict(
             {"val_map": map_metrics["map"], "val_map_50": map_metrics["map_50"], "val_map_75": map_metrics["map_75"]},
             prog_bar=True,
+            sync_dist=True,
         )
         self.map_metric.reset()
 
@@ -210,7 +225,7 @@ class FasterRCNNModel(pl.LightningModule):
 
 if __name__ == "__main__":
     # Set up paths
-    data_folder = os.getenv("ARCAFF_DATA_FOLDER", "../../../../../data/")
+    data_folder = os.getenv("ARCAFF_DATA_FOLDER", "/ARCAFF/data/")
     dataset_folder = "arccnet-fulldisk-dataset-v20240917"
     df_name = "fulldisk-detection-catalog-v20240917.parq"
 
@@ -225,12 +240,12 @@ if __name__ == "__main__":
         monitor="val_map", mode="max", filename="best-{epoch}-{val_map:.2f}", save_top_k=3
     )
 
-    early_stop = EarlyStopping(monitor="val_map", patience=8, mode="max", verbose=True)
+    early_stop = EarlyStopping(monitor="val_map", patience=4, mode="max", verbose=True)
 
     trainer = pl.Trainer(
         max_epochs=10,
-        accelerator="auto",
-        devices="auto",
+        accelerator="gpu",
+        devices=[2],
         callbacks=[checkpoint_callback, early_stop],
         precision="16-mixed",
     )
