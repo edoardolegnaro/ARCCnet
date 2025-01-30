@@ -18,11 +18,13 @@ from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
 from astropy.io import fits
 from astropy.time import Time
 
+from arccnet.visualisation import utils as ut_v
+
 # Disable beta transforms warnings
 torchvision.disable_beta_transforms_warning()
 
 # Set float32 matmul precision
-torch.set_float32_matmul_precision("high")
+torch.set_float32_matmul_precision("medium")
 
 # Constants
 IMG_SIZE = 512
@@ -32,11 +34,12 @@ NUM_CLASSES = 4  # Background + 3 classes (Alpha, Beta, Beta-Gamma)
 
 
 class FullDiskDataModule(pl.LightningDataModule):
-    def __init__(self, data_root, df_path, batch_size=BATCH_SIZE):
+    def __init__(self, data_root, df_path, batch_size=BATCH_SIZE, cache_dir=None):
         super().__init__()
         self.data_root = data_root
         self.df_path = df_path
         self.batch_size = batch_size
+        self.cache_dir = cache_dir
         self.transform = transforms.Compose(
             [transforms.RandomHorizontalFlip(p=0.5), transforms.RandomVerticalFlip(p=0.5)]
         )
@@ -115,10 +118,11 @@ class FullDiskDataModule(pl.LightningDataModule):
 
 
 class FullDiskDataset(Dataset):
-    def __init__(self, df, data_root, transform=None):
+    def __init__(self, df, data_root, transform=None, cache_dir=None):
         self.df = df
         self.data_root = data_root
         self.transform = transform
+        self.cache_dir = cache_dir
         self.size_mapping = {"MDI": 1024, "HMI": 4096}
 
     def __len__(self):
@@ -132,7 +136,18 @@ class FullDiskDataset(Dataset):
         boxes, labels = self._get_annotations(row)
 
         if self.transform:
-            image = self.transform(image)
+            # Apply each transformation and adjust boxes accordingly
+            for t in self.transform.transforms:
+                if isinstance(t, transforms.RandomHorizontalFlip) and torch.rand(1) < t.p:
+                    image = transforms.functional.hflip(image)
+                    # Flip boxes horizontally
+                    width = image.shape[2]
+                    boxes[:, [0, 2]] = width - boxes[:, [2, 0]]
+                if isinstance(t, transforms.RandomVerticalFlip) and torch.rand(1) < t.p:
+                    image = transforms.functional.vflip(image)
+                    # Flip boxes vertically
+                    height = image.shape[1]
+                    boxes[:, [1, 3]] = height - boxes[:, [3, 1]]
 
         return image, {"boxes": boxes, "labels": labels}
 
@@ -142,8 +157,10 @@ class FullDiskDataset(Dataset):
             header = hdul[1].header
 
         data = np.nan_to_num(data)
-        data = rotate(data, header.get("CROTA2", 0), reshape=False, mode="constant", cval=0)
-        data = (np.clip(data, -100, 100) + 100) / 200  # Normalization
+        data = ut_v.hardtanh_transform_npy(data)
+        crota2 = header.get("CROTA2", 0)
+        data = rotate(data, crota2, reshape=False, mode="constant", cval=0)
+        data = ut_v.pad_resize_normalize(data, target_height=IMG_SIZE, target_width=IMG_SIZE)
         data = torch.tensor(data, dtype=torch.float32).unsqueeze(0).repeat(3, 1, 1)  # 3 channels
         return data
 
@@ -184,7 +201,7 @@ class FasterRCNNModel(pl.LightningModule):
         images, targets = batch
         loss_dict = self.model(images, targets)
         loss = sum(loss_dict.values())
-        self.log("train_loss", loss, batch_size=images.size(0), prog_bar=True)
+        self.log("train_loss", loss, batch_size=BATCH_SIZE, prog_bar=True)
         return loss
 
     def validation_step(self, batch, batch_idx):
@@ -201,9 +218,15 @@ class FasterRCNNModel(pl.LightningModule):
 
         if ious:
             ious_tensor = torch.as_tensor(ious, device=self.device)
-            self.log("val_iou", ious_tensor.mean(), prog_bar=True, sync_dist=True)
+            self.log("val_iou", ious_tensor.mean(), batch_size=BATCH_SIZE, prog_bar=True, sync_dist=True)
         else:
-            self.log("val_iou", torch.as_tensor(0.0, device=self.device), prog_bar=True, sync_dist=True)
+            self.log(
+                "val_iou",
+                torch.as_tensor(0.0, device=self.device),
+                batch_size=BATCH_SIZE,
+                prog_bar=True,
+                sync_dist=True,
+            )
 
     def on_validation_epoch_end(self):
         map_metrics = self.map_metric.compute()
