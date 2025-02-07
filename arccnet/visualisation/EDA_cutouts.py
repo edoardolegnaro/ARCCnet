@@ -20,6 +20,7 @@
 
 import os
 import pickle
+import random
 from collections import defaultdict
 
 import numpy as np
@@ -537,3 +538,94 @@ for key in title_mapping:
         ["Alpha", "Beta", "Beta-x"],
         title_mapping[key],  # Use the formal title from the mapping
     )
+
+# %% [markdown]
+# ## Outliers Analysis
+
+# %%
+table = []
+keys = set(results_alpha.keys()) | set(results_beta.keys()) | set(results_betax.keys())  # Union of all keys
+
+for key in sorted(keys):
+    alpha_count = len(find_outliers(results_alpha.get(key, [])))
+    beta_count = len(find_outliers(results_beta.get(key, [])))
+    betax_count = len(find_outliers(results_betax.get(key, [])))
+    table.append([key, alpha_count, beta_count, betax_count])
+
+outliers_df = pd.DataFrame(table, columns=["Key", "Alpha", "Beta", "Beta-x"])
+
+plt.figure(figsize=(4, 6))
+sns.heatmap(outliers_df.set_index("Key"), annot=True, cmap="viridis", fmt="d")
+plt.title("Outliers")
+plt.show()
+
+
+# %%
+def plot_outliers(df, results, stat, num_outliers=6, cmap="gray"):
+    """
+    Plots a random selection of outlier images based on IQR analysis for a given statistic.
+
+    Parameters:
+        df (pandas.DataFrame): DataFrame containing file paths and associated metadata.
+        results (dict): Dictionary with IQR results for outlier detection.
+        stat (str): Key to extract IQR results from `results`.
+        num_outliers (int, optional): Number of outlier images to display. Defaults to 6.
+        cmap (str, optional): Colormap for displaying images. Defaults to 'gray'.
+        dataset_folder (str, optional): Subdirectory for the dataset.
+    """
+    outlier_indices = find_outliers(results[stat])
+
+    num_outliers = min(num_outliers, len(outlier_indices))
+
+    # Randomly sample outlier indices
+    sampled_indices = random.sample(list(outlier_indices), num_outliers)
+    outlier_rows = df.iloc[sampled_indices]
+
+    # Calculate grid dimensions (3 columns by default)
+    cols = 3
+    rows = (num_outliers + cols - 1) // cols  # Ceiling division
+
+    fig, axes = plt.subplots(rows, cols, figsize=(cols * 5, rows * 5))
+    axes = axes.flatten()
+
+    def get_image_info(row):
+        """Retrieve the image file path and instrument name from a row."""
+        path_hmi = row.get("path_image_cutout_hmi", "")
+        if path_hmi:
+            return path_hmi, "HMI"
+        else:
+            return row.get("path_image_cutout_mdi", ""), "MDI"
+
+    # Iterate over the sampled outlier rows and plot each image
+    for i, (_, row) in enumerate(outlier_rows.iterrows()):
+        path, instrument = get_image_info(row)
+
+        file_path = os.path.join(data_folder, dataset_folder, path)
+
+        with fits.open(file_path) as hdul:
+            data = np.array(hdul[1].data, dtype=float)
+
+        # Set symmetric limits for the colormap based on the data
+        vlim = np.max(np.abs(data))
+        im = axes[i].imshow(data, cmap=cmap, vmin=-vlim, vmax=vlim)
+        axes[i].set_title(f"{instrument} {row['dates']}")
+        axes[i].axis("off")
+
+        # Add a colorbar to the subplot
+        fig.colorbar(im, ax=axes[i], fraction=0.046, pad=0.04)
+
+    for j in range(i + 1, len(axes)):
+        axes[j].axis("off")
+
+    plt.tight_layout()
+    plt.show()
+
+
+# %%
+plot_outliers(df_alpha, results_alpha, "iqr", num_outliers=6, cmap="gray")
+
+# %%
+plot_outliers(df_beta, results_beta, "iqr", num_outliers=6, cmap="gray")
+
+# %%
+plot_outliers(df_betax, results_betax, "iqr", num_outliers=6, cmap="gray")
