@@ -1,7 +1,11 @@
 from SDOprocessing import SDOproc, SDODownload
 import sunpy.map
 import glob
-import numpy as np
+from astropy.io.fits import CompImageHDU
+from numpy import char
+import matplotlib.pyplot as plt
+
+
 
 # Define parameters - This will later be handled by accepting variables from flare timelines or cli
 time_1 = '2016-01-01T00:00:00'
@@ -34,7 +38,7 @@ paths_hmi = glob.glob(f'{path_hmi}*')
 print('Downloading data and retrieving paths.')
 aia_dls = SDODownload.aia_fetch_request(aia_request, path_euv)
 hmi_dls = SDODownload.hmi_fetch_request(hmi_request, path_hmi)
-# # Collect filepaths of downloaded files
+# Collect filepaths of downloaded files
 # new_aia_files = SDODownload.dl_paths(aia_request, paths_aia)
 # new_hmi_files = SDODownload.dl_paths(hmi_request, paths_hmi)
 
@@ -57,15 +61,52 @@ print('Processing data.')
 # print(list(aia_dls))
 aia_maps = sunpy.map.Map(list(aia_dls))
 hmi_maps = sunpy.map.Map(list(hmi_dls))
+
+# fig = plt.figure()
+# ax1 = fig.add_subplot(121, projection=aia_maps[0])
+# aia_maps[0].plot(axes=ax1)		
+# ax2 = fig.add_subplot(122, projection=hmi_maps[0])
+# hmi_maps[0].plot(axes=ax2)		  
+# ax3 = fig.add_subplot(221, projection=aia_maps[1])
+# aia_maps[1].plot(axes=ax3)
+# ax4 = fig.add_subplot(222, projection=aia_maps[2])
+# aia_maps[2].plot(axes=ax4)
+# plt.show()
+
 aia_maps = SDOproc.aia_process(aia_maps)
 hmi_maps = SDOproc.hmi_mask(hmi_maps)
 aia_maps = SDOproc.aia_reproject(aia_maps, hmi_maps)
 
-# TO-DO: 
+
+
 # Output files (Need Output Directories)
-# print('Writing processed data.')
-# aia_maps.save('{wvl}map_{index:03}.fits')
-# hmi_maps.save('hmi_map_{index:03}.fits')
+print('Saving AIA fits.')
+for map in aia_maps:
+	wvl = map.meta['wavelnth']
+	time = map.meta['t_obs']
+	# print(str(time).strip(':'))
+	time = char.translate(time,str.maketrans('', '', '.:'))
+	map.save(f'{path_euv}/proc/{wvl}_{time}.fits', hdu_type=CompImageHDU, overwrite=True)
+
+print('Saving HMI fits')
+for map in hmi_maps:
+	wvl = 'hmi_720s'
+	time = map.meta['t_obs']
+	time = char.translate(time,str.maketrans('', '', '.:'))
+	map.save(f'{path_hmi}/proc/{wvl}_{time}.fits', hdu_type=CompImageHDU, overwrite=True)
+
+# Plot AIA maps and HMI maps in panels
+
+# fig = plt.figure()
+# ax1 = fig.add_subplot(121, projection=aia_maps[0])
+# aia_maps[0].plot(axes=ax1)		
+# ax2 = fig.add_subplot(122, projection=hmi_maps[0])
+# hmi_maps[0].plot(axes=ax2)		  
+# ax3 = fig.add_subplot(221, projection=aia_maps[1])
+# aia_maps[1].plot(axes=ax3)
+# ax4 = fig.add_subplot(222, projection=aia_maps[2])
+# aia_maps[2].plot(axes=ax4)
+# plt.show()
 
 
 

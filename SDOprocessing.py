@@ -97,15 +97,6 @@ class SDODownload():
 			# for prod in products:
 		res.append(Fido.search(time_d, a.jsoc.Series('hmi.m_720s'), a.Sample(1*u.hr), a.jsoc.Notify(verif)))
 		return res
-		
-		# files = Fido.fetch(res[0], max_conn= 10, path = path_hmi)
-		# 	while files.errors != []:
-		# 		files = Fido.fetch(res[0], max_conn= 10, path = path_hmi)
-		# else:
-		# 	res.append(Fido.search(time_d, a.jsoc.Series('hmi.m_720s'), a.Sample(1*u.hr), a.jsoc.Notify(verif)))
-		# 	files = Fido.fetch(res[0], max_conn= 10, path = path_hmi + f'/temp')
-		# 	while files.errors != []:
-		# 		files = Fido.fetch(res[0], max_conn= 10, path = path_hmi + f'/temp')
 				
 
 
@@ -165,23 +156,23 @@ class SDODownload():
 
 class SDOproc():
 
-	global aia_prep, aia_deconv, aia_expnorm, aia_degcorr, aia_reproject
+	global aia_prep, aia_deconv, aia_expnorm, aia_degcorr
 
 	def aia_process(aia_map, 
 			 deconv:bool = False, 
 			 degcorr:bool = False,
 			 exnorm:bool = True):
-		aia_maps = []
-		for aiamap in aia_maps:
+		map_list = []
+		for map in aia_map:
 			if deconv:
-				aia_map = aia_deconv(aiamap)
-			aia_map = aia_prep(aiamap)
+				aia_map = aia_deconv(map)
+			aia_map = aia_prep(map)
 			if degcorr:
-				aia_map = aia_degcorr(aiamap)
+				aia_map = aia_degcorr(map)
 			if exnorm:
-				aia_map = aia_expnorm(aiamap) 
-			aia_maps.append(aia_map)
-			return aia_maps
+				aia_map = aia_expnorm(map) 
+			map_list.append(aia_map)
+		return map_list
 	
 	def aia_prep(aia_map):
 		# Prepares aia map to level 1.5, standard aiapy process.
@@ -207,19 +198,33 @@ class SDOproc():
 		aia_map = correct_degradation(aia_map)
 		return aia_map
 
-	def aia_reproject(aia_map, hmi_map):
+	def aia_reproject(aia_maps, hmi_maps):
 		# Reprojects AIA map to HMI map using wcs.
-		# The maps need to be in similar time frames.
-		aia_map= aia_map.reproject_to(hmi_map.wcs)
-		return aia_map
+		# The maps need to be in closest possible time frames.
+
+		hmi_times = []
+		for hmi in hmi_maps:
+			hmi_times.append(hmi.meta['t_obs'])
+
+		new_aia_maps = []
+		for aia_map in aia_maps:
+			rpr_aia_map = aia_map.reproject_to(hmi_maps[0].wcs)
+			rpr_aia_map.meta['wavelnth'] = aia_map.meta['wavelnth']
+			rpr_aia_map.meta['t_obs'] = aia_map.meta['t_obs']
+			new_aia_maps.append(rpr_aia_map)
+		return new_aia_maps
 		
 	def hmi_mask(
 	# Finds the coordinates of pixels outside of Rsun_obs for an HMI image and assigns NaN.
 		hmimap
 			):
-		hpc_coords = all_coordinates_from_map(hmimap)
-		mask = coordinate_is_on_solar_disk(hpc_coords)
-		hmidata = hmimap.data
-		hmidata[mask == False] = np.nan
-		hmimap = sunpy.map.Map(hmidata, hmimap.meta)
-		return hmimap
+		hmimaps = []
+		for map in hmimap:
+			hpc_coords = all_coordinates_from_map(map)
+			mask = coordinate_is_on_solar_disk(hpc_coords)
+			hmidata = map.data
+			hmidata[mask == False] = np.nan
+			hmimaps.append(sunpy.map.Map(hmidata, map.meta))
+		return hmimaps
+	
+	
