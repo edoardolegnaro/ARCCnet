@@ -18,7 +18,10 @@ client = drms.Client()
 # Replace this with whatever email(s) we want to use for this purpose.
 os.environ["JSOC_EMAIL"] = 'danielgass192@gmail.com'
 
+# Not all functions used, will need to refactor if we decide to keep/remove FIDO pipeline.
 class pipeutils():
+
+	# Contains utility functions to help with time/string handling and list comparisons with strings.
 	
 	def time_parse(start:str, end:str):
 		start_datetime = sunpy.time.parse_time(start)
@@ -45,8 +48,8 @@ class pipeutils():
 	
 class drmsDownload():
 
-	# global drms_aia_download, drms_hmi_download, drms_aia_patcher
-
+	# This downloads hmi files starting with queries to produce indices of good, missing files.
+	# Method collects indexes of bad files for use later in patching.
 	def drms_hmi_download(start:str, end:str, path:str, sample:str, index:list = []):
 		dur = pipeutils.time_delta(start, end)
 		print(dur)
@@ -74,7 +77,7 @@ class drmsDownload():
 			print('HMI files already present - skipping download.')
 		return downloads, final_ind, bad_result
 	
-
+	# This function works per wavelength to find good files via query and download via export as above.
 	def drms_aia_download(wvl:list, start:str, end:str,  path:str, sample:int, indices:list = []):
 		dur = pipeutils.time_delta(start, end)
 		hmi_ind = indices
@@ -110,7 +113,8 @@ class drmsDownload():
 			
 		return downloads, bad_results
 	
-	# This part is a bit baroque/slow - may want to refactor at some point.
+	## This part is a bit baroque/slow - may want to refactor at some point.
+	# 
 	def drms_aia_patcher(start, end, result, path):
 		bad_results = []
 		downloads = []
@@ -123,7 +127,7 @@ class drmsDownload():
 			downloads.append(download)
 		return download, sum(bad_results, [])
 
-
+	# This patches hmi and fetches corresponding AIA files for all specified wavelengths.
 	def drms_sdo_patcher(start, end, result, path_hmi, wvl, path_euv):
 		print(f'Attempting to replace {len(result)} bad/missing HMI record(s) in range.')
 		new_start, new_end = pipeutils.change_time(start, 720), pipeutils.change_time(end, 720)
@@ -221,10 +225,7 @@ class FidoDownload():
 
 		return good_results, bad_results.to_list()
 
-
 	def hmi_quality_check(
-		# TO-DO - HMI QUALITY CHECK - HEX HANDLING NEEDED
-		# 9. Filter .fits for QUALITY flag, remove certain images, and check for nearest file to replace.
 		# Checks provided map for list of approved QUALITY flag values.
 		# Returns the header.name of bad files.
 		map,
@@ -279,6 +280,7 @@ class SDOproc():
 
 	global aia_prep, aia_deconv, aia_expnorm, aia_degcorr
 
+	# Levels an AIA map to level 1.5, can also correct for degradation and deconvolve psf if needed.
 	def aia_process(aia_map, 
 			 deconv:bool = False, 
 			 degcorr:bool = False,
@@ -295,33 +297,32 @@ class SDOproc():
 			map_list.append(aia_map)
 		return map_list
 	
+	# Prepares aia map to level 1.5, standard aiapy process.
 	def aia_prep(aia_map):
-		# Prepares aia map to level 1.5, standard aiapy process.
-		# pointing_table = get_pointing_table("JSOC", start = (aia_map.date - 12 * u.h), end = (aia_map.date + 12 * u.h))
 		aia_map = update_pointing(aia_map)
 		aia_map = register(aia_map)
 		return aia_map
 	
+	# Assuming default parameters for deconvolve function for now
 	def aia_deconv(aia_map):
-		# assuming default parameters for deconvolve function for now
 		aia_map = deconvolve(aia_map)
 		return aia_map
 	
+	# Corrects for exposure time, has to cast to int and repackage fits file.
 	def aia_expnorm(aia_map):
-		# Corrects for exposure time, has to cast to int and repackage fits file.
 		aiad = aia_map.data/aia_map.exposure_time
 		aia_map = sunpy.map.Map(aiad.astype(int), aia_map.fits_header)
 		return aia_map
 	
+	# Corrects degradation.
+	# May want to get our own correction tables, but downloads each time this is called at present.
 	def aia_degcorr(aia_map):
-		# Corrects degradation.
-		# May want to get our own correction tables, but downloads each time this is called at present.
 		aia_map = correct_degradation(aia_map)
 		return aia_map
 
+	# Reprojects AIA map to HMI map using wcs.
+	# The maps need to be in closest possible time frames.
 	def aia_reproject(aia_maps, hmi_maps):
-		# Reprojects AIA map to HMI map using wcs.
-		# The maps need to be in closest possible time frames.
 		hmi_times = []
 		for hmi in hmi_maps:
 			hmi_times.append(hmi.meta['t_obs'])
@@ -334,8 +335,8 @@ class SDOproc():
 			new_aia_maps.append(rpr_aia_map)
 		return new_aia_maps
 		
-	def hmi_mask(
 	# Finds the coordinates of pixels outside of Rsun_obs for an HMI image and assigns NaN.
+	def hmi_mask(
 		hmimap
 			):
 		hmimaps = []

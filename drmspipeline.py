@@ -7,8 +7,7 @@ import matplotlib.pyplot as plt
 import astropy.units as u
 # import multiprocessing.pool
 
-# Define parameters - This will later be handled by accepting variables from flare timelines or cli.
-
+# Define parameters - This will later be handled by accepting times from ARs of interest.
 time_1 = '2013-01-01T00:00:00'
 time_2 = '2013-01-03T00:00:00'
 wavelengths = [171,193]
@@ -28,21 +27,21 @@ aia_dls, aia_bad = drmsDownload.drms_aia_download(wavelengths, time_1, time_2, p
 
 # Patch missing aia files from first run.
 p_aia_dls, p_aia_bad = drmsDownload.drms_aia_patcher(time_1, time_2, aia_bad, path_aia)
-retries = 0
-# print(p_aia_bad)
 
+# This repeats the patch attempt until the returned bad downloads list contains only empty values, or until rep_tol is exceeded.
+retries = 0
 if len(p_aia_bad) > 0:
 	new_start, new_end = pipeutils.change_time(time_1, 12), pipeutils.change_time(time_2, 12)
 	while max([len(rs) != 0 for rs in p_aia_bad]) and retries < rep_tol:
 		print(f'Attempt - {retries + 1}') 
 		p_aia_dls, p_aia_bad = drmsDownload.drms_aia_patcher(time_1, time_2, p_aia_bad, path_aia)
 		new_start, new_end = pipeutils.change_time(new_start, 12), pipeutils.change_time(new_end, 12)
-		# print(p_aia_bad)
 		retries += 1
 
 # Redownload bad/missing HMI and fetch accompanying AIA files.
 p_hmi_dls, p_hmi_ind, p_hmi_bad = drmsDownload.drms_sdo_patcher(time_1, time_2, hmi_bad, path_hmi, wavelengths, path_aia)
 
+# Attempts to redownload missing HMI files from the first patch attempt - repeats until no bad files or rep_tol is exceeded
 retries = 0
 print(p_hmi_bad)
 if len(p_hmi_bad) > 0:
@@ -57,7 +56,6 @@ if len(p_hmi_bad) > 0:
 print('Downloads Complete. Processing files.')
 
 ## Could possibly speed this up with multiprocessing. Should be 3/4 x faster with 4 core utilization.
-
 # Process HMI files / apply mask beyond limb.
 hmi_filelist = sorted(glob.glob(f'{path_hmi}/*.fits'))
 print('Loading HMI')
@@ -73,6 +71,7 @@ for map in hmi_maps:
 	time = char.translate(time,str.maketrans('', '', '.:'))
 	map.save(f'{hmi_save}/{wvl}_{time}.fits', hdu_type=CompImageHDU, overwrite=True)
 
+## This is VERY slow at present, will need to implement multithreading and maybe look at memory usage.
 # Process AIA files - levelling to 1.5, rescaling and trimming limb.
 print('Processing AIA')
 for wvl in wavelengths:
@@ -81,6 +80,7 @@ for wvl in wavelengths:
 	aia_maps = sunpy.map.Map(list(aia_filelist))
 	print('Processing maps')
 	aia_maps = SDOproc.aia_process(aia_maps)
+	# This step takes a long time. Reprojecting 40-60 4x4k maps is expensive.
 	print('Reprojecting maps')
 	aia_maps = SDOproc.aia_reproject(aia_maps, hmi_maps)
 	print('Saving AIA fits.')
@@ -92,9 +92,10 @@ for wvl in wavelengths:
 		time = char.translate(time,str.maketrans('', '', '.:'))
 		map.save(f'{aia_save}/{wvl}/{time}.fits', hdu_type=CompImageHDU, overwrite=True)
 
+# TO-DO
+# - Create file-list record ie; matching HMI and AIA images. Include data on 
+# - Update file structure for saving and uploading. Atm this only works on my machine.
+# - Implement tests (pytest).
+# - Better comments to make methods easier to read.
+# - Explore using query and observation (file) id to construct targeted queries and save JSOC resources/time - 24 queries per run -> 2 queries (1 HMI, 1 AIA).
 
-
-
-# Look for observation ID - turn into a list.
-# Pytest
-# Create record system for individual dates - which AR corresponds to which files + sets for timestamps.
