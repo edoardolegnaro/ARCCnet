@@ -14,15 +14,133 @@ import math
 import drms
 from astropy.time import Time
 
-# import tqdm
-
 client = drms.Client()
+# Replace this with whatever email(s) we want to use for this purpose.
 os.environ["JSOC_EMAIL"] = 'danielgass192@gmail.com'
 
-class SDODownload():
+class pipeutils():
+	
+	def time_parse(start:str, end:str):
+		start_datetime = sunpy.time.parse_time(start)
+		end_datetime = sunpy.time.parse_time(end)
+		t_diff = end_datetime.tai_seconds - start_datetime.tai_seconds
+		time_diff_days = math.ceil(t_diff / (24 * 3600))
+		return(time_diff_days)
+	
+	def time_delta(start:str, end:str):
+		start_t = sunpy.time.parse_time(start)
+		end_t = sunpy.time.parse_time(end)
+		t_diff = end_t.tai_seconds - start_t.tai_seconds
+		# time_diff_days = math.ceil(t_diff / (24 * 3600))
+		time_diff_hours = math.ceil(t_diff / (3600))
+		return time_diff_hours
+	
+	def change_time(time:str, shift:int):
+		time_d = sunpy.time.parse_time(time).tai_seconds + shift
+		time_d = Time(time_d, format='tai_seconds').isot
+		return time_d
+	
+	def comp_list(file:str, file_list:list):
+		return any(file in name for name in file_list)
+	
+class drmsDownload():
+
+	# global drms_aia_download, drms_hmi_download, drms_aia_patcher
+
+	def drms_hmi_download(start:str, end:str, path:str, sample:str, index:list = []):
+		dur = pipeutils.time_delta(start, end)
+		print(dur)
+		keys = ["T_REC", "T_OBS", "QUALITY"]
+		hmi_filelist = glob.glob(f'{path}/*.fits')
+		qstr = f"hmi.M_720s[{start}/{dur}h@{sample}m]"+"{magnetogram}"
+
+		request = client.query(qstr, key=keys)
+		bad_result = request[request.QUALITY != 0]
+		ind_result = request[request.QUALITY == 0].index
+		result = client.export(qstr, method="url", protocol='fits', email=os.environ["JSOC_EMAIL"])
+		result_urls = result.urls['filename']
+		# query and export sometimes produce different lengths - not a huge fan of dropping the last one but it should be okay.
+		ind_result = ind_result[ind_result <= max(result_urls.index)]
+		result_urls_filtered = result_urls[ind_result]
+		comparison_list = [not pipeutils.comp_list(time, hmi_filelist) for time in result_urls_filtered]
+		final_ind = result_urls_filtered[comparison_list].index
+		if len(index) > 0:
+				final_ind = np.intersect1d(final_ind, index)
+		downloads = []
+		if final_ind.size > 0:
+			print(f'Downloading - HMI')
+			downloads = result.download(directory=f'./data_generation/test_files/hmi/', index = final_ind)
+		else:
+			print('HMI files already present - skipping download.')
+		return downloads, final_ind, bad_result
+	
+
+	def drms_aia_download(wvl:list, start:str, end:str,  path:str, sample:int, indices:list = []):
+		dur = pipeutils.time_delta(start, end)
+		hmi_ind = indices
+		results = []
+		bad_results = []
+		keys = ["T_REC", "T_OBS", "QUALITY", "WAVELNTH"]
+
+		for wv in wvl:
+
+			aia_filelist = glob.glob(f'{path}/{wv}/*.fits')
+			qstr = f"aia.lev1_euv_12s[{start}/{dur}h@{sample}m]["+str(wv)+"]{image}"
+
+			request = client.query(qstr, key=keys)
+			bad_result = request[request.QUALITY != 0]
+			ind_result = request[request.QUALITY == 0].index
+			result = client.export(qstr, method="url", protocol='fits', email=os.environ["JSOC_EMAIL"])
+			result_urls = result.urls['filename']
+			ind_result = ind_result[ind_result <= max(result_urls.index)]
+			result_urls_filtered = result_urls[ind_result]
+			comparison_list = [not pipeutils.comp_list(time, aia_filelist) for time in result_urls_filtered]
+			final_ind = result_urls_filtered[comparison_list].index
+			if len(hmi_ind) > 0:
+				final_ind = np.intersect1d(final_ind, hmi_ind)
+			if len(bad_result) > 0:
+				bad_results.append(bad_result)
+			downloads = []
+			if len(final_ind) > 0:
+				print(f'Downloading AIA - {wv} Å')
+				downloads = result.download(directory=f'./data_generation/test_files/euv/{wv}/', index = final_ind)
+			else:
+				print(f'AIA {wv} Å files already present - skipping download.')
+				results.append(downloads)
+			
+		return downloads, bad_results
+	
+	# This part is a bit baroque/slow - may want to refactor at some point.
+	def drms_aia_patcher(start, end, result, path):
+		bad_results = []
+		downloads = []
+		for channel in result:
+			wv = list(channel['WAVELNTH'])[0]
+			print(f'Attempting to replace {len(channel)} bad/missing {wv} Å record(s) in range.')
+			new_start, new_end = pipeutils.change_time(start, 12), pipeutils.change_time(end, 12)
+			download, bad_aia = drmsDownload.drms_aia_download([wv], new_start, new_end, path, 60, channel.index)
+			bad_results.append(bad_aia)
+			downloads.append(download)
+		return download, sum(bad_results, [])
+
+
+	def drms_sdo_patcher(start, end, result, path_hmi, wvl, path_euv):
+		print(f'Attempting to replace {len(result)} bad/missing HMI record(s) in range.')
+		new_start, new_end = pipeutils.change_time(start, 720), pipeutils.change_time(end, 720)
+		p_hmi_dls, p_hmi_ind, p_hmi_bad = drmsDownload.drms_hmi_download(new_start, new_end, path_hmi, 60, result.index)
+		
+		# Find matching AIA images for recollected HMI magnetograms
+		if len(p_hmi_ind) > 0:
+			p_aia_dls, p_aia_bad = drmsDownload.drms_aia_download(wvl, new_start, new_end, path_euv, 60, p_hmi_ind)
+			if len(p_aia_bad) > 0:
+				drmsDownload.drms_aia_patcher(p_aia_dls, path_euv)
+		return p_hmi_dls, p_hmi_ind, p_hmi_bad
+	
+# This class is currently not used - Fido having some issues with reliable downloads, but retained code for possible future use.
+class FidoDownload():
 	# Caching will probably be a good idea - file keeping track of which fits are available.
 	# global fetch_request
-	global time_parse, time_delta, aia_drms_qual_check, hmi_drms_qual_check
+	global aia_drms_qual_check, hmi_drms_qual_check
 	def fido_aia_fetch_request(req, euv_path:str, tmpstorage:bool = False,):
 		npe = ''
 		filepaths = []
@@ -73,57 +191,13 @@ class SDODownload():
 			res.append(Fido.search(time_d, a.Wavelength(wvl*u.AA), a.Instrument('AIA'), a.Sample(time*u.min)))
 		return res
 
-		# Fetch Fido response.
-		# npe = ''
-		# if tmpstorage:
-		# 	npe = '/temp/'
-		# for result, wvl in zip(res, wavelengths):
-		# 	fetch_request(result, path = f'{npe}path_euv' + f'/{wvl}')
-	
-	def fido_hmi_ts_request(
-	start:str,
-	end:str,
-	verif:str,
-	time:int,
-	tmpstorage:bool = True,):
-
-	# 1. Convert date range to Time Delta
-	# 2. Define required data product(s) 
-	# 3. Pass argument to Fido (Will switch to DRMS when refactoring/updating python versions)
-	# 4. Fetch argument.
-	# 5. Check for failed downloads and reattempt if needed.
+	def fido_hmi_ts_request(start:str, end:str, verif:str, time:int, tmpstorage:bool = True,):
 
 		time_d = a.Time(start,end)
 		res = []
 		nph = ''
-		# if tmpstorage: 
-		# 	nph = '/temp/'
-		# new_path_hmi = f'{nph}path_hmi'
-			# for prod in products:
 		res.append(Fido.search(time_d, a.jsoc.Series('hmi.m_720s'), a.Sample(time*u.min), a.jsoc.Notify(verif)))
 		return res
-
-	def time_parse(
-		start:str,
-		end:str):
-		start_datetime = sunpy.time.parse_time(start)
-		end_datetime = sunpy.time.parse_time(end)
-		t_diff = end_datetime.tai_seconds - start_datetime.tai_seconds
-		time_diff_days = math.ceil(t_diff / (24 * 3600))
-		return(time_diff_days)
-	
-	def time_delta(start:str, end:str):
-		start_t = sunpy.time.parse_time(start)
-		end_t = sunpy.time.parse_time(end)
-		t_diff = end_t.tai_seconds - start_t.tai_seconds
-		# time_diff_days = math.ceil(t_diff / (24 * 3600))
-		time_diff_hours = math.ceil(t_diff / (3600))
-		return time_diff_hours
-	
-	def time_shift(time:str, shift:int):
-		time_d = sunpy.time.parse_time(time).tai_seconds + shift
-		time_d = Time(time_d, format='tai_seconds').isot
-		return time_d
 	
 	def aia_drms_qual_check(qstr:str, keys:list):
 		bad_results = []
@@ -147,48 +221,6 @@ class SDODownload():
 
 		return good_results, bad_results.to_list()
 
-	def aia_drms_download(
-		start:str,
-		end:str,
-		wavelengths:list,
-		sample:int,
-		retry_dl:bool = True):
-
-		results = []
-		t_range = time_parse(start, end)
-		keys = ["T_OBS", "QUALITY", "WAVELNTH",]
-		for wv in wavelengths:
-			qstr = f"aia.lev1_euv_12s[{start}/{t_range}d@{sample}m]["+str(wv)+"]{image}"
-			result_ind, bad_results = aia_drms_qual_check(qstr, keys)
-			result = client.export(qstr, method="url", protocol='fits', email=os.environ["JSOC_EMAIL"])
-			print(f'Downloading')
-			downloads = result.download(directory=f'./data_generation/test_files/euv/{wv}/', index = result_ind)
-			if bad_results != [] and retry_dl:
-				for brs in bad_results:
-					next_time = sunpy.time.parse_time(brs.to_list()).tai_seconds + 12
-					next_time = Time(next_time, format='tai_seconds').isot
-				results.append(downloads)
-
-		return results
-
-	def drms_hmi_download(start:str, end:str, path:str, sample:str):
-		dur = time_delta(start, end)
-		hmi_filelist = glob.glob(f'{path}/*.fits')
-		qstr = f"hmi.M_720s[{start}/{dur}h@{sample}m]"+"{magnetogram}"
-		request = client.query(qstr, key=keys)
-		bad_result = request[request.QUALITY != 0]
-		ind_result = request[request.QUALITY == 0].index
-		result = client.export(qstr, method="url", protocol='fits', email=os.environ["JSOC_EMAIL"])
-		result_urls = result.urls['filename']
-		comparison_list = [comp_list(time, hmi_filelist) for time in result_urls]
-		dl_indices = np.where(np.array(comparison_list) == False)[0]
-
-		if dl_indices.size != 0:
-			print(f'Downloading - HMI')
-			downloads = result.download(directory=f'./data_generation/test_files/hmi/', index = dl_indices)
-		else:
-			print('All files already present - skipping download.')
-		return downloads, dl_indices, bad_result
 
 	def hmi_quality_check(
 		# TO-DO - HMI QUALITY CHECK - HEX HANDLING NEEDED
@@ -290,7 +322,6 @@ class SDOproc():
 	def aia_reproject(aia_maps, hmi_maps):
 		# Reprojects AIA map to HMI map using wcs.
 		# The maps need to be in closest possible time frames.
-
 		hmi_times = []
 		for hmi in hmi_maps:
 			hmi_times.append(hmi.meta['t_obs'])
