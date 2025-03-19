@@ -3,8 +3,8 @@ import os
 import torchvision.transforms as v2
 
 ### General ###
-resnet_version = "resnet18"
-gpu_index = 0
+resnet_version = "resnet152"
+gpu_index = 1
 epochs = 500
 patience = 15
 batch_size = 32
