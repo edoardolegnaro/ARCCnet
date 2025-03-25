@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # ---
 # jupyter:
 #   jupytext:
@@ -171,6 +172,17 @@ plt.legend(fontsize=11)
 plt.show()
 
 # %%
+with plt.style.context("seaborn-v0_8-darkgrid"):
+    plt.figure(figsize=(12, 6))
+    plt.bar(time_counts_MDI.index, time_counts_MDI.values)
+    plt.bar(time_counts_HMI.index, time_counts_HMI.values)
+    plt.xlabel("Time")
+    plt.ylabel("n° of ARs per day")
+    plt.yticks(np.arange(0, 18 + 2, 2))
+    plt.ylim([0, 17])
+    plt.show()
+
+# %%
 dates_MDI = AR_df_MDI["dates"].values
 dates_HMI = AR_df_HMI["dates"].values
 colors = ["blue", "red"]
@@ -194,16 +206,80 @@ plt.legend(loc="upper left")  # Choose location as appropriate
 
 plt.show()
 
+# %%
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+import numpy as np
+from datetime import datetime
+
+# Define color variables
+mdi_color = "royalblue"
+hmi_color = "tomato"
+
+# Create a list of tick dates: every two years from 1996 to 2023
+years = np.arange(1996, 2025, 2)
+tick_dates = [datetime(year, 1, 1) for year in years]
+
+with plt.style.context("seaborn-v0_8-darkgrid"):
+    # Create subplots with a shared x-axis and custom height ratios (top panel larger)
+    fig, (ax1, ax2) = plt.subplots(
+        2, 1, figsize=(16, 9), sharex=True,
+        gridspec_kw={'height_ratios': [4, 1]}
+    )
+    
+    # --- Top Panel: Bar Plot ---
+    ax1.bar(time_counts_MDI.index, time_counts_MDI.values, width=0.8, color=mdi_color, alpha=0.9, label="MDI")
+    ax1.bar(time_counts_HMI.index, time_counts_HMI.values, width=0.8, color=hmi_color, alpha=0.9, label="HMI")
+    ax1.set_ylabel("n° of ARs per day", fontsize=16)
+    ax1.set_yticks(np.arange(0, 20, 2))
+    ax1.tick_params(axis="y", labelsize=14)
+    ax1.set_ylim([0, 17])
+    ax1.legend(loc="upper left", fontsize=14)
+    ax1.grid(True, which="both", linestyle="--", alpha=0.5)
+    
+    # --- Bottom Panel: Timeline as Vertical Bars ---
+    colors = [mdi_color, hmi_color]
+    labels = ["MDI", "HMI"]
+    # For visual separation, assign different vertical ranges for each dataset:
+    for idx, (dates_val, label, color) in enumerate(zip([dates_MDI, dates_HMI], labels, colors)):
+        if label == "MDI":
+            ymin, ymax = 0.2, 0.8
+        else:
+            ymin, ymax = 1.2, 1.8
+        ax2.vlines(dates_val, ymin, ymax, color=color, alpha=0.9, label=label)
+    
+    ax2.set_yticks([])  # Hide y-axis ticks
+    ax2.set_ylim([0, 2])
+    # Optionally, you can add a title or legend here if needed
+    # ax2.set_title("Dataset Timeline", fontsize=16)
+    # ax2.legend(loc="upper left", fontsize=14)
+    ax2.grid(True, which="both", linestyle="--", alpha=0.75)
+    
+    # --- Shared X-Axis Formatting ---
+    # Format the x-axis to display only the year
+    ax2.xaxis_date()
+    ax2.xaxis.set_major_locator(mdates.AutoDateLocator())
+    ax2.xaxis.set_major_formatter(mdates.DateFormatter("%Y"))
+    ax2.tick_params(axis="x", labelsize=14)
+    
+    # Set custom x-ticks to the list of even years from 1996 to 2023
+    ax2.set_xticks(tick_dates)
+    plt.xticks(rotation=45)
+    ax2.set_xlabel("Time", fontsize=16)
+    
+    plt.tight_layout()
+    plt.show()
+
 # %% [markdown]
 # # ARs Location on the Sun
 
 # %%
 lonV = np.deg2rad(np.where(AR_IA["processed_path_image_hmi"] != "", AR_IA["longitude_hmi"], AR_IA["longitude_mdi"]))
-degree_ticks_lon = np.arange(-90, 91, 30)
+degree_ticks_lon = np.arange(-90, 91, 15)
 rad_ticks_lon = np.deg2rad(degree_ticks_lon)
 
 latV = np.deg2rad(np.where(AR_IA["processed_path_image_hmi"] != "", AR_IA["latitude_hmi"], AR_IA["latitude_mdi"]))
-degree_ticks_lat = np.arange(-90, 91, 30)
+degree_ticks_lat = np.arange(-90, 91, 15)
 rad_ticks_lat = np.deg2rad(degree_ticks_lat)
 
 with sns.axes_style("darkgrid"):
@@ -278,8 +354,9 @@ for lat in lats:
     z = np.sin(lat) * np.ones(num_points)
     ax.plot(y, z, "k-", linewidth=0.2)
 
-ax.scatter(rear_yV, rear_zV, s=1, alpha=0.2, color="r", label="Rear")
-ax.scatter(front_yV, front_zV, s=1, alpha=0.2, color="b", label="Front")
+
+ax.scatter(rear_yV, rear_zV, s=1, alpha=0.2, color=hmi_color, label="Rear")
+ax.scatter(front_yV, front_zV, s=1, alpha=0.2, color=mdi_color, label="Front")
 
 ax.set_xlim(-1.1, 1.1)
 ax.set_ylim(-1.1, 1.1)
@@ -421,29 +498,42 @@ def find_outliers(data):
 # %%
 df_alpha = df[df["magnetic_class"] == "Alpha"].reset_index(drop=False)
 df_beta = df[df["magnetic_class"] == "Beta"].reset_index(drop=False)
-df_betax = pd.concat(
-    [
-        df[df["magnetic_class"] == "Beta-Gamma"],
-        df[df["magnetic_class"] == "Beta-Delta"],
-        df[df["magnetic_class"] == "Beta-Gamma-Delta"],
-    ]
-).reset_index(drop=False)
+df_beta_delta = df[df["magnetic_class"] == "Beta-Delta"].reset_index(drop=False)
+df_beta_gamma = df[df["magnetic_class"] == "Beta-Gamma"].reset_index(drop=False)
+df_beta_gamma_delta = df[df["magnetic_class"] == "Beta-Gamma-Delta"].reset_index(drop=False)
+# df_betax = pd.concat(
+#     [
+#         df[df["magnetic_class"] == "Beta-Gamma"],
+#         df[df["magnetic_class"] == "Beta-Delta"],
+#         df[df["magnetic_class"] == "Beta-Gamma-Delta"],
+#     ]
+# ).reset_index(drop=False)
 
 # %%
 cache_dir = os.path.join(os.getcwd(), "cache")
 os.makedirs(cache_dir, exist_ok=True)
 results_alpha = compute_statistics(df_alpha, cache=True, cache_file=os.path.join(cache_dir, "results_alpha_cache.pkl"))
 results_beta = compute_statistics(df_beta, cache=True, cache_file=os.path.join(cache_dir, "results_beta_cache.pkl"))
-results_betax = compute_statistics(df_betax, cache=True, cache_file=os.path.join(cache_dir, "results_betax_cache.pkl"))
+#results_betax = compute_statistics(df_betax, cache=True, cache_file=os.path.join(cache_dir, "results_betax_cache.pkl"))
+results_beta_delta = compute_statistics(df_beta_delta, cache=True, cache_file=os.path.join(cache_dir, "results_beta_delta_cache.pkl"))
+results_beta_gamma_delta = compute_statistics(df_beta_gamma_delta, cache=True, cache_file=os.path.join(cache_dir, "results_beta_delta__gamma_cache.pkl"))
+results_beta_gamma = compute_statistics(df_beta_gamma, cache=True, cache_file=os.path.join(cache_dir, "results_beta_gamma_cache.pkl"))
 
 # %%
 df_alpha_results = pd.DataFrame(results_alpha)
 df_beta_results = pd.DataFrame(results_beta)
-df_betax_results = pd.DataFrame(results_betax)
+#df_betax_results = pd.DataFrame(results_betax)
+df_beta_delta_results = pd.DataFrame(results_beta_delta)
+df_beta_gamma_delta_results = pd.DataFrame(results_beta_gamma_delta)
+df_beta_gamma_results = pd.DataFrame(results_beta_gamma)
 df_alpha_results["Group"] = "Alpha"
 df_beta_results["Group"] = "Beta"
-df_betax_results["Group"] = "Beta-X"
-df_results_combined = pd.concat([df_alpha_results, df_beta_results, df_betax_results], ignore_index=True)
+#df_betax_results["Group"] = "Beta-X"
+df_beta_delta_results["Group"] = "Beta-Delta"
+df_beta_gamma_delta_results["Group"] = "Beta-Gamma-Delta"
+df_beta_gamma_results["Group"] = "Beta-Gamma"
+#df_results_combined = pd.concat([df_alpha_results, df_beta_results, df_betax_results], ignore_index=True)
+df_results_combined = pd.concat([df_alpha_results, df_beta_results, df_beta_delta_results, df_beta_gamma_results, df_beta_gamma_delta_results], ignore_index=True)
 combined_describe = df_results_combined.groupby("Group").describe()
 
 # %% [markdown]
@@ -473,11 +563,18 @@ def plot_histograms(key):
     # Calculate weights for each dataset so that the sum of the weights is 1
     weights_alpha = np.ones_like(results_alpha[key]) / len(results_alpha[key])
     weights_beta = np.ones_like(results_beta[key]) / len(results_beta[key])
-    weights_betax = np.ones_like(results_betax[key]) / len(results_betax[key])
+    weights_beta_delta = np.ones_like(results_beta_delta[key]) / len(results_beta[key])
+    weights_beta_gamma = np.ones_like(results_beta_gamma[key]) / len(results_beta[key])
+    weights_beta_gamma_delta = np.ones_like(results_beta_gamma_delta[key]) / len(results_beta[key])
+    #weights_betax = np.ones_like(results_betax[key]) / len(results_betax[key])
     # Plot histograms
     plt.hist(results_alpha[key], weights=weights_alpha, alpha=0.35, label="Alpha", density=True)
     plt.hist(results_beta[key], weights=weights_beta, alpha=0.35, label="Beta", density=True)
-    plt.hist(results_betax[key], weights=weights_betax, alpha=0.35, label="Beta-X", density=True)
+    #plt.hist(results_betax[key], weights=weights_betax, alpha=0.35, label="Beta-X", density=True)
+    plt.hist(results_beta_delta[key], weights=weights_beta_delta, alpha=0.35, label="Beta-X", density=True)
+    plt.hist(results_beta_gamma[key], weights=weights_beta_gamma, alpha=0.35, label="Beta-X", density=True)
+    plt.hist(results_beta_gamma_delta[key], weights=weights_beta_gamma_delta, alpha=0.35, label="Beta-X", density=True)
+
     plt.legend()
     plt.title("Normalized Histograms of " + title_mapping[key])
     plt.xlabel(key.title() + " Value")
@@ -509,8 +606,12 @@ def results_to_df(results, label):
     return df
 
 
+# combined_df = pd.concat(
+#     [results_to_df(results_alpha, "Alpha"), results_to_df(results_beta, "Beta"), results_to_df(results_betax, "Beta-x")]
+# )
 combined_df = pd.concat(
-    [results_to_df(results_alpha, "Alpha"), results_to_df(results_beta, "Beta"), results_to_df(results_betax, "Beta-x")]
+    [results_to_df(results_alpha, "Alpha"), results_to_df(results_beta, "Beta"), results_to_df(results_beta_delta, "Beta-Delta"),
+    results_to_df(results_beta_gamma, "Beta-Gamma"), results_to_df(results_beta_gamma_delta, "Beta-Gamma-Delta")]
 )
 
 if combined_df.isnull().values.any():
@@ -533,9 +634,12 @@ for key in title_mapping:
         [
             results_alpha[key][~np.isnan(results_alpha[key])],
             results_beta[key][~np.isnan(results_beta[key])],
-            results_betax[key][~np.isnan(results_betax[key])],
+            #results_betax[key][~np.isnan(results_betax[key])],
+            results_beta_delta[key][~np.isnan(results_beta_delta[key])],
+            results_beta_gamma[key][~np.isnan(results_beta_gamma[key])],
+            results_beta_gamma_delta[key][~np.isnan(results_beta_gamma_delta[key])],
         ],
-        ["Alpha", "Beta", "Beta-x"],
+        ["Alpha", "Beta", "Beta-Delta", "Beta-Gamma", "Beta-Gamma-Delta"],
         title_mapping[key],  # Use the formal title from the mapping
     )
 
@@ -544,15 +648,18 @@ for key in title_mapping:
 
 # %%
 table = []
-keys = set(results_alpha.keys()) | set(results_beta.keys()) | set(results_betax.keys())  # Union of all keys
+keys = set(results_alpha.keys()) | set(results_beta.keys()) | set(results_beta_delta.keys()) | set(results_beta_gamma.keys())  | set(results_beta_gamma_delta.keys())# Union of all keys
 
 for key in sorted(keys):
     alpha_count = len(find_outliers(results_alpha.get(key, [])))
     beta_count = len(find_outliers(results_beta.get(key, [])))
-    betax_count = len(find_outliers(results_betax.get(key, [])))
-    table.append([key, alpha_count, beta_count, betax_count])
+    beta_delta_count = len(find_outliers(results_beta_delta.get(key, [])))
+    beta_gamma_count = len(find_outliers(results_beta_gamma.get(key, [])))
+    beta_gamma_delta_count = len(find_outliers(results_beta_gamma_delta.get(key, [])))
+    #betax_count = len(find_outliers(results_betax.get(key, [])))
+    table.append([key, alpha_count, beta_count, beta_delta_count, beta_gamma_count, beta_gamma_delta_count])
 
-outliers_df = pd.DataFrame(table, columns=["Key", "Alpha", "Beta", "Beta-x"])
+outliers_df = pd.DataFrame(table, columns=["Key", "Alpha", "Beta", "Beta-Delta", "Beta-Gamma", "Beta-Gamma-Delta"])
 
 plt.figure(figsize=(4, 6))
 sns.heatmap(outliers_df.set_index("Key"), annot=True, cmap="viridis", fmt="d")
@@ -628,4 +735,9 @@ plot_outliers(df_alpha, results_alpha, "iqr", num_outliers=6, cmap="gray")
 plot_outliers(df_beta, results_beta, "iqr", num_outliers=6, cmap="gray")
 
 # %%
-plot_outliers(df_betax, results_betax, "iqr", num_outliers=6, cmap="gray")
+plot_outliers(df_beta_delta, results_beta_delta, "iqr", num_outliers=6, cmap="gray")
+
+# %%
+plot_outliers(df_beta_gamma_delta, results_beta_gamma_delta, "iqr", num_outliers=6, cmap="gray")
+
+# %%
