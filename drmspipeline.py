@@ -1,106 +1,86 @@
-import glob
+from concurrent.futures import ProcessPoolExecutor
 
 import sunpy.map
-from numpy import char
 
-from astropy.io.fits import CompImageHDU
+from SDOprocessing import DrmsDownload, PipeUtils, SDOproc, load_config
 
-from SDOprocessing import SDOproc, drmsDownload, pipeutils
 
-# import multiprocessing.pool
+def match_files(aia_paths, hmi_paths):
+    hmi_times = [sunpy.map.Map(hmi).meta["T_OBS"][0:-8] for hmi in hmi_paths]
+    packed_files = []
+    for map_name in aia_paths:
+        aia_map = sunpy.map.Map(map_name)
+        t_d = [PipeUtils.time_diff_s(aia_map.meta["T_OBS"], time) for time in hmi_times]
+        hmi_match = hmi_paths[t_d.index(min(t_d))]
+        packed_files.append([map_name, hmi_match])
+    return packed_files
 
-# Define parameters - This will later be handled by accepting times from ARs of interest.
-time_1 = "2013-01-01T00:00:00"
-time_2 = "2013-01-03T00:00:00"
-wavelengths = [171, 193]
-rep_tol = 5
-sample = 60
 
-# Replace this with path we want to use.
-path_aia = "/Users/danielgass/Desktop/ARCCnetDan/ARCCnet/data_generation/test_files/euv"
-path_hmi = "/Users/danielgass/Desktop/ARCCnetDan/ARCCnet/data_generation/test_files/hmi"
+def drms_pipeline(starts: list, path: str, keys: list, wavelengths: list, sample: int = 60):
+    # Extract and define the record number, start and end time.
+    start_t, end_t = starts[1], starts[2]
 
-# Begin HMI download - this is needed for all image pairings.
-hmi_dls, hmi_ind, hmi_bad = drmsDownload.drms_hmi_download(time_1, time_2, path_hmi, sample)
-print(hmi_bad)
+    # Define the query, find high quality file recnums and export for hmi and aia series.
+    hmi_query, hmi_export = DrmsDownload.hmi_query(start_t, end_t, keys, sample)
+    aia_query, aia_export = DrmsDownload.aia_query(hmi_query, keys, wavelengths)
 
-# Begin AIA download - hmi_ind used to align AIA downloads with valid HMI files.
-aia_dls, aia_bad = drmsDownload.drms_aia_download(wavelengths, time_1, time_2, path_aia, sample, hmi_ind)
+    # Use the queries and exports to download data, checking for existing data and producing paths if needed.
+    hmi_dls, hmi_exs = DrmsDownload.l1_file_save(hmi_export, hmi_query, path)
+    aia_dls, aia_exs = DrmsDownload.l1_file_save(aia_export, aia_query, path)
 
-# Patch missing aia files from first run.
-p_aia_dls, p_aia_bad = drmsDownload.drms_aia_patcher(time_1, time_2, aia_bad, path_aia)
+    return hmi_dls, aia_dls, hmi_exs, aia_exs
 
-# This repeats the patch attempt until the returned bad downloads list contains only empty values, or until rep_tol is exceeded.
-retries = 0
-if len(p_aia_bad) > 0:
-    new_start, new_end = pipeutils.change_time(time_1, 12), pipeutils.change_time(time_2, 12)
-    while max([len(rs) != 0 for rs in p_aia_bad]) and retries < rep_tol:
-        print(f"Attempt - {retries + 1}")
-        p_aia_dls, p_aia_bad = drmsDownload.drms_aia_patcher(time_1, time_2, p_aia_bad, path_aia)
-        new_start, new_end = pipeutils.change_time(new_start, 12), pipeutils.change_time(new_end, 12)
-        retries += 1
 
-# Redownload bad/missing HMI and fetch accompanying AIA files.
-p_hmi_dls, p_hmi_ind, p_hmi_bad = drmsDownload.drms_sdo_patcher(
-    time_1, time_2, hmi_bad, path_hmi, wavelengths, path_aia
-)
+# Loads saved l1 HMI, masks, and saves to output l2 dir (creates paths if needed). Will not resave existing files.
+def hmi_l2(hmi_path):
+    path = load_config()["path"]
+    hmi_map = sunpy.map.Map(hmi_path)
+    hmi_map = SDOproc.hmi_mask(hmi_map)
+    proc_path = SDOproc.l2_file_save(hmi_map, hmi_path, path)
+    del hmi_map, path
+    return proc_path
 
-# Attempts to redownload missing HMI files from the first patch attempt - repeats until no bad files or rep_tol is exceeded
-retries = 0
-print(p_hmi_bad)
-if len(p_hmi_bad) > 0:
-    new_start, new_end = pipeutils.change_time(time_1, 720), pipeutils.change_time(time_2, 720)
-    while len(p_hmi_bad) > 0 and retries < rep_tol:
-        print(f"Attempt - {retries + 1}")
-        p_hmi_dls, p_hmi_ind, p_hmi_bad = drmsDownload.drms_sdo_patcher(
-            new_start, new_end, p_hmi_bad, path_hmi, wavelengths, path_aia
+
+# Process AIA files - levelling to 1.5, rescaling and trimming limb. Matches to nearest HMI map in provided hmi series to reproject.
+def aia_l2(packed_paths):
+    ## This is VERY slow at present, will need to implement multithreading and maybe look at memory usage.
+    path = load_config()["path"]
+    aia_path, hmi_path = packed_paths[0], packed_paths[1]
+    hmi_match = sunpy.map.Map(hmi_path)
+    aia_map = sunpy.map.Map(aia_path)
+    aia_map = SDOproc.aia_process(aia_map)
+    # This step takes a long time. Reprojecting 4x4k maps is expensive.
+    aia_map = SDOproc.aia_reproject(aia_map, hmi_match)
+    proc_path = SDOproc.l2_file_save(aia_map, aia_path, path)
+    del aia_map, hmi_match, path
+    return proc_path
+
+    # TO-DO
+    # - Create file-list record ie; matching HMI and AIA images. Include some metadata (ie; quality flags etc) +
+    # - Update file structure for saving and uploading. Atm this only works on my machine. +
+    # - Implement tests (pytest).
+    # - Better comments to make methods easier to read.
+    # - Explore using query and observation (file) id to construct targeted queries and save JSOC resources/time - 24 queries per run -> 2 queries (1 HMI, 1 AIA). +
+    # - query by RECNUM +
+    # - How do we see the API working
+
+
+# Imagining this will work by inputting a list of dates in tuple form w/ AR number ie; [[ARnumber_1, start_1, end_1,...],[ARnumber_2, start_2, end_2,...][]..]
+# - Simulating intended usage - list of times and samples for different periods/requirements
+
+if __name__ == "__main__":
+    config = load_config()
+    keys = ["T_REC", "T_OBS", "QUALITY", "WAVELNTH", "*recnum*", "INSTRUME"]
+    starts = [[0, "2017-02-01T01:00:00", "2017-02-01T03:00:00"]]
+
+    for range in starts:
+        hmi_dls, aia_dls, hmi_exs, aia_exs = drms_pipeline(
+            range, config["path"], keys, config["wavelengths"], config["sample"]
         )
-        print(p_hmi_bad)
-        new_start, new_end = pipeutils.change_time(new_start, 720), pipeutils.change_time(new_end, 720)
-        retries += 1
+    # This
+    with ProcessPoolExecutor(6) as executor:
+        hmi_proc = executor.map(hmi_l2, hmi_exs)
 
-print("Downloads Complete. Processing files.")
+        packed_files = match_files(aia_exs, hmi_exs)
 
-## Could possibly speed this up with multiprocessing. Should be 3/4 x faster with 4 core utilization.
-# Process HMI files / apply mask beyond limb.
-hmi_filelist = sorted(glob.glob(f"{path_hmi}/*.fits"))
-print("Loading HMI")
-hmi_maps = sunpy.map.Map(hmi_filelist)
-print("Masking HMI")
-hmi_maps = SDOproc.hmi_mask(hmi_maps)
-print("Saving HMI")
-hmi_save = "/Users/danielgass/Desktop/ARCCnetDan/ARCCnet/data_generation/test_files/proc/hmi"
-for map in hmi_maps:
-    wvl = "hmi_720s"
-    time = map.meta["t_obs"]
-    # print(time)
-    time = char.translate(time, str.maketrans("", "", ".:"))
-    map.save(f"{hmi_save}/{wvl}_{time}.fits", hdu_type=CompImageHDU, overwrite=True)
-
-## This is VERY slow at present, will need to implement multithreading and maybe look at memory usage.
-# Process AIA files - levelling to 1.5, rescaling and trimming limb.
-print("Processing AIA")
-for wvl in wavelengths:
-    aia_filelist = sorted(glob.glob(f"{path_aia}/{wvl}/*.fits"))
-    print("Loading maps")
-    aia_maps = sunpy.map.Map(list(aia_filelist))
-    print("Processing maps")
-    aia_maps = SDOproc.aia_process(aia_maps)
-    # This step takes a long time. Reprojecting 40-60 4x4k maps is expensive.
-    print("Reprojecting maps")
-    aia_maps = SDOproc.aia_reproject(aia_maps, hmi_maps)
-    print("Saving AIA fits.")
-    aia_save = "/Users/danielgass/Desktop/ARCCnetDan/ARCCnet/data_generation/test_files/proc/aia/"
-    for map in aia_maps:
-        wvl = map.meta["wavelnth"]
-        time = map.meta["t_obs"]
-        # print(str(time).strip(':'))
-        time = char.translate(time, str.maketrans("", "", ".:"))
-        map.save(f"{aia_save}/{wvl}/{time}.fits", hdu_type=CompImageHDU, overwrite=True)
-
-# TO-DO
-# - Create file-list record ie; matching HMI and AIA images. Include data on
-# - Update file structure for saving and uploading. Atm this only works on my machine.
-# - Implement tests (pytest).
-# - Better comments to make methods easier to read.
-# - Explore using query and observation (file) id to construct targeted queries and save JSOC resources/time - 24 queries per run -> 2 queries (1 HMI, 1 AIA).
+        aia_proc = executor.map(aia_l2, packed_files)
