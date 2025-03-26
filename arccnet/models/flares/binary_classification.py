@@ -1,3 +1,19 @@
+# ---
+# jupyter:
+#   jupytext:
+#     cell_metadata_filter: -all
+#     custom_cell_magics: kql
+#     text_representation:
+#       extension: .py
+#       format_name: percent
+#       format_version: '1.3'
+#       jupytext_version: 1.11.2
+#   kernelspec:
+#     display_name: Python 3
+#     language: python
+#     name: python3
+# ---
+
 # %%
 import os
 import pandas as pd
@@ -8,6 +24,7 @@ from arccnet.visualisation import utils as ut_v
 from arccnet.visualisation import EDA_flares_utils as ut_f
 import arccnet.models.dataset_utils as ut_d
 import seaborn as sns
+import logging
 from sklearn.model_selection import train_test_split
 from sklearn.model_selection import StratifiedShuffleSplit
 from sklearn.model_selection import GroupShuffleSplit
@@ -16,7 +33,7 @@ sns.set_style("darkgrid")
 
 # %%
 pd.set_option("display.max_columns", None)
-data_folder = os.getenv("ARCAFF_DATA_FOLDER", "/home/edoardo/Code/ARCAFF/data")
+data_folder = os.getenv("ARCAFF_DATA_FOLDER", "../../../../data")
 df_file_name = "mag-pit-flare-dataset_1996-01-01_2023-01-01_dev.parq"
 df_flares = pd.read_parquet(os.path.join(data_folder, df_file_name))
 
@@ -50,7 +67,7 @@ def check_fits_file_existence(df, data_folder, dataset_folder):
             path_key = "path_image_cutout_mdi"
         else:
             # Handle the case where both path columns are None
-            print(f"Warning: Both 'path_image_cutout_hmi' and 'path_image_cutout_mdi' are None for row index {index}. Skipping.")
+            logging.warning(f"Both 'path_image_cutout_hmi' and 'path_image_cutout_mdi' are None for row index {index}. Skipping.")
             continue  # Skip to the next row
 
         # Check if the path value is None or not a string
@@ -67,9 +84,7 @@ def check_fits_file_existence(df, data_folder, dataset_folder):
     return df
 
 # %%
-df_flares_exists = check_fits_file_existence(df_flares.copy(), data_folder, dataset_folder)
-
-# %%
+df_flares_exists = check_fits_file_existence(df_flares.copy(), data_folder, dataset_folder).copy()
 df_flares_exists
 
 # %%
@@ -93,9 +108,8 @@ plt.show()
 
 # %%
 df_flares_data = df_flares_exists[df_flares_exists['file_exists']]
-
-# %%
 df_flares_data
+
 
 # %%
 def categorize_flare(row, threshold='C'):
@@ -255,8 +269,8 @@ def plot_ar_flaring_distribution_percentages(train_set, val_set, test_set):
     for set_name, dataset in sets.items():
         flaring_counts = dataset['flaring_flag'].value_counts()
         total_count = len(dataset)
-        quiet_percentage = (flaring_counts.get(0, 0) / total_count) * 100 if total_count > 0 else 0
-        flaring_percentage = (flaring_counts.get(1, 0) / total_count) * 100 if total_count > 0 else 0
+        quiet_percentage = (flaring_counts.get('quiet', 0) / total_count) * 100 if total_count > 0 else 0
+        flaring_percentage = (flaring_counts.get('flares', 0) / total_count) * 100 if total_count > 0 else 0
         percentages_data.append([quiet_percentage, flaring_percentage])
 
     percentages_data = np.array(percentages_data)
@@ -264,14 +278,15 @@ def plot_ar_flaring_distribution_percentages(train_set, val_set, test_set):
     x = np.arange(len(sets))
     width = 0.35
 
-    ax2.bar(x - width/2, percentages_data[:, 0], width, label='Quiet ARs', color=colors[0])
-    ax2.bar(x + width/2, percentages_data[:, 1], width, label='Flaring ARs', color=colors[1])
+    ax2.bar(x - width/2, percentages_data[:, 0], width, color=colors[0], label='Quiet')
+    ax2.bar(x + width/2, percentages_data[:, 1], width, color=colors[1], label='Flaring')
 
     ax2.set_title('AR Percentages by Flaring Status')
+    ax2.legend()
+
     ax2.set_xticks(x)
     ax2.set_xticklabels(sets.keys())
     ax2.set_ylabel('Percentage of Active Regions')
-    ax2.legend()
 
     # Add percentage labels on bars
     for i in range(len(sets)):
