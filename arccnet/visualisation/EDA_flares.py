@@ -31,7 +31,7 @@ from arccnet.visualisation import EDA_flares_utils as ut_f
 # %%
 # Setup
 pd.set_option("display.max_columns", None)
-data_folder = os.getenv("ARCAFF_DATA_FOLDER", "../../../../data")
+data_folder = os.getenv("ARCAFF_DATA_FOLDER", "../../../data")
 df_file_name = "mag-pit-flare-dataset_1996-01-01_2023-01-01_dev.parq"
 df = pd.read_parquet(os.path.join(data_folder, df_file_name))
 
