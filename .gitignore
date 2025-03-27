@@ -241,3 +241,4 @@ arccnet/models/fulldisk/fasterrcnn/cache
 arccnet/models/fulldisk/YOLO/yolo*.pt
 arccnet/visualisation/images
 arccnet/visualisation/cache
+*lightning_logs/
