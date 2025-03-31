@@ -6,7 +6,7 @@ PyTorch Lightning model definition using timm library.
 import pytorch_lightning as pl
 import timm
 import torch
-from torch import nn
+import torch.nn.functional as F
 from torchmetrics import MetricCollection
 from torchmetrics.classification import BinaryAccuracy, BinaryF1Score, BinaryPrecision, BinaryRecall
 
@@ -29,6 +29,7 @@ class FlareClassifier(pl.LightningModule):
         in_chans: int = 1,
         pretrained: bool = False,  # Load pretrained weights?
         learning_rate: float = 1e-4,
+        pos_weight: torch.Tensor = None,
     ):
         """
         Args:
@@ -37,11 +38,15 @@ class FlareClassifier(pl.LightningModule):
             in_chans: Number of input image channels.
             pretrained: Whether to load pretrained weights (if available for the model and compatible with in_chans).
             learning_rate: Learning rate for the optimizer.
+            pos_weight: Weight for positive samples in binary cross entropy loss.
         """
         super().__init__()
         # Save hyperparameters like learning rate, model name etc. automatically
         # Makes them accessible via self.hparams
         self.save_hyperparameters()
+
+        self.learning_rate = learning_rate
+        self.pos_weight = pos_weight
 
         # Create the specified model using timm
         # This function handles various architectures based on model_name
@@ -52,8 +57,6 @@ class FlareClassifier(pl.LightningModule):
             in_chans=self.hparams.in_chans,
         )
         ut_t.replace_activations(self.model, torch.nn.ReLU, torch.nn.LeakyReLU, negative_slope=0.01)
-
-        self.loss_fn = nn.BCEWithLogitsLoss()
 
         metrics = MetricCollection(
             {"acc": BinaryAccuracy(), "precision": BinaryPrecision(), "recall": BinaryRecall(), "f1": BinaryF1Score()}
@@ -66,43 +69,51 @@ class FlareClassifier(pl.LightningModule):
         """Forward pass through the model."""
         return self.model(x)
 
-    def _shared_step(self, batch: tuple, metrics: MetricCollection) -> torch.Tensor:
-        """Common logic for training, validation, and test steps."""
-        x, y = batch
-        # Get raw logits from the model
-        y_logits = self(x)
-        # Remove trailing dimension if num_classes is 1
-        if self.hparams.num_classes == 1:
-            y_logits = y_logits.squeeze(-1)
-
-        # Calculate loss (ensure target is float for BCEWithLogitsLoss)
-        loss = self.loss_fn(y_logits, y.float())
-
-        # Calculate predictions (apply sigmoid and threshold for binary case)
-        if self.hparams.num_classes == 1:
-            preds = (torch.sigmoid(y_logits) > 0.5).long()
-        else:
-            preds = torch.argmax(y_logits, dim=1)
-
-        # Update metrics state (ensure target `y` has correct type for metrics)
-        metric_output = metrics(preds, y.int())
-
-        # Log metrics and loss for monitoring
-        self.log(f"{metrics.prefix}loss", loss, on_step=False, on_epoch=True, prog_bar=True)
-        self.log_dict(metric_output, on_step=False, on_epoch=True, prog_bar=True)
-        return loss
+    def _compute_loss(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        """Compute binary cross entropy loss with optional positive weight."""
+        # Reshape logits to match target shape
+        logits = logits.squeeze(1)  # Convert from [batch_size, 1] to [batch_size]
+        return F.binary_cross_entropy_with_logits(
+            logits,
+            targets.float(),
+            pos_weight=self.pos_weight,
+        )
 
     def training_step(self, batch: tuple, batch_idx: int) -> torch.Tensor:
         """Execute training step."""
-        return self._shared_step(batch, self.train_metrics)
+        x, y = batch
+        logits = self(x)
+        loss = self._compute_loss(logits, y)
+        # Calculate metrics with reshaped predictions
+        preds = torch.sigmoid(logits.squeeze(1))  # Convert to probabilities
+        self.train_metrics(preds, y)
+        self.log_dict(self.train_metrics, on_step=True, on_epoch=True)
+        self.log("train_loss", loss, prog_bar=True)
+        return loss
 
     def validation_step(self, batch: tuple, batch_idx: int) -> torch.Tensor:
         """Execute validation step."""
-        return self._shared_step(batch, self.val_metrics)
+        x, y = batch
+        logits = self(x)
+        loss = self._compute_loss(logits, y)
+        # Calculate metrics with reshaped predictions
+        preds = torch.sigmoid(logits.squeeze(1))  # Convert to probabilities
+        self.val_metrics(preds, y)
+        self.log_dict(self.val_metrics, on_step=False, on_epoch=True)
+        self.log("val_loss", loss, prog_bar=True)
+        return loss
 
     def test_step(self, batch: tuple, batch_idx: int) -> torch.Tensor:
         """Execute test step."""
-        return self._shared_step(batch, self.test_metrics)
+        x, y = batch
+        logits = self(x)
+        loss = self._compute_loss(logits, y)
+        # Calculate metrics with reshaped predictions
+        preds = torch.sigmoid(logits.squeeze(1))  # Convert to probabilities
+        self.test_metrics(preds, y)
+        self.log_dict(self.test_metrics, on_step=False, on_epoch=True)
+        self.log("test_loss", loss, prog_bar=True)
+        return loss
 
     def configure_optimizers(self) -> torch.optim.Optimizer:
         """Configure the optimizer."""

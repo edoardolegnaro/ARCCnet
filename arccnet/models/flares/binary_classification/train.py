@@ -48,10 +48,23 @@ logger.info("DataModule initialized.")
 
 # --- 3. Initialize Model ---
 logger.info(f"Initializing model '{config.MODEL_NAME}'...")
+
+# Calculate class weights
+pos_weight = torch.tensor(
+    [(len(train_df) - train_df[config.TARGET_COLUMN].sum()) / train_df[config.TARGET_COLUMN].sum()]
+).to("cuda" if torch.cuda.is_available() else "cpu")
+
+logger.info(f"Calculated positive class weight: {pos_weight.item():.2f}")
+
 flare_model = model.FlareClassifier(
-    model_name=config.MODEL_NAME, num_classes=1, in_chans=1, learning_rate=config.LEARNING_RATE, pretrained=False
+    model_name=config.MODEL_NAME,
+    num_classes=1,
+    in_chans=1,
+    learning_rate=config.LEARNING_RATE,
+    pretrained=False,
+    pos_weight=pos_weight,  # Add the pos_weight parameter
 )
-logger.info(f"Model '{config.MODEL_NAME}' initialized.")
+logger.info(f"Model '{config.MODEL_NAME}' initialized with weighted loss.")
 
 # --- 4. Define Callbacks ---
 logger.info("Setting up callbacks...")
