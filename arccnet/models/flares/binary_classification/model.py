@@ -8,12 +8,17 @@ import timm
 import torch
 import torch.nn.functional as F
 from torchmetrics import MetricCollection
-from torchmetrics.classification import BinaryAccuracy, BinaryF1Score, BinaryPrecision, BinaryRecall
+from torchmetrics.classification import (
+    BinaryAccuracy,
+    BinaryConfusionMatrix,
+    BinaryF1Score,
+    BinaryPrecision,
+    BinaryRecall,
+)
 
 from arccnet.models import train_utils as ut_t
 
 
-# Renamed class for generality
 class FlareClassifier(pl.LightningModule):
     """
     PyTorch Lightning Module wrapping a generic image classification model
@@ -27,7 +32,7 @@ class FlareClassifier(pl.LightningModule):
         model_name: str = "vit_small_patch16_224",
         num_classes: int = 1,
         in_chans: int = 1,
-        pretrained: bool = False,  # Load pretrained weights?
+        pretrained: bool = False,
         learning_rate: float = 1e-4,
         pos_weight: torch.Tensor = None,
     ):
@@ -46,10 +51,14 @@ class FlareClassifier(pl.LightningModule):
         self.save_hyperparameters()
 
         self.learning_rate = learning_rate
-        self.pos_weight = pos_weight
+        # Register pos_weight as a buffer to ensure it moves with the model
+        # This is needed for Distributed Training on multiple GPUs
+        if pos_weight is not None:
+            self.register_buffer("pos_weight", pos_weight)
+        else:
+            self.register_buffer("pos_weight", torch.tensor([1.0], dtype=torch.float32))
 
         # Create the specified model using timm
-        # This function handles various architectures based on model_name
         self.model = timm.create_model(
             self.hparams.model_name,
             pretrained=self.hparams.pretrained,
@@ -59,11 +68,20 @@ class FlareClassifier(pl.LightningModule):
         ut_t.replace_activations(self.model, torch.nn.ReLU, torch.nn.LeakyReLU, negative_slope=0.01)
 
         metrics = MetricCollection(
-            {"acc": BinaryAccuracy(), "precision": BinaryPrecision(), "recall": BinaryRecall(), "f1": BinaryF1Score()}
+            {
+                "acc": BinaryAccuracy(),
+                "precision": BinaryPrecision(),
+                "recall": BinaryRecall(),
+                "f1": BinaryF1Score(),
+                "confusion_matrix": BinaryConfusionMatrix(),
+            }
         )
         self.train_metrics = metrics.clone(prefix="train_")
         self.val_metrics = metrics.clone(prefix="val_")
         self.test_metrics = metrics.clone(prefix="test_")
+
+        # Store confusion matrix for logging
+        self.test_confusion_matrix = None
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass through the model."""
@@ -71,7 +89,6 @@ class FlareClassifier(pl.LightningModule):
 
     def _compute_loss(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
         """Compute binary cross entropy loss with optional positive weight."""
-        # Reshape logits to match target shape
         logits = logits.squeeze(1)  # Convert from [batch_size, 1] to [batch_size]
         return F.binary_cross_entropy_with_logits(
             logits,
@@ -113,11 +130,32 @@ class FlareClassifier(pl.LightningModule):
         self.test_metrics(preds, y)
         self.log_dict(self.test_metrics, on_step=False, on_epoch=True)
         self.log("test_loss", loss, prog_bar=True)
+
+        # Store confusion matrix
+        if batch_idx == 0:  # Initialize on first batch
+            self.test_confusion_matrix = self.test_metrics.confusion_matrix(preds, y)
+        else:  # Update for subsequent batches
+            self.test_confusion_matrix += self.test_metrics.confusion_matrix(preds, y)
+
         return loss
 
     def configure_optimizers(self) -> torch.optim.Optimizer:
         """Configure the optimizer."""
         # Use learning rate from saved hyperparameters
         optimizer = torch.optim.Adam(self.parameters(), lr=self.hparams.learning_rate)
-        # You could add learning rate schedulers here as well
         return optimizer
+
+    def on_test_end(self):
+        """Called when test ends."""
+        # Convert confusion matrix to numpy for logging
+        if self.test_confusion_matrix is not None:
+            cm = self.test_confusion_matrix.cpu().numpy()
+            # Log confusion matrix to Comet if logger exists
+            if hasattr(self, "logger") and self.logger is not None:
+                self.logger.experiment.log_confusion_matrix(
+                    matrix=cm,
+                    labels=["No Flare", "Flare"],
+                    title="Test Set Confusion Matrix",
+                    row_label="Actual",
+                    column_label="Predicted",
+                )
