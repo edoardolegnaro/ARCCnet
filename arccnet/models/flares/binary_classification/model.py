@@ -73,15 +73,16 @@ class FlareClassifier(pl.LightningModule):
                 "precision": BinaryPrecision(),
                 "recall": BinaryRecall(),
                 "f1": BinaryF1Score(),
-                "confusion_matrix": BinaryConfusionMatrix(),
             }
         )
         self.train_metrics = metrics.clone(prefix="train_")
         self.val_metrics = metrics.clone(prefix="val_")
         self.test_metrics = metrics.clone(prefix="test_")
 
-        # Store confusion matrix for logging
-        self.test_confusion_matrix = None
+        # Create separate confusion matrix metrics
+        self.train_confusion_matrix = BinaryConfusionMatrix()
+        self.val_confusion_matrix = BinaryConfusionMatrix()
+        self.test_confusion_matrix = BinaryConfusionMatrix()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass through the model."""
@@ -104,8 +105,9 @@ class FlareClassifier(pl.LightningModule):
         # Calculate metrics with reshaped predictions
         preds = torch.sigmoid(logits.squeeze(1))  # Convert to probabilities
         self.train_metrics(preds, y)
-        self.log_dict(self.train_metrics, on_step=True, on_epoch=True)
-        self.log("train_loss", loss, prog_bar=True)
+        self.train_confusion_matrix(preds, y)
+        self.log_dict(self.train_metrics, on_step=True, on_epoch=True, sync_dist=True)
+        self.log("train_loss", loss, prog_bar=True, on_step=True, on_epoch=True, sync_dist=True)
         return loss
 
     def validation_step(self, batch: tuple, batch_idx: int) -> torch.Tensor:
@@ -116,8 +118,9 @@ class FlareClassifier(pl.LightningModule):
         # Calculate metrics with reshaped predictions
         preds = torch.sigmoid(logits.squeeze(1))  # Convert to probabilities
         self.val_metrics(preds, y)
-        self.log_dict(self.val_metrics, on_step=False, on_epoch=True)
-        self.log("val_loss", loss, prog_bar=True)
+        self.val_confusion_matrix(preds, y)
+        self.log_dict(self.val_metrics, on_step=False, on_epoch=True, sync_dist=True)
+        self.log("val_loss", loss, prog_bar=True, on_epoch=True, sync_dist=True)
         return loss
 
     def test_step(self, batch: tuple, batch_idx: int) -> torch.Tensor:
@@ -128,15 +131,9 @@ class FlareClassifier(pl.LightningModule):
         # Calculate metrics with reshaped predictions
         preds = torch.sigmoid(logits.squeeze(1))  # Convert to probabilities
         self.test_metrics(preds, y)
-        self.log_dict(self.test_metrics, on_step=False, on_epoch=True)
-        self.log("test_loss", loss, prog_bar=True)
-
-        # Store confusion matrix
-        if batch_idx == 0:  # Initialize on first batch
-            self.test_confusion_matrix = self.test_metrics.confusion_matrix(preds, y)
-        else:  # Update for subsequent batches
-            self.test_confusion_matrix += self.test_metrics.confusion_matrix(preds, y)
-
+        self.test_confusion_matrix(preds, y)
+        self.log_dict(self.test_metrics, on_step=False, on_epoch=True, sync_dist=True)
+        self.log("test_loss", loss, prog_bar=True, on_epoch=True, sync_dist=True)
         return loss
 
     def configure_optimizers(self) -> torch.optim.Optimizer:
@@ -145,17 +142,23 @@ class FlareClassifier(pl.LightningModule):
         optimizer = torch.optim.Adam(self.parameters(), lr=self.hparams.learning_rate)
         return optimizer
 
-    def on_test_end(self):
-        """Called when test ends."""
-        # Convert confusion matrix to numpy for logging
-        if self.test_confusion_matrix is not None:
-            cm = self.test_confusion_matrix.cpu().numpy()
-            # Log confusion matrix to Comet if logger exists
-            if hasattr(self, "logger") and self.logger is not None:
-                self.logger.experiment.log_confusion_matrix(
-                    matrix=cm,
-                    labels=["No Flare", "Flare"],
-                    title="Test Set Confusion Matrix",
-                    row_label="Actual",
-                    column_label="Predicted",
-                )
+    def on_train_epoch_end(self):
+        """Called at the end of training epoch."""
+        self.train_confusion_matrix.reset()
+
+    def on_validation_epoch_end(self):
+        """Called at the end of validation epoch."""
+        self.val_confusion_matrix.reset()
+
+    def on_test_epoch_end(self):
+        """Called at the end of test epoch."""
+        if self.logger is not None:
+            cm = self.test_confusion_matrix.compute().cpu().numpy()
+            self.logger.experiment.log_confusion_matrix(
+                matrix=cm,
+                labels=["No Flare", "Flare"],
+                title="Test Set Confusion Matrix",
+                row_label="Actual",
+                column_label="Predicted",
+            )
+        self.test_confusion_matrix.reset()

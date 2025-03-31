@@ -6,6 +6,7 @@ import pytorch_lightning as pl
 import torch
 from pytorch_lightning.callbacks import Callback, EarlyStopping, ModelCheckpoint
 from pytorch_lightning.loggers import CometLogger
+from pytorch_lightning.tuner import Tuner
 
 from arccnet.models.flares.binary_classification import config, dataset
 from arccnet.models.flares.binary_classification import lighning_modules as lm
@@ -25,6 +26,10 @@ class CometModelCheckpointCallback(Callback):
         self.comet_logger = comet_logger
 
     def on_save_checkpoint(self, trainer, pl_module, checkpoint):
+        # Skip if this is not a regular training checkpoint
+        if "checkpoint_callback_best_model_path" not in checkpoint:
+            return
+
         # Only log when it's the best model
         if trainer.checkpoint_callback.best_model_path == checkpoint["checkpoint_callback_best_model_path"]:
             logger.info("Logging best model to Comet...")
@@ -34,18 +39,25 @@ class CometModelCheckpointCallback(Callback):
             logger.info("Best model logged to Comet successfully.")
 
 
-# ---  Load and Split Data ---
-logger.info("Loading and splitting data...")
-train_df, val_df, test_df = dataset.load_and_split_data(
-    data_folder=config.DATA_FOLDER,
-    df_flares_name=config.FLARES_PARQ,
-    dataset_folder=config.CUTOUT_DATASET_FOLDER,
-    target_column=f"flares_above_{config.THRESHOLD_CLASS}",
-    test_size=config.TEST_SIZE,
-    val_size=config.VAL_SIZE,
-    random_state=42,
-)
-logger.info("Data loading and splitting complete.")
+# --- Load data once ---
+def load_data():
+    """Load and split data in train, val and test sets."""
+    logger.info("Loading and splitting data (one-time)...")
+    train_df, val_df, test_df = dataset.load_and_split_data(
+        data_folder=config.DATA_FOLDER,
+        df_flares_name=config.FLARES_PARQ,
+        dataset_folder=config.CUTOUT_DATASET_FOLDER,
+        target_column=f"flares_above_{config.THRESHOLD_CLASS}",
+        test_size=config.TEST_SIZE,
+        val_size=config.VAL_SIZE,
+        random_state=42,
+    )
+    logger.info("Data loading and splitting complete.")
+    return train_df, val_df, test_df
+
+
+# Load data once at the beginning
+train_df, val_df, test_df = load_data()
 
 # ---  Initialize DataModule and Model ---
 logger.info("Initializing DataModule...")
@@ -136,7 +148,8 @@ logger.info(f"Trainer initialized for {config.MAX_EPOCHS} epochs with mixed prec
 # --- Learning Rate Finder ---
 if config.USE_LR_FINDER:
     logger.info("Running learning rate finder...")
-    lr_finder = trainer.tuner.lr_find(
+    tuner = Tuner(trainer)
+    lr_finder = tuner.lr_find(
         flare_model,
         data_module,
         min_lr=config.LR_FINDER_MIN_LR,

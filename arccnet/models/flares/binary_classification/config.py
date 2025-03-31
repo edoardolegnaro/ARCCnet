@@ -10,18 +10,18 @@ import os
 # =============================================================================
 MODEL_NAME = "vit_small_patch16_224"  # Name of the timm model
 
-BATCH_SIZE = 64
-NUM_WORKERS = os.cpu_count() / 2
+BATCH_SIZE = 32
+NUM_WORKERS = os.cpu_count() // 2
 LEARNING_RATE = 1e-4
-MAX_EPOCHS = 20
+MAX_EPOCHS = 500
 RANDOM_SEED = 42  # Seed for reproducibility in train, val, test splitting
-PATIENCE = 5
+PATIENCE = 10
 CHECKPOINT_METRIC = "val_f1"
 
 # =============================================================================
 # Learning Rate Finder Parameters
 # =============================================================================
-USE_LR_FINDER = True  # Set to True to enable learning rate finder
+USE_LR_FINDER = False  # Set to True to enable learning rate finder
 LR_FINDER_MIN_LR = 1e-6  # Minimum learning rate to test
 LR_FINDER_MAX_LR = 1e-1  # Maximum learning rate to test
 LR_FINDER_NUM_TRAINING = 100  # Number of training steps to use for the LR finder

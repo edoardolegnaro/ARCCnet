@@ -165,7 +165,7 @@ class FlareDataModule(pl.LightningDataModule):
             shuffle=True,
             num_workers=self.num_workers,
             pin_memory=self.pin_memory,
-            persistent_workers=True if self.num_workers > 0 else False,
+            persistent_workers=False,
         )
 
     def val_dataloader(self):
@@ -175,7 +175,7 @@ class FlareDataModule(pl.LightningDataModule):
             shuffle=False,
             num_workers=self.num_workers,
             pin_memory=self.pin_memory,
-            persistent_workers=True if self.num_workers > 0 else False,
+            persistent_workers=False,
         )
 
     def test_dataloader(self):
@@ -185,5 +185,17 @@ class FlareDataModule(pl.LightningDataModule):
             shuffle=False,
             num_workers=self.num_workers,
             pin_memory=self.pin_memory,
-            persistent_workers=True if self.num_workers > 0 else False,
+            persistent_workers=False,
         )
+
+    def teardown(self, stage=None):
+        """Clean up after fit or test."""
+        # Clean up the datasets when done
+        if stage == "fit" or stage is None:
+            if hasattr(self, "train_dataset"):
+                del self.train_dataset
+            if hasattr(self, "val_dataset"):
+                del self.val_dataset
+        if stage == "test" or stage is None:
+            if hasattr(self, "test_dataset"):
+                del self.test_dataset
