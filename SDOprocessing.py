@@ -3,6 +3,7 @@ import os
 import glob
 import math
 import itertools
+import copy
 
 import drms
 import numpy as np
@@ -19,41 +20,90 @@ from astropy.io.fits import CompImageHDU
 from astropy.time import Time
 
 
-# This will be sourced from the utils module - simulating usage at the moment.
 def load_config():
+    r"""
+    Load the configuration for the SDO processing pipeline.
+
+    Returns:
+    --------
+        config (dict): The configuration dictionary.
+    """
     # Replace this with whatever email(s) we want to use for this purpose.
     os.environ["JSOC_EMAIL"] = "danielgass192@gmail.com"
-    config = {"path": "/Users/danielgass/Desktop", "wavelengths": [171, 193], "rep_tol": 60, "sample": 60}
+    config = {"path": "/Users/danielgass/Desktop", "wavelengths": [171, 193, 304, 211], "rep_tol": 60, "sample": 60}
     return config
 
 
-class PipeUtils:
-    # Contains utility functions to help with time/string handling and list comparisons with strings.
+def time_delta(start: str, end: str):
+    r"""
+    Calculate the time difference in hours between two FITS timestamps.
 
-    def time_delta(start: str, end: str):
-        start_t = Time(start, format="fits")
-        end_t = Time(end, format="fits")
-        t_del_h = math.ceil((end_t - start_t).to_value(u.hour))
-        return t_del_h
+    Parameters:
+    -----------
+        start (str): A start timestamp in FITS format.
+        end (str): An end timestamp in FITS format.
 
-    def time_diff_s(start: str, end: str):
-        start_t = sunpy.time.parse_time(start)
-        end_t = sunpy.time.parse_time(end)
-        t_del_s = abs(end_t - start_t).to_value(u.second)
-        return t_del_s
+    Returns:
+    --------
+        t_del_h (int): The time difference in hours.
+    """
+    start_t = Time(start, format="fits")
+    end_t = Time(end, format="fits")
+    t_del_h = math.ceil((end_t - start_t).to_value(u.hour))
+    return t_del_h
 
-    def change_time(time: str, shift: int):
-        time_d = Time(time, format="fits") + shift * (u.second)
-        return time_d.to_value("fits")
 
-    def comp_list(file: str, file_list: list):
-        return any(file in name for name in file_list)
+def change_time(time: str, shift: int):
+    r"""
+    Change the timestamp by a given time shift.
+
+    Parameters:
+    -----------
+        time (str): A timestamp in FITS format.
+        shift (int): The time shift in seconds.
+
+    Returns:
+    --------
+        str: The updated timestamp in FITS format.
+    """
+    time_d = Time(time, format="fits") + shift * (u.second)
+    return time_d.to_value("fits")
+
+
+def comp_list(file: str, file_list: list):
+    r"""
+    Check if a file is present in a list of files.
+
+    Parameters:
+    -----------
+        file (str): The file to check.
+        file_list (list): The list of files.
+
+    Returns:
+    --------
+        list: A list of booleans for each element in list. True if the file is present, False otherwise.
+    """
+    return any(file in name for name in file_list)
 
 
 class DrmsDownload:
-    def hmi_query(time_1: str, time_2: str, keys: list, sample: int):
+    def hmi_query_export(time_1: str, time_2: str, keys: list, sample: int):
+        r"""
+        Query and export HMI data from the JSOC database.
+
+        Paramaters:
+        -----------
+            time_1 (str): The start timestamp in FITS format.
+            time_2 (str): The end timestamp in FITS format.
+            keys (list): A list of keys to query.
+            sample (int): The sample rate in minutes.
+
+        Returns:
+        --------
+            hmi_query_full (pandas df), hmi_result (drms export) (tuple): A tuple containing the query result and the export data response.
+        """
         client = drms.Client()
-        duration = PipeUtils.time_delta(time_1, time_2)
+        duration = time_delta(time_1, time_2)
         qstr_hmi = f"hmi.M_720s[{time_1}/{duration}h@{sample}m]" + "{magnetogram}"
         hmi_query = client.query(qstr_hmi, keys)
         good_result = hmi_query[hmi_query.QUALITY == 0]
@@ -74,7 +124,20 @@ class DrmsDownload:
         hmi_result.wait()
         return hmi_query_full, hmi_result
 
-    def aia_query(hmi_query, keys, wavelength):
+    def aia_query_export(hmi_query, keys, wavelength):
+        r"""
+        Query and export AIA data from the JSOC database.
+
+        Parameters:
+        -----------
+            hmi_query: The HMI query result.
+            keys: List of keys to query.
+            wavelength: An AIA wavelength.
+
+        Returns:
+        --------
+            aia_query_full, aia_result (tuple): A tuple containing the query result and the export data response.
+        """
         client = drms.Client()
         value = []
         qstrs_aia = [f"aia.lev1_euv_12s[{time}]{wavelength}" + "{image}" for time in hmi_query["T_REC"]]
@@ -89,29 +152,66 @@ class DrmsDownload:
         return aia_query_full, aia_result
 
     def hmi_rec_find(qstr, keys):
+        r"""
+        Find the HMI record number for a given query string.
+
+        Parameters:
+        -----------
+            qstr (str): A query string.
+            keys (list): List of keys to query.
+
+        Returns:
+        --------
+            int: The HMI record number.
+        """
         client = drms.Client()
         retries = 0
         qry = client.query(qstr, keys)
         time = sunpy.time.parse_time(qry["T_REC"].values[0])
         while qry["QUALITY"].values[0] != 0 and retries < 3:
             qry = client.query(f"hmi.M_720s[{time}]" + "{magnetogram}", keys)
-            time = PipeUtils.change_time(time, 720)
+            time = change_time(time, 720)
             retries += 1
         return qry["*recnum*"].values[0]
 
     def aia_rec_find(qstr, keys):
+        r"""
+        Find the AIA record number for a given query string.
+
+        Parameters:
+        -----------
+            qstr (str): A query string.
+            keys (list): List of keys to query.
+
+        Returns:
+        --------
+            int: The AIA record number.
+        """
         client = drms.Client()
         retries = 0
         qry = client.query(qstr, keys)
         time, wvl = qry["T_REC"].values[0][0:-1], qry["WAVELNTH"].values[0]
         while qry["QUALITY"].values[0] != 0 and retries < 10:
             qry = client.query(f"aia.lev1_euv_12s[{time}][{wvl}]" + "{image}", keys)
-            time = PipeUtils.change_time(time, 12)
+            time = change_time(time, 12)
             retries += 1
         if qry["QUALITY"].values[0] == 0:
             return qry["*recnum*"].values
 
     def l1_file_save(export, query, path):
+        r"""
+        Save the exported data as level 1 FITS files.
+
+        Parameters:
+        -----------
+            export: A drms data export.
+            query: A drms query result.
+            path (str): A base path to save the files.
+
+        Returns:
+        --------
+            export (drms export), total_files (list) (tuple): A tuple containing the updated export data and the list of saved file paths.
+        """
         instr = query["INSTRUME"][0][0:3]
         path_prefix = []
 
@@ -126,234 +226,107 @@ class DrmsDownload:
             existing_files.append(glob.glob(f"{dirs}/*.fits"))
 
         existing_files = [*existing_files][0]
-        matching_files = [PipeUtils.comp_list(file, existing_files) for file in export.urls["filename"]]
+        matching_files = [comp_list(file, existing_files) for file in export.urls["filename"]]
         missing_files = [not value for value in matching_files]
-
         export.urls["filename"] = path_prefix + export.urls["filename"]
         if len(export.urls[missing_files].index) > 0:
+            total_files = list(export.urls[matching_files].index) + list(export.urls[missing_files].index)
+            total_files = export.urls["filename"][total_files]
             export.download(directory="", index=export.urls[missing_files].index)
-            total_files = [export.urls["filename"][matching_files] + export.urls["filename"][existing_files]]
         else:
-            total_files = export.urls["filename"][matching_files]
+            total_files = list(export.urls["filename"][matching_files])
         return export, total_files
 
 
-# This class is currently not used - Fido having some issues with reliable downloads, but retained code for possible future use.
-class FidoDownload:
-    # Caching will probably be a good idea - file keeping track of which fits are available.
-    # global fetch_request
-    global aia_drms_qual_check, hmi_drms_qual_check
-
-    def fido_aia_fetch_request(
-        req,
-        euv_path: str,
-        tmpstorage: bool = False,
-    ):
-        npe = ""
-        filepaths = []
-        if tmpstorage:
-            npe = "/temp/"
-        for result in req:
-            wvl = int(min(result[0][0]["Wavelength"].value))
-            path = f"{euv_path}/{wvl}"
-            files = Fido.fetch(result, max_conn=10, path=f"{npe}{path}")
-            # 8. Create loop to ensure all files downloaded/were redownloaded as necessary
-            filepaths.append(files)
-            while files.errors != []:
-                files = Fido.fetch(result, max_conn=10, path=f"{npe}{path}")
-                filepaths.append(files)
-                # filepaths = np.reshape(filepaths, (-1,1))
-        return filepaths
-
-    def fido_hmi_fetch_request(
-        req,
-        hmi_path: str,
-        tmpstorage: bool = False,
-    ):
-        npe = ""
-        filepaths = []
-        if tmpstorage:
-            npe = "/temp/"
-        for result in req:
-            files = Fido.fetch(result, max_conn=10, path=f"{npe}{hmi_path}")
-            # 8. Create loop to ensure all files downloaded/were redownloaded as necessary
-            filepaths.append(files)
-            while files.errors != []:
-                files = Fido.fetch(result, max_conn=10, path=f"{npe}{hmi_path}")
-                filepaths = filepaths.append(files)
-        return np.unique(filepaths)
-
-    def fido_aia_ts_request(start: str, end: str, wavelengths: list, time: int):
-        # Convert to Time Delta
-        time_d = a.Time(start, end)
-
-        # Pass argument to Fido (May switch to DRMS when refactoring/updating python versions)
-        res = []
-        for wvl in wavelengths:
-            res.append(Fido.search(time_d, a.Wavelength(wvl * u.AA), a.Instrument("AIA"), a.Sample(time * u.min)))
-        return res
-
-    def fido_hmi_ts_request(
-        start: str,
-        end: str,
-        verif: str,
-        time: int,
-        tmpstorage: bool = True,
-    ):
-        time_d = a.Time(start, end)
-        res = []
-        res.append(Fido.search(time_d, a.jsoc.Series("hmi.m_720s"), a.Sample(time * u.min), a.jsoc.Notify(verif)))
-        return res
-
-    def aia_drms_qual_check(qstr: str, keys: list):
-        client = drms.Client()
-        bad_results = []
-        request = client.query(qstr, key=keys)
-        bad_result = request[request.QUALITY != 0]["T_OBS"]
-        if len(bad_result > 0):
-            bad_results.append(bad_result)
-        result = request[request.QUALITY == 0]
-        good_results = result.index
-
-        return good_results, bad_results.to_list()
-
-    def hmi_drms_qual_check(qstr: str, keys: list):
-        client = drms.Client()
-        bad_results = []
-        request = client.query(qstr, key=keys)
-        bad_result = request[request.QUALITY != 0]["T_OBS"]
-        if len(bad_result > 0):
-            bad_results.append(bad_result)
-        result = request[request.QUALITY == 0]
-        good_results = result.index
-
-        return good_results, bad_results.to_list()
-
-    def hmi_quality_check(
-        # Checks provided map for list of approved QUALITY flag values.
-        # Returns the header.name of bad files.
-        map,
-        accepted: list = [0],
-    ):
-        bad_list = []
-        # if type(map) != list:
-        # 	map = [map]
-        for m in map:
-            m_map = sunpy.map.Map(m)
-            if m_map.meta["quality"] in accepted is False:
-                bad_list.append(m_map.name)
-        # status_list = f'Quality check complete - {len(bad_list)}/{len(map)} map(s) failed.'
-        # print(status_list)
-        return bad_list
-
-    def aia_quality_check(
-        # 9. Filter .fits for QUALITY flag, remove certain images, and check for nearest file to replace.
-        # Checks provided map for list of approved QUALITY flag values.
-        # Returns the header.name of bad files.
-        map,
-        accepted: list = [0],
-    ):
-        bad_list = []
-        # if type(map) != list:
-        # 	map = [map]
-        for m in map:
-            m_map = sunpy.map.Map(m)
-            if m_map.meta["quality"] in accepted is False:
-                bad_list.append(m_map.name)
-        # status_list = f'Quality check complete - {len(bad_list)}/{len(map)} map(s) failed.'
-        # print(status_list)
-        return bad_list
-
-    def dl_paths(fin_result, filelist):
-        # Function to match filenames to a UnifiedResponse function, used after download for quality checks.
-        timestamp = np.array(fin_result["T_REC"])
-        timestamp = char.translate(timestamp, str.maketrans("", "", ".:"))
-        matching_files = [file for file in filelist if any(time in file for time in timestamp)]
-        return matching_files
-
-    def return_missing_files(result, filelist):
-        # Reads in a UnifiedResponse and a list of files and returns modified response containing only missing entries if any.
-        # fileset = set(np.array(filelist))
-        result = np.reshape(result, -1)
-        timestamp = np.array(result["T_REC"])
-        timestamp2 = char.translate(timestamp, str.maketrans("", "", ".:"))
-        missing_timestamps = [name for name in timestamp2 if not any(name in file for file in filelist)]
-        missing_indices = np.where(np.isin(timestamp2, missing_timestamps))[0]
-        res_new = result[missing_indices]
-        return res_new
-
-
 class SDOproc:
-    # Levels an AIA map to level 1.5, can also correct for degradation and deconvolve psf if needed.
+    @staticmethod
     def aia_process(aia_map, deconv: bool = False, degcorr: bool = False, exnorm: bool = True):
-        # This step needs to be done before prep if selected.
-        if deconv:
-            aia_map = SDOproc.aia_deconv(aia_map)
-        aia_map = SDOproc.aia_prep(aia_map)
-        if degcorr:
-            aia_map = SDOproc.aia_degcorr(aia_map)
-        if exnorm:
-            aia_map = SDOproc.aia_expnorm(aia_map)
-        return aia_map
+        r"""
+        Process an AIA map to level 1.5.
 
-    # Prepares aia map to level 1.5, standard aiapy process.
-    def aia_prep(aia_map):
+        Parameters:
+        -----------
+            aia_map: The AIA map to process.
+            deconv (bool): Whether to deconvolve the PSF.
+            degcorr (bool): Whether to correct for degradation.
+            exnorm (bool): Whether to normalize exposure.
+
+        Returns:
+        --------
+            aia_map (sunpy.map.Map):  Processed AIA map.
+        """
+        if deconv:
+            aia_map = deconvolve(aia_map)
         aia_map = update_pointing(aia_map)
         aia_map = register(aia_map)
+        if degcorr:
+            aia_map = correct_degradation(aia_map)
+        if exnorm:
+            aiad = aia_map.data / aia_map.exposure_time
+            aia_map = sunpy.map.Map(aiad.astype(int), aia_map.fits_header)
         return aia_map
 
-    # Assuming default parameters for deconvolve function for now
-    def aia_deconv(aia_map):
-        aia_map = deconvolve(aia_map)
-        return aia_map
-
-    # Corrects for exposure time, has to cast to int and repackage fits file.
-    def aia_expnorm(aia_map):
-        aiad = aia_map.data / aia_map.exposure_time
-        aia_map = sunpy.map.Map(aiad.astype(int), aia_map.fits_header)
-        return aia_map
-
-    # Corrects degradation.
-    # May want to get our own correction tables, but downloads each time this is called at present.
-    def aia_degcorr(aia_map):
-        aia_map = correct_degradation(aia_map)
-        return aia_map
-
-    # Reprojects AIA map to HMI map using wcs.
-    # The maps need to be in closest possible time frames.
+    @staticmethod
     def aia_reproject(aia_map, hmi_map):
+        r"""
+        Reproject an AIA map to the same coordinate system as an HMI map.
+
+        Parameters:
+        -----------
+            aia_map: The AIA map to reproject.
+            hmi_map: The HMI map to use as the target coordinate system.
+
+        Returns:
+        --------
+            rpr_aia_map (sunpy.map.Map): Reprojected AIA map.
+        """
         rpr_aia_map = aia_map.reproject_to(hmi_map.wcs)
         rpr_aia_map.meta["wavelnth"] = aia_map.meta["wavelnth"]
         rpr_aia_map.meta["t_obs"] = aia_map.meta["t_obs"]
         rpr_aia_map.meta["instrume"] = aia_map.meta["instrume"]
-        print(rpr_aia_map.meta["instrume"])
-        del hmi_map
+        rpr_aia_map.meta["fname"] = aia_map.meta["fname"]
+        rpr_aia_map.nickname = aia_map.nickname
+
         return rpr_aia_map
 
-    # Finds the coordinates of pixels outside of Rsun_obs for an HMI image and assigns NaN.
-
+    @staticmethod
     def hmi_mask(hmimap):
+        r"""
+        Mask pixels outside of Rsun_obs in an HMI map.
+
+        Parameters:
+        -----------
+            hmimap: The HMI map.
+
+        Returns:
+        --------
+            hmimap (sunpy.map.Map): The masked HMI map.
+        """
         hpc_coords = all_coordinates_from_map(hmimap)
         mask = coordinate_is_on_solar_disk(hpc_coords)
         hmidata = hmimap.data
         hmidata[mask is False] = np.nan
         hmimap = sunpy.map.Map(hmidata, hmimap.meta)
-        del hmidata
         return hmimap
 
-    # Function for saving l2 files - sorts by instrument and date and checks for redundancies. Returns path name.
-    def l2_file_save(fits_map, filename: str, path: str, overwrite: bool = False):
-        name = str.split(filename, "/")[-1]
-        instr = fits_map.meta["INSTRUME"].split("_")[0]
-        print(instr)
-        if instr == "HMI":
-            fits_map.meta["t_obs"] = fits_map.meta["t_obs"][0:-8]
-        time = sunpy.time.parse_time(fits_map.meta["t_obs"]).to_value("ymdhms")
-        year, month, day = time[0], time[1], time[2]
-        map_path = f"{path}/02_processed/{year}/{month}/{day}/SDO/{instr}"
-        os.makedirs(map_path, exist_ok=True)
-        hmi_fits = f"{map_path}/02_{name}"
-        if glob.glob(hmi_fits) == [] or overwrite is True:
-            fits_map.save(hmi_fits, hdu_type=CompImageHDU, overwrite=True)
+    @staticmethod
+    def l2_file_save(fits_map, path: str, overwrite: bool = False):
+        r"""
+        Save a "level 2" FITS map.
 
-        return hmi_fits
+        Args:
+            fits_map (sunpy.map.Map): The FITS map to save.
+            path (str): The path to save the file.
+            overwrite (bool): Whether to overwrite existing files.
+
+        Returns:
+            fits_path (str): The path of the saved file.
+        """
+        time = fits_map.date.to_value("ymdhms")
+        year, month, day = time[0], time[1], time[2]
+        map_path = f"{path}/02_processed/{year}/{month}/{day}/SDO/{fits_map.nickname}"
+        os.makedirs(map_path, exist_ok=True)
+        fits_path = f"{map_path}/02_{fits_map.meta['fname']}"
+        if (not os.path.exists(fits_path)) or overwrite:
+            fits_map.save(fits_path, hdu_type=CompImageHDU, overwrite=True)
+        return fits_path

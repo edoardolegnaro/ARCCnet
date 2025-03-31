@@ -2,71 +2,114 @@ from concurrent.futures import ProcessPoolExecutor
 
 import sunpy.map
 
-from SDOprocessing import DrmsDownload, PipeUtils, SDOproc, load_config
+from SDOprocessing import DrmsDownload, SDOproc, load_config
 
+from pathlib import PurePath
 
-def match_files(aia_paths, hmi_paths):
-    hmi_times = [sunpy.map.Map(hmi).meta["T_OBS"][0:-8] for hmi in hmi_paths]
+def match_files(aia_maps, hmi_maps):
+    r"""
+    Matches AIA maps with corresponding HMI maps based on the closest time difference.
+    
+    Parameters:
+    -----------
+        aia_maps (list): List of AIA maps.
+        hmi_maps (list): List of HMI maps.
+    
+    Returns:
+    --------
+        packed_files(list): A list containing tuples of paired AIA and HMI maps.
+    """
     packed_files = []
-    for map_name in aia_paths:
-        aia_map = sunpy.map.Map(map_name)
-        t_d = [PipeUtils.time_diff_s(aia_map.meta["T_OBS"], time) for time in hmi_times]
-        hmi_match = hmi_paths[t_d.index(min(t_d))]
-        packed_files.append([map_name, hmi_match])
+    for aia_map in aia_maps:
+        t_d = [abs((aia_map.date - hmi_map.date).value*24*3600) for hmi_map in hmi_maps]
+        hmi_match = hmi_maps[t_d.index(min(t_d))]
+        packed_files.append([aia_map, hmi_match])
     return packed_files
 
+def add_fnames(maps, paths):
+    r"""
+    Adds file names to fits map metadata.
+    
+    Parameters:
+    -----------
+        maps (list): List of fits maps.
+        paths (list): List of file paths.
+    
+    Returns:
+    --------
+        named_map (list) : List of fits maps with file names added to metadata.
+    """
+    named_maps = []
+    for map,fname in zip(maps, paths):
+        map.meta['fname'] = PurePath(fname).name
+        named_maps.append(map)
+    return named_maps
 
-def drms_pipeline(starts: list, path: str, keys: list, wavelengths: list, sample: int = 60):
-    # Extract and define the record number, start and end time.
+def drms_pipeline(starts: list, path: str, keys: list, wavelengths: list = [171, 193, 304, 211, 335, 94, 131, 1600, 4500, 1700] , sample: int = 60):
+    r"""
+    Performs pipeline to download and process AIA and HMI data.
+    
+    Parameters:
+    -----------
+        starts (list): List of start and end times for the data retrieval.
+        path (str): Path to save the downloaded data.
+        keys (list): List of keys for the data query.
+        wavelengths (list): List of wavelengths for the AIA data (default all AIA wvl).
+        sample (int): Sample rate for the data cadence (default 1/hr).
+    
+    Returns:
+    --------
+        aia_maps, hmi_maps (tuple): A tuple containing the AIA maps and HMI maps.
+    """
     start_t, end_t = starts[1], starts[2]
 
-    # Define the query, find high quality file recnums and export for hmi and aia series.
-    hmi_query, hmi_export = DrmsDownload.hmi_query(start_t, end_t, keys, sample)
-    aia_query, aia_export = DrmsDownload.aia_query(hmi_query, keys, wavelengths)
+    hmi_query, hmi_export = DrmsDownload.hmi_query_export(start_t, end_t, keys, sample)
+    aia_query, aia_export = DrmsDownload.aia_query_export(hmi_query, keys, wavelengths)
 
-    # Use the queries and exports to download data, checking for existing data and producing paths if needed.
     hmi_dls, hmi_exs = DrmsDownload.l1_file_save(hmi_export, hmi_query, path)
     aia_dls, aia_exs = DrmsDownload.l1_file_save(aia_export, aia_query, path)
+    
+    hmi_maps = sunpy.map.Map(hmi_exs)
+    hmi_maps = add_fnames(hmi_maps, hmi_exs)
+    aia_maps = sunpy.map.Map(aia_exs)
+    aia_maps = add_fnames(aia_maps, aia_exs)
+    return aia_maps, hmi_maps
 
-    return hmi_dls, aia_dls, hmi_exs, aia_exs
-
-
-# Loads saved l1 HMI, masks, and saves to output l2 dir (creates paths if needed). Will not resave existing files.
-def hmi_l2(hmi_path):
+def hmi_l2(hmi_map):
+    r"""
+    Processes the HMI map to "level 2" by applying a mask and saving it to the output directory.
+    
+    Parameters:
+    -----------
+        hmi_map (sunpy.map.Map): HMI map to be processed.
+    
+    Returns:
+    --------
+       proc_path (str): Path to the processed HMI map.
+    """
     path = load_config()["path"]
-    hmi_map = sunpy.map.Map(hmi_path)
     hmi_map = SDOproc.hmi_mask(hmi_map)
-    proc_path = SDOproc.l2_file_save(hmi_map, hmi_path, path)
-    del hmi_map, path
+    proc_path = SDOproc.l2_file_save(hmi_map, path)
     return proc_path
 
-
-# Process AIA files - levelling to 1.5, rescaling and trimming limb. Matches to nearest HMI map in provided hmi series to reproject.
-def aia_l2(packed_paths):
-    ## This is VERY slow at present, will need to implement multithreading and maybe look at memory usage.
+def aia_l2(packed_maps):
+    r"""
+    Processes the AIA map to "level 2" by leveling, rescaling, trimming, and reprojecting it to match the nearest HMI map.
+    
+    Parameters:
+    -----------
+        packed_maps (list): List containing the AIA map and its corresponding HMI map.
+    
+    Returns:
+    --------
+        proc_path (str): Path to the processed AIA map.
+    """
     path = load_config()["path"]
-    aia_path, hmi_path = packed_paths[0], packed_paths[1]
-    hmi_match = sunpy.map.Map(hmi_path)
-    aia_map = sunpy.map.Map(aia_path)
+    aia_map, hmi_match = packed_maps[0], packed_maps[1]
     aia_map = SDOproc.aia_process(aia_map)
-    # This step takes a long time. Reprojecting 4x4k maps is expensive.
     aia_map = SDOproc.aia_reproject(aia_map, hmi_match)
-    proc_path = SDOproc.l2_file_save(aia_map, aia_path, path)
-    del aia_map, hmi_match, path
+    proc_path = SDOproc.l2_file_save(aia_map, path)
     return proc_path
-
-    # TO-DO
-    # - Create file-list record ie; matching HMI and AIA images. Include some metadata (ie; quality flags etc) +
-    # - Update file structure for saving and uploading. Atm this only works on my machine. +
-    # - Implement tests (pytest).
-    # - Better comments to make methods easier to read.
-    # - Explore using query and observation (file) id to construct targeted queries and save JSOC resources/time - 24 queries per run -> 2 queries (1 HMI, 1 AIA). +
-    # - query by RECNUM +
-    # - How do we see the API working
-
-
-# Imagining this will work by inputting a list of dates in tuple form w/ AR number ie; [[ARnumber_1, start_1, end_1,...],[ARnumber_2, start_2, end_2,...][]..]
-# - Simulating intended usage - list of times and samples for different periods/requirements
 
 if __name__ == "__main__":
     config = load_config()
@@ -74,13 +117,16 @@ if __name__ == "__main__":
     starts = [[0, "2017-02-01T01:00:00", "2017-02-01T03:00:00"]]
 
     for range in starts:
-        hmi_dls, aia_dls, hmi_exs, aia_exs = drms_pipeline(
+        aia_maps, hmi_maps = drms_pipeline(
             range, config["path"], keys, config["wavelengths"], config["sample"]
         )
-    # This
+
     with ProcessPoolExecutor(6) as executor:
-        hmi_proc = executor.map(hmi_l2, hmi_exs)
-
-        packed_files = match_files(aia_exs, hmi_exs)
-
+        hmi_proc = executor.map(hmi_l2, hmi_maps)
+        packed_files = match_files(aia_maps, hmi_maps)
         aia_proc = executor.map(aia_l2, packed_files)
+
+# 70 X class flares.
+# Read the flare list.
+# Not just HEK, look for save files for flares.
+# Random sample (100 ish for M and below flares) 
