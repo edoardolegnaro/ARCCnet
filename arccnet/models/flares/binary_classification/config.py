@@ -42,3 +42,10 @@ IMG_TARGET_WIDTH = 224
 IMG_DIVISOR = 800.0  # Divisor for hardtanh normalization
 IMG_MIN_VAL = -1.0  # Min value for hardtanh normalization
 IMG_MAX_VAL = 1.0  # Max value for hardtanh normalization
+
+# =============================================================================
+# Logging Parameters
+# =============================================================================
+ENABLE_COMET_LOGGING = True  # Set to True to enable Comet logging, False to disable
+COMET_PROJECT_NAME = 'ars-flare-classification'
+COMET_WORKSPACE = 'arcaff'

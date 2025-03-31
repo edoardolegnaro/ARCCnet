@@ -1,8 +1,10 @@
 import logging
+import os
 
 import pytorch_lightning as pl
 import torch
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
+from pytorch_lightning.loggers import CometLogger
 
 from arccnet.models.flares.binary_classification import config, dataset
 from arccnet.models.flares.binary_classification import lighning_modules as lm
@@ -82,6 +84,18 @@ logger.info("Callbacks defined: ModelCheckpoint and EarlyStopping.")
 
 # --- 5. Initialize Trainer ---
 logger.info("Initializing PyTorch Lightning Trainer...")
+
+# Initialize CometLogger if enabled
+comet_logger = None
+if config.ENABLE_COMET_LOGGING:
+    logger.info("Comet logging is enabled. Initializing CometLogger...")
+    comet_logger = CometLogger(
+        api_key=os.getenv("COMET_API_KEY"),  
+        project_name=config.COMET_PROJECT_NAME,
+        workspace=config.COMET_WORKSPACE, 
+    )
+    logger.info("CometLogger initialized.")
+
 trainer = pl.Trainer(
     max_epochs=config.MAX_EPOCHS,
     accelerator="auto",  # Automatically chooses GPU, TPU, CPU etc.
@@ -89,7 +103,7 @@ trainer = pl.Trainer(
     precision="16-mixed",  # Enable 16-bit mixed-precision training
     deterministic=False,  # Set True for reproducibility, may impact performance
     enable_progress_bar=True,
-    logger=False,  # Uses TensorBoardLogger by default if installed
+    logger=comet_logger if comet_logger else False,  # Use CometLogger if enabled
     callbacks=[checkpoint_callback, early_stopping_callback],  # Add callbacks
 )
 # Use logger instead of print
