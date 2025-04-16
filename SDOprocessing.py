@@ -3,11 +3,11 @@ import os
 import sys
 import glob
 import itertools
-from pathlib import PurePath
+from random import sample
+from pathlib import Path
 
 import drms
 import numpy as np
-import pandas as pd
 import sunpy.map
 from aiapy.calibrate import correct_degradation, register, update_pointing
 from aiapy.psf import deconvolve
@@ -16,68 +16,68 @@ from sunpy.map.maputils import all_coordinates_from_map, coordinate_is_on_solar_
 import astropy.units as u
 from astropy.io import fits
 from astropy.io.fits import CompImageHDU
-from astropy.table import Table
+from astropy.table import Table, vstack
 from astropy.time import Time
 
+from arccnet.data_generation.utils import default_variables
 
-def read_data(path, size, duration):
+
+def read_data(path: str, size: int, duration: int):
     r"""
     Read and process data from a parquet file containing HEK catalogue information regarding flaring events.
 
     Parameters:
     -----------
-        path (str): The path to the parquet file.
-        size (int): The size of the sample to be generated. (Generates 10% X, 40% M, 60% C)
-        duration (int): The duration of the data sample in hours.
+        path : `str`
+            The path to the parquet file.
+        size : `int`
+            The size of the sample to be generated. (Generates 10% X, 40% M, 60% C)
+        duration : `int`
+            The duration of the data sample in hours.
 
     Returns:
     --------
-        list: A list of tuples containing the following information for each selected flare:
+        list
+            A list of tuples containing the following information for each selected flare:
             - NOAA Active Region Number
             - GOES Flare class (C,M,X classes)
             - Start time (Duration + 1 hours before event in FITS format)
             - End time (1 hour before flaring event start time)
     """
-    df = pd.read_parquet(path)
-    noaa_num_df = df[df["noaa_number"] > 0]
-    flare_df = noaa_num_df[noaa_num_df["event_type"] == "FL"]
-    flare_df = flare_df[flare_df["frm_daterun"] > "2011-01-01"]
-    combined_jd = flare_df["start_time.jd1"].values + flare_df["start_time.jd2"].values
-    flare_df["start_time.fits1"] = [Time(start, format="jd").to_value("fits") for start in combined_jd]
-    x_flares_df = flare_df[flare_df["goes_class"].str.startswith("X")]
-    x_flares_df = x_flares_df.sample(n=int(size * 0.1))
-    m_flares_df = flare_df[flare_df["goes_class"].str.startswith("M")]
-    m_flares_df = m_flares_df.sample(n=int(size * 0.4))
-    c_flares_df = flare_df[flare_df["goes_class"].str.startswith("C")]
-    c_flares_df = c_flares_df.sample(n=int(size * 0.6))
-    exp = ["noaa_number", "goes_class", "start_time.fits1"]
-    x_ind, m_ind, c_ind = x_flares_df[exp], m_flares_df[exp], c_flares_df[exp]
-    combined_df = pd.concat([x_ind, m_ind, c_ind])
-    combined_df["start_time.fits1"] = [
-        Time(time, format="fits") - (duration + 1) * u.hour for time in combined_df["start_time.fits1"]
-    ]
+
+    table = Table.read(path)
+    noaa_num_df = table[table["noaa_number"] > 0]
+    flares = noaa_num_df[noaa_num_df["event_type"] == "FL"]
+    flares = flares[flares["frm_daterun"] > "2011-01-01"]
+    x_flares = flares[[flare.startswith("X") for flare in flares["goes_class"]]]
+    x_flares = x_flares[sample(range(len(x_flares)), k=int(0.1 * size))]
+    m_flares = flares[[flare.startswith("M") for flare in flares["goes_class"]]]
+    m_flares = m_flares[sample(range(len(m_flares)), k=int(0.3 * size))]
+    c_flares = flares[[flare.startswith("C") for flare in flares["goes_class"]]]
+    c_flares = c_flares[sample(range(len(c_flares)), k=int(0.6 * size))]
+    exp = ["noaa_number", "goes_class", "start_time", "frm_daterun"]
+    combined = vstack([x_flares[exp], m_flares[exp], c_flares[exp]])
+    combined["start_time"] = [time - (duration + 1) * u.hour for time in combined["start_time"]]
+    combined["start_time"].format = "fits"
     tuples = [
-        [ar_num, fl_class, start_t, start_t + duration * u.hour] for ar_num, fl_class, start_t in combined_df.to_numpy()
+        [ar_num, fl_class, start_t, start_t + duration * u.hour, date] for ar_num, fl_class, start_t, date in combined
     ]
+
     return tuples
 
 
 def load_config():
     r"""
-    Load the configuration for the SDO processing pipeline.
+    Loads the configuration for the SDO processing pipeline.
 
     Returns:
     --------
-        config (dict): The configuration dictionary.
+        config : `dict`
+            The configuration dictionary.
     """
     # Replace this with whatever email(s) we want to use for this purpose.
     os.environ["JSOC_EMAIL"] = "danielgass192@gmail.com"
-    config = {
-        "path": "/Users/danielgass/Desktop",
-        "wavelengths": [171, 193, 304, 211, 335, 94, 131],
-        "rep_tol": 60,
-        "sample": 60,
-    }
+    config = default_variables.SDO_TIME_SERIES_CONFIG
     return config
 
 
@@ -87,12 +87,15 @@ def change_time(time: str, shift: int):
 
     Parameters:
     -----------
-        time (str): A timestamp in FITS format.
-        shift (int): The time shift in seconds.
+        time : `str`
+            A timestamp in FITS format.
+        shift : `int`
+            The time shift in seconds.
 
     Returns:
     --------
-        str: The updated timestamp in FITS format.
+        `str`
+            The updated timestamp in FITS format.
     """
     time_d = Time(time, format="fits") + shift * (u.second)
     return time_d.to_value("fits")
@@ -104,12 +107,15 @@ def comp_list(file: str, file_list: list):
 
     Parameters:
     -----------
-        file (str): The file to check.
-        file_list (list): The list of files.
+        file : `str`
+            The file to check.
+        file_list :
+            `list` The list of files.
 
     Returns:
     --------
-        list: A list of booleans for each element in list. True if the file is present, False otherwise.
+        `list`
+            A list of booleans for each element in list. True if the file is present, False otherwise.
     """
     return any(file in name for name in file_list)
 
@@ -120,16 +126,19 @@ def match_files(aia_maps, hmi_maps):
 
     Parameters:
     -----------
-        aia_maps (list): List of AIA maps.
-        hmi_maps (list): List of HMI maps.
+        aia_maps : `list`
+            List of AIA maps.
+        hmi_maps : `list`
+            List of HMI maps.
 
     Returns:
     --------
-        packed_files(list): A list containing tuples of paired AIA and HMI maps.
+        packed_files : `list`
+            A list containing tuples of paired AIA and HMI maps.
     """
     packed_files = []
     for aia_map in aia_maps:
-        t_d = [abs((aia_map.date - hmi_map.date).value * 24 * 3600) for hmi_map in hmi_maps]
+        t_d = [abs(aia_map.date - hmi_map.date).to_value(u.s) for hmi_map in hmi_maps]
         hmi_match = hmi_maps[t_d.index(min(t_d))]
         packed_files.append([aia_map, hmi_match])
     return packed_files
@@ -141,16 +150,19 @@ def add_fnames(maps, paths):
 
     Parameters:
     -----------
-        maps (list): List of fits maps.
-        paths (list): List of file paths.
+        maps : `list`
+            List of fits maps.
+        paths : `list`
+            List of file paths.
 
     Returns:
     --------
-        named_map (list) : List of fits maps with file names added to metadata.
+        named_map : `list`
+            List of fits maps with file names added to metadata.
     """
     named_maps = []
     for map, fname in zip(maps, paths):
-        map.meta["fname"] = PurePath(fname).name
+        map.meta["fname"] = Path(fname).name
         named_maps.append(map)
     return named_maps
 
@@ -160,7 +172,8 @@ class DrmsDownload:
         start_t,
         end_t,
         path: str,
-        keys: list,
+        hmi_keys: list,
+        aia_keys: list,
         wavelengths: list = [171, 193, 304, 211, 335, 94, 131, 1600, 4500, 1700],
         sample: int = 60,
     ):
@@ -169,18 +182,25 @@ class DrmsDownload:
 
         Parameters:
         -----------
-            starts (list): List of start and end times for the data retrieval.
-            path (str): Path to save the downloaded data.
-            keys (list): List of keys for the data query.
-            wavelengths (list): List of wavelengths for the AIA data (default all AIA wvl).
-            sample (int): Sample rate for the data cadence (default 1/hr).
+            starts : `list`
+                List of start and end times for the data retrieval.
+            path : `str`
+                Path to save the downloaded data.
+            keys : `list`
+                List of keys for the data query.
+            wavelengths : `list`
+                List of wavelengths for the AIA data (default all AIA wvl).
+            sample : `int`
+                Sample rate for the data cadence (default 1/hr).
 
         Returns:
         --------
-            aia_maps, hmi_maps (tuple): A tuple containing the AIA maps and HMI maps.
+            aia_maps, hmi_maps : `tuple`
+                A tuple containing the AIA maps and HMI maps.
         """
-        hmi_query, hmi_export = DrmsDownload.hmi_query_export(start_t, end_t, keys, sample)
-        aia_query, aia_export = DrmsDownload.aia_query_export(hmi_query, keys, wavelengths)
+
+        hmi_query, hmi_export = DrmsDownload.hmi_query_export(start_t, end_t, hmi_keys, sample)
+        aia_query, aia_export = DrmsDownload.aia_query_export(hmi_query, aia_keys, wavelengths)
 
         hmi_dls, hmi_exs = DrmsDownload.l1_file_save(hmi_export, hmi_query, path)
         aia_dls, aia_exs = DrmsDownload.l1_file_save(aia_export, aia_query, path)
@@ -197,14 +217,19 @@ class DrmsDownload:
 
         Parameters:
         -----------
-            time_1 (str): The start timestamp in FITS format.
-            time_2 (str): The end timestamp in FITS format.
-            keys (list): A list of keys to query.
-            sample (int): The sample rate in minutes.
+            time_1 : `str`
+                The start timestamp in FITS format.
+            time_2 : `str`
+                The end timestamp in FITS format.
+            keys : `list`
+                A list of keys to query.
+            sample : `int`
+                The sample rate in minutes.
 
         Returns:
         --------
-            hmi_query_full (pandas df), hmi_result (drms export) (tuple): A tuple containing the query result and the export data response.
+            hmi_query_full, hmi_result : `tuple`
+                A tuple containing the query result (pandas df) and the export data response (drms export object).
         """
         client = drms.Client()
         duration = int((time_2 - time_1).to_value(u.hour))
@@ -235,24 +260,38 @@ class DrmsDownload:
 
         Parameters:
         -----------
-            hmi_query: The HMI query result.
-            keys: List of keys to query.
-            wavelength: An AIA wavelength.
+            hmi_query : `drms query`
+                The HMI query result.
+            keys : `list`
+                List of keys to query.
+            wavelength : `list`
+                List of AIA wavelengths.
 
         Returns:
         --------
             aia_query_full, aia_result (tuple): A tuple containing the query result and the export data response.
         """
         client = drms.Client()
-        value = []
-        qstrs_aia = [f"aia.lev1_euv_12s[{time}]{wavelength}" + "{image}" for time in hmi_query["T_REC"]]
-        for qstr in qstrs_aia:
-            value.append(DrmsDownload.aia_rec_find(qstr, keys))
-        unpacked_aia = list(itertools.chain.from_iterable(value))
+        qstrs_euv = [f"aia.lev1_euv_12s[{time}]{wavelength}" + "{image}" for time in hmi_query["T_REC"]]
+        qstrs_uv = [f"aia.lev1_uv_24s[{time}]{[1600, 1700]}" + "{image}" for time in hmi_query["T_REC"]]
+        # qstrs_vis = [f"aia.lev1_vis_1h[{time}]{[4500]}" + "{image}" for time in hmi_query["T_REC"]]
+
+        euv_value = [DrmsDownload.aia_rec_find(qstr, keys, 3, 12) for qstr in qstrs_euv]
+        uv_value = [DrmsDownload.aia_rec_find(qstr, keys, 2, 24) for qstr in qstrs_uv]
+        # vis_value = [DrmsDownload.aia_rec_find(qstr, keys, 0, 100) for qstr in qstrs_vis]
+
+        # for qstr in qstrs_aia:
+        #     value.append(DrmsDownload.aia_rec_find(qstr, keys))
+
+        # unpacked_aia = list(itertools.chain(euv_value, uv_value, vis_value))
+        unpacked_aia = list(itertools.chain(euv_value, uv_value))
+        unpacked_aia = list(itertools.chain.from_iterable(unpacked_aia))
         aia_num_str = str(unpacked_aia).strip("[]")
-        aia_qstr = f"aia.lev1_euv_12s[! recnum in ({aia_num_str}) !]" + "{image}"
-        aia_query_full = client.query(aia_qstr, keys)
-        aia_result = client.export(aia_qstr, method="url", protocol="fits", email=os.environ["JSOC_EMAIL"])
+        aia_comb_qstr = f"aia.lev1[! FSN in ({aia_num_str}) !]" + "{image_lev1}"
+
+        aia_query_full = client.query(aia_comb_qstr, keys)
+
+        aia_result = client.export(aia_comb_qstr, method="url", protocol="fits", email=os.environ["JSOC_EMAIL"])
         aia_result.wait()
         return aia_query_full, aia_result
 
@@ -262,12 +301,15 @@ class DrmsDownload:
 
         Parameters:
         -----------
-            qstr (str): A query string.
-            keys (list): List of keys to query.
+            qstr : `str`
+                A query string.
+            keys : `list`
+                List of keys to query.
 
         Returns:
         --------
-            int: The HMI record number.
+            `int`
+                The HMI record number.
         """
         client = drms.Client()
         retries = 0
@@ -279,7 +321,7 @@ class DrmsDownload:
             retries += 1
         return qry["*recnum*"].values[0]
 
-    def aia_rec_find(qstr, keys):
+    def aia_rec_find(qstr, keys, retries, time_add):
         r"""
         Find the AIA record number for a given query string.
 
@@ -293,15 +335,16 @@ class DrmsDownload:
             int: The AIA record number.
         """
         client = drms.Client()
-        retries = 0
+        retry = 0
         qry = client.query(qstr, keys)
+        qstr_head = qstr.split("[")[0]
         time, wvl = qry["T_REC"].values[0][0:-1], qry["WAVELNTH"].values[0]
-        while qry["QUALITY"].values[0] != 0 and retries < 10:
-            qry = client.query(f"aia.lev1_euv_12s[{time}][{wvl}]" + "{image}", keys)
-            time = change_time(time, 12)
-            retries += 1
-        if qry["QUALITY"].values[0] == 0:
-            return qry["*recnum*"].values
+        while qry["QUALITY"].values[0] != 0 and retry < retries:
+            qry = client.query(f"{qstr_head}[{time}][{wvl}]" + "{image}", keys)
+            time = change_time(time, time_add)
+            retry += 1
+        if qry["QUALITY"].values[0] == 0 or wvl == 4500:
+            return qry["FSN"].values
 
     def l1_file_save(export, query, path):
         r"""
@@ -309,13 +352,17 @@ class DrmsDownload:
 
         Parameters:
         -----------
-            export: A drms data export.
-            query: A drms query result.
-            path (str): A base path to save the files.
+            export : `drms export`
+                A drms data export.
+            query : `drms query`
+                A drms query result.
+            path : `str`
+                A base path to save the files.
 
         Returns:
         --------
-            export (drms export), total_files (list) (tuple): A tuple containing the updated export data and the list of saved file paths.
+            export (drms export), total_files (list) : `tuple`
+                A tuple containing the updated export data and the list of saved file paths.
         """
         instr = query["INSTRUME"][0][0:3]
         path_prefix = []
@@ -327,7 +374,7 @@ class DrmsDownload:
 
         existing_files = []
         for dirs in np.unique(path_prefix):
-            os.makedirs(dirs, exist_ok=True)
+            Path(dirs).mkdir(parents=True, exist_ok=True)
             existing_files.append(glob.glob(f"{dirs}/*.fits"))
 
         existing_files = [*existing_files][0]
@@ -350,14 +397,19 @@ class SDOproc:
 
         Parameters:
         -----------
-            aia_map: The AIA map to process.
-            deconv (bool): Whether to deconvolve the PSF.
-            degcorr (bool): Whether to correct for degradation.
-            exnorm (bool): Whether to normalize exposure.
+            aia_map : `sunpy.map.Map`
+                The AIA map to process.
+            deconv : `bool`
+                Whether to deconvolve the PSF.
+            degcorr : `bool`
+                Whether to correct for degradation.
+            exnorm : `bool`
+                Whether to normalize exposure.
 
         Returns:
         --------
-            aia_map (sunpy.map.Map):  Processed AIA map.
+            aia_map : `sunpy.map.Map`
+                Processed AIA map.
         """
         if deconv:
             aia_map = deconvolve(aia_map)
@@ -376,12 +428,15 @@ class SDOproc:
 
         Parameters:
         -----------
-            aia_map: The AIA map to reproject.
-            hmi_map: The HMI map to use as the target coordinate system.
+            aia_map : `sunpy.map.Map`
+                The AIA map to reproject.
+            hmi_map : `sunpy.map.Map`
+                The HMI map to use as the target coordinate system.
 
         Returns:
         --------
-            rpr_aia_map (sunpy.map.Map): Reprojected AIA map.
+            rpr_aia_map : `sunpy.map.Map`
+                Reprojected AIA map.
         """
         rpr_aia_map = aia_map.reproject_to(hmi_map.wcs)
         rpr_aia_map.meta["wavelnth"] = aia_map.meta["wavelnth"]
@@ -400,16 +455,18 @@ class SDOproc:
 
         Parameters:
         -----------
-            hmimap: The HMI map.
+            hmimap : `sunpy.map.Map`
+                The HMI map.
 
         Returns:
         --------
-            hmimap (sunpy.map.Map): The masked HMI map.
+            hmimap : `sunpy.map.Map`
+                The masked HMI map.
         """
         hpc_coords = all_coordinates_from_map(hmimap)
-        mask = coordinate_is_on_solar_disk(hpc_coords)
+        mask = ~coordinate_is_on_solar_disk(hpc_coords)
         hmidata = hmimap.data
-        hmidata[mask is False] = np.nan
+        hmidata[mask] = np.nan
         hmimap = sunpy.map.Map(hmidata, hmimap.meta)
         return hmimap
 
@@ -419,12 +476,15 @@ class SDOproc:
 
         Parameters:
         -----------
-            hmi_map (sunpy.map.Map): HMI map to be processed.
-            overwrite (bool): Flag which determines if l2 files are reproduced and overwritten.
+            hmi_map : `sunpy.map.Map`
+                HMI map to be processed.
+            overwrite : `bool`
+                Flag which determines if l2 files are reproduced and overwritten.
 
         Returns:
         --------
-        proc_path (str): Path to the processed HMI map.
+        proc_path : `str`
+            Path to the processed HMI map.
         """
         path = load_config()["path"]
         time = hmi_map.date.to_value("ymdhms")
@@ -436,6 +496,7 @@ class SDOproc:
             hmi_map = SDOproc.hmi_mask(hmi_map)
             proc_path = SDOproc.l2_file_save(hmi_map, path)
 
+        # This updates process status for tqdm more effectively.
         sys.stdout.flush()
 
         return proc_path
@@ -446,12 +507,15 @@ class SDOproc:
 
         Parameters:
         -----------
-            packed_maps (list): List containing the AIA map and its corresponding HMI map.
-            overwrite (bool): Flag which determines if l2 files are reproduced and overwritten.
+            packed_maps : `list`
+                List containing the AIA map and its corresponding HMI map.
+            overwrite : `bool`
+                Flag which determines if l2 files are reproduced and overwritten.
 
         Returns:
         --------
-            proc_path (str): Path to the processed AIA map.
+            proc_path : `str`
+                Path to the processed AIA map.
         """
         path = load_config()["path"]
         aia_map, hmi_match = packed_maps[0], packed_maps[1]
@@ -464,6 +528,7 @@ class SDOproc:
             aia_map = SDOproc.aia_reproject(aia_map, hmi_match)
             proc_path = SDOproc.l2_file_save(aia_map, path)
 
+        # This updates process status for tqdm more effectively.
         sys.stdout.flush()
 
         return proc_path
@@ -473,19 +538,23 @@ class SDOproc:
         Save a "level 2" FITS map.
 
         Args:
-            fits_map (sunpy.map.Map): The FITS map to save.
-            path (str): The path to save the file.
-            overwrite (bool): Whether to overwrite existing files.
+            fits_map : `sunpy.map.Map`
+                The FITS map to save.
+            path : `str`
+                The path to save the file.
+            overwrite : `bool`
+                Whether to overwrite existing files.
 
         Returns:
-            fits_path (str): The path of the saved file.
+            fits_path : `str`
+                The path of the saved file.
         """
         time = fits_map.date.to_value("ymdhms")
         year, month, day = time[0], time[1], time[2]
         map_path = f"{path}/02_processed/{year}/{month}/{day}/SDO/{fits_map.nickname}"
-        os.makedirs(map_path, exist_ok=True)
+        Path(map_path).mkdir(parents=True, exist_ok=True)
         fits_path = f"{map_path}/02_{fits_map.meta['fname']}"
-        if (not os.path.exists(fits_path)) or overwrite:
+        if (not Path(fits_path).exists()) or overwrite:
             fits_map.save(fits_path, hdu_type=CompImageHDU, overwrite=True)
         return fits_path
 
@@ -495,13 +564,17 @@ class SDOproc:
 
         Parameters:
         -----------
-            aia_maps (list): List of AIA map paths.
-            hmi_maps (list): List of HMI map paths.
+            aia_maps : `list`
+                List of AIA map paths.
+            hmi_maps : `list`
+                List of HMI map paths.
 
         Returns:
         --------
-            paired_table(astropy table): A list containing tuples of paired AIA and HMI maps.
+            paired_table : `Astropy.table`
+                A list containing tuples of paired AIA and HMI maps.
         """
+        aia_wavelnth = []
         aia_paths = []
         aia_quality = []
         hmi_paths = []
@@ -518,8 +591,14 @@ class SDOproc:
             hmi_paths.append(hmi_match)
             hmi_quality.append(fits.open(hmi_match)[1].header["quality"])
             aia_quality.append(fits.open(aia_map)[1].header["quality"])
-
+            aia_wavelnth.append(fits.open(aia_map)[1].header["wavelnth"])
         paired_table = Table(
-            {"AIA files": aia_paths, "AIA quality": aia_quality, "HMI files": hmi_paths, "HMI quality": hmi_quality}
+            {
+                "Wavelength": aia_wavelnth,
+                "AIA files": aia_paths,
+                "AIA quality": aia_quality,
+                "HMI files": hmi_paths,
+                "HMI quality": hmi_quality,
+            }
         )
         return paired_table, aia_paths, aia_quality, hmi_paths, hmi_quality
