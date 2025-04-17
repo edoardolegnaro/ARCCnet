@@ -6,7 +6,13 @@ from tqdm import tqdm
 
 from astropy.table import Table
 
-from SDOprocessing import DrmsDownload, SDOproc, load_config, match_files, read_data
+from arccnet.data_generation.timeseries.SDOprocessing import (
+    DrmsDownload,
+    SDOproc,
+    load_config,
+    match_files,
+    read_data,
+)
 
 if __name__ == "__main__":
     logger = logging.getLogger(__name__)

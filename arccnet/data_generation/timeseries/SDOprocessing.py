@@ -21,13 +21,24 @@ from astropy.time import Time
 
 from arccnet.data_generation.utils import default_variables
 
+__all__ = [
+    "read_data",
+    "load_config",
+    "change_time",
+    "comp_list",
+    "match_files",
+    "add_fnames",
+    "DrmsDownload",
+    "SDOproc",
+]
+
 
 def read_data(path: str, size: int, duration: int):
     r"""
     Read and process data from a parquet file containing HEK catalogue information regarding flaring events.
 
-    Parameters:
-    -----------
+    Parameters
+    ----------
         path : `str`
             The path to the parquet file.
         size : `int`
@@ -35,8 +46,8 @@ def read_data(path: str, size: int, duration: int):
         duration : `int`
             The duration of the data sample in hours.
 
-    Returns:
-    --------
+    Returns
+    -------
         list
             A list of tuples containing the following information for each selected flare:
             - NOAA Active Region Number
@@ -70,8 +81,8 @@ def load_config():
     r"""
     Loads the configuration for the SDO processing pipeline.
 
-    Returns:
-    --------
+    Returns
+    -------
         config : `dict`
             The configuration dictionary.
     """
@@ -85,15 +96,15 @@ def change_time(time: str, shift: int):
     r"""
     Change the timestamp by a given time shift.
 
-    Parameters:
-    -----------
+    Parameters
+    ----------
         time : `str`
             A timestamp in FITS format.
         shift : `int`
             The time shift in seconds.
 
-    Returns:
-    --------
+    Returns
+    -------
         `str`
             The updated timestamp in FITS format.
     """
@@ -105,15 +116,15 @@ def comp_list(file: str, file_list: list):
     r"""
     Check if a file is present in a list of files.
 
-    Parameters:
-    -----------
+    Parameters
+    ----------
         file : `str`
             The file to check.
         file_list :
             `list` The list of files.
 
-    Returns:
-    --------
+    Returns
+    -------
         `list`
             A list of booleans for each element in list. True if the file is present, False otherwise.
     """
@@ -124,15 +135,15 @@ def match_files(aia_maps, hmi_maps):
     r"""
     Matches AIA maps with corresponding HMI maps based on the closest time difference.
 
-    Parameters:
-    -----------
+    Parameters
+    ----------
         aia_maps : `list`
             List of AIA maps.
         hmi_maps : `list`
             List of HMI maps.
 
-    Returns:
-    --------
+    Returns
+    -------
         packed_files : `list`
             A list containing tuples of paired AIA and HMI maps.
     """
@@ -148,15 +159,15 @@ def add_fnames(maps, paths):
     r"""
     Adds file names to fits map metadata.
 
-    Parameters:
-    -----------
+    Parameters
+    ----------
         maps : `list`
             List of fits maps.
         paths : `list`
             List of file paths.
 
-    Returns:
-    --------
+    Returns
+    -------
         named_map : `list`
             List of fits maps with file names added to metadata.
     """
@@ -180,8 +191,8 @@ class DrmsDownload:
         r"""
         Performs pipeline to download and process AIA and HMI data.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
             starts : `list`
                 List of start and end times for the data retrieval.
             path : `str`
@@ -193,8 +204,8 @@ class DrmsDownload:
             sample : `int`
                 Sample rate for the data cadence (default 1/hr).
 
-        Returns:
-        --------
+        Returns
+        -------
             aia_maps, hmi_maps : `tuple`
                 A tuple containing the AIA maps and HMI maps.
         """
@@ -215,7 +226,7 @@ class DrmsDownload:
         r"""
         Query and export HMI data from the JSOC database.
 
-        Parameters:
+        Parameters
         -----------
             time_1 : `str`
                 The start timestamp in FITS format.
@@ -226,8 +237,8 @@ class DrmsDownload:
             sample : `int`
                 The sample rate in minutes.
 
-        Returns:
-        --------
+        Returns
+        -------
             hmi_query_full, hmi_result : `tuple`
                 A tuple containing the query result (pandas df) and the export data response (drms export object).
         """
@@ -258,7 +269,7 @@ class DrmsDownload:
         r"""
         Query and export AIA data from the JSOC database.
 
-        Parameters:
+        Parameters
         -----------
             hmi_query : `drms query`
                 The HMI query result.
@@ -267,7 +278,7 @@ class DrmsDownload:
             wavelength : `list`
                 List of AIA wavelengths.
 
-        Returns:
+        Return
         --------
             aia_query_full, aia_result (tuple): A tuple containing the query result and the export data response.
         """
@@ -299,15 +310,15 @@ class DrmsDownload:
         r"""
         Find the HMI record number for a given query string.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
             qstr : `str`
                 A query string.
             keys : `list`
                 List of keys to query.
 
-        Returns:
-        --------
+        Returns
+        -------
             `int`
                 The HMI record number.
         """
@@ -325,13 +336,13 @@ class DrmsDownload:
         r"""
         Find the AIA record number for a given query string.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
             qstr (str): A query string.
             keys (list): List of keys to query.
 
-        Returns:
-        --------
+        Returns
+        -------
             int: The AIA record number.
         """
         client = drms.Client()
@@ -350,8 +361,8 @@ class DrmsDownload:
         r"""
         Save the exported data as level 1 FITS files.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
             export : `drms export`
                 A drms data export.
             query : `drms query`
@@ -359,8 +370,8 @@ class DrmsDownload:
             path : `str`
                 A base path to save the files.
 
-        Returns:
-        --------
+        Returns
+        -------
             export (drms export), total_files (list) : `tuple`
                 A tuple containing the updated export data and the list of saved file paths.
         """
@@ -395,8 +406,8 @@ class SDOproc:
         r"""
         Process an AIA map to level 1.5.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
             aia_map : `sunpy.map.Map`
                 The AIA map to process.
             deconv : `bool`
@@ -406,8 +417,8 @@ class SDOproc:
             exnorm : `bool`
                 Whether to normalize exposure.
 
-        Returns:
-        --------
+        Returns
+        -------
             aia_map : `sunpy.map.Map`
                 Processed AIA map.
         """
@@ -426,15 +437,15 @@ class SDOproc:
         r"""
         Reproject an AIA map to the same coordinate system as an HMI map.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
             aia_map : `sunpy.map.Map`
                 The AIA map to reproject.
             hmi_map : `sunpy.map.Map`
                 The HMI map to use as the target coordinate system.
 
-        Returns:
-        --------
+        Returns
+        -------
             rpr_aia_map : `sunpy.map.Map`
                 Reprojected AIA map.
         """
@@ -453,13 +464,13 @@ class SDOproc:
         r"""
         Mask pixels outside of Rsun_obs in an HMI map.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
             hmimap : `sunpy.map.Map`
                 The HMI map.
 
-        Returns:
-        --------
+        Returns
+        -------
             hmimap : `sunpy.map.Map`
                 The masked HMI map.
         """
@@ -474,15 +485,15 @@ class SDOproc:
         r"""
         Processes the HMI map to "level 2" by applying a mask and saving it to the output directory.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
             hmi_map : `sunpy.map.Map`
                 HMI map to be processed.
             overwrite : `bool`
                 Flag which determines if l2 files are reproduced and overwritten.
 
-        Returns:
-        --------
+        Returns
+        -------
         proc_path : `str`
             Path to the processed HMI map.
         """
@@ -505,15 +516,15 @@ class SDOproc:
         r"""
         Processes the AIA map to "level 2" by leveling, rescaling, trimming, and reprojecting it to match the nearest HMI map.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
             packed_maps : `list`
                 List containing the AIA map and its corresponding HMI map.
             overwrite : `bool`
                 Flag which determines if l2 files are reproduced and overwritten.
 
-        Returns:
-        --------
+        Returns
+        -------
             proc_path : `str`
                 Path to the processed AIA map.
         """
@@ -537,7 +548,8 @@ class SDOproc:
         r"""
         Save a "level 2" FITS map.
 
-        Args:
+        Parameters
+        ----------
             fits_map : `sunpy.map.Map`
                 The FITS map to save.
             path : `str`
@@ -545,7 +557,8 @@ class SDOproc:
             overwrite : `bool`
                 Whether to overwrite existing files.
 
-        Returns:
+        Returns
+        -------
             fits_path : `str`
                 The path of the saved file.
         """
@@ -562,15 +575,15 @@ class SDOproc:
         r"""
         Matches l2 AIA maps with corresponding HMI maps based on the closest time difference, and returns Astropy Tab;e
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
             aia_maps : `list`
                 List of AIA map paths.
             hmi_maps : `list`
                 List of HMI map paths.
 
-        Returns:
-        --------
+        Returns
+        -------
             paired_table : `Astropy.table`
                 A list containing tuples of paired AIA and HMI maps.
         """
