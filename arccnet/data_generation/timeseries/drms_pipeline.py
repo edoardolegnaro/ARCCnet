@@ -1,18 +1,18 @@
+import time
 import logging
+import traceback
 from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor
 
 from tqdm import tqdm
-import time
-import traceback
-from arccnet import config
 
 from astropy.table import Table
 
+from arccnet import config
 from arccnet.data_generation.timeseries.sdo_processing import (
+    aia_l2,
     drms_pipeline,
     hmi_l2,
-    aia_l2,
     l2_table_match,
     match_files,
     read_data,
@@ -32,15 +32,15 @@ if __name__ == "__main__":
             try:
                 print(record)
                 aia_maps, hmi_maps = drms_pipeline(
-                    start_t = start,
-                    end_t = end,
-                    path = config["paths"]["data_folder"],
-                    hmi_keys = config["drms"]["hmi_keys"],
-                    aia_keys = config["drms"]["aia_keys"],
-                    wavelengths = config["drms"]["wavelengths"],
-                    sample = config["drms"]["sample"],
+                    start_t=start,
+                    end_t=end,
+                    path=config["paths"]["data_folder"],
+                    hmi_keys=config["drms"]["hmi_keys"],
+                    aia_keys=config["drms"]["aia_keys"],
+                    wavelengths=config["drms"]["wavelengths"],
+                    sample=config["drms"]["sample"],
                 )
-                
+
                 hmi_proc = tqdm(
                     executor.map(hmi_l2, hmi_maps),
                     total=len(hmi_maps),
@@ -87,14 +87,16 @@ if __name__ == "__main__":
 
             except Exception as error:
                 Path(f"{config['paths']['data_dir_logs']}").mkdir(parents=True, exist_ok=True)
-                logging.basicConfig(filename=f"{config['paths']['data_dir_logs']}/{file_name}.log", encoding="utf-8", level=logging.INFO)
-                print(f'ERROR HAS OCCURRED - {type(error).__name__} : {error} - SEE LOG {file_name}')
-                run_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
-                logging.warning(f'ERROR HAS OCCURRED AT {run_time} - {type(error).__name__} : {error}')
+                logging.basicConfig(
+                    filename=f"{config['paths']['data_dir_logs']}/{file_name}.log", encoding="utf-8", level=logging.INFO
+                )
+                print(f"ERROR HAS OCCURRED - {type(error).__name__} : {error} - SEE LOG {file_name}")
+                run_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+                logging.warning(f"ERROR HAS OCCURRED AT {run_time} - {type(error).__name__} : {error}")
                 er_tcb = traceback.format_tb(error.__traceback__)
-                [logging.info(f'{line.name}, line {line.lineno}') for line in traceback.extract_tb(error.__traceback__)]
+                [logging.info(f"{line.name}, line {line.lineno}") for line in traceback.extract_tb(error.__traceback__)]
 
-                
+
 # 70 X class flares.
 # Read the flare list.
 # Not just HEK, look for save files for flares.

@@ -5,9 +5,6 @@ import glob
 import itertools
 from random import sample
 from pathlib import Path
-from arccnet import config
-os.environ["JSOC_EMAIL"] = 'danielgass192@gmail.com'
-
 
 import drms
 import numpy as np
@@ -22,6 +19,11 @@ from astropy.io.fits import CompImageHDU
 from astropy.table import Table, vstack
 from astropy.time import Time
 
+from arccnet import config
+
+os.environ["JSOC_EMAIL"] = "danielgass192@gmail.com"
+
+
 __all__ = [
     "read_data",
     "hmi_l2",
@@ -29,10 +31,8 @@ __all__ = [
     "change_time",
     "comp_list",
     "match_files",
+    "drms_pipeline",
     "add_fnames",
-    "DrmsDownload",
-    "SDOproc",
-    "drmspipeline"
 ]
 
 
@@ -64,13 +64,11 @@ def read_data(path: str, size: int, duration: int):
     flares = noaa_num_df[noaa_num_df["event_type"] == "FL"]
     flares = flares[flares["frm_daterun"] > "2011-01-01"]
     x_flares = flares[[flare.startswith("X") for flare in flares["goes_class"]]]
-    x_flares = x_flares[sample(range(len(x_flares)), k=int(0.1 * size))][0]
+    x_flares = x_flares[sample(range(len(x_flares)), k=int(0.1 * size))]
     m_flares = flares[[flare.startswith("M") for flare in flares["goes_class"]]]
-    m_flares = m_flares[sample(range(len(m_flares)), k=int(0.3 * size))][0]
+    m_flares = m_flares[sample(range(len(m_flares)), k=int(0.3 * size))]
     c_flares = flares[[flare.startswith("C") for flare in flares["goes_class"]]]
-    c_flares = c_flares[c_flares['noaa_number'] == 12052]
-    c_flares = c_flares[c_flares['goes_class'] == 'C1.0']
-    # c_flares = c_flares[sample(range(len(c_flares)), k=int(0.6 * size))]
+    c_flares = c_flares[sample(range(len(c_flares)), k=int(0.6 * size))]
     exp = ["noaa_number", "goes_class", "start_time", "frm_daterun"]
     print(c_flares[exp])
     combined = vstack([x_flares[exp], m_flares[exp], c_flares[exp]])
@@ -186,14 +184,13 @@ def add_fnames(maps, paths):
     return named_maps
 
 
-
 def drms_pipeline(
     start_t,
     end_t,
     path: str,
     hmi_keys: list,
     aia_keys: list,
-    wavelengths: str = '171, 193, 304, 211, 335, 94, 131, 1600, 4500, 1700',
+    wavelengths: str = "171, 193, 304, 211, 335, 94, 131, 1600, 4500, 1700",
     sample: int = 60,
 ):
     r"""
@@ -228,6 +225,7 @@ def drms_pipeline(
     aia_maps = sunpy.map.Map(aia_exs)
     aia_maps = add_fnames(aia_maps, aia_exs)
     return aia_maps, hmi_maps
+
 
 def hmi_query_export(time_1, time_2, keys: list, sample: int):
     r"""
@@ -270,7 +268,8 @@ def hmi_query_export(time_1, time_2, keys: list, sample: int):
     hmi_result.wait()
     return hmi_query_full, hmi_result
 
-def aia_query_export(hmi_query, keys, wavelength = '171, 193, 304, 211, 335, 94, 131'):
+
+def aia_query_export(hmi_query, keys, wavelength="171, 193, 304, 211, 335, 94, 131"):
     r"""
     Query and export AIA data from the JSOC database.
 
@@ -307,6 +306,7 @@ def aia_query_export(hmi_query, keys, wavelength = '171, 193, 304, 211, 335, 94,
     aia_result.wait()
     return aia_query_full, aia_result
 
+
 def hmi_rec_find(qstr, keys):
     r"""
     Find the HMI record number for a given query string.
@@ -332,6 +332,7 @@ def hmi_rec_find(qstr, keys):
         time = change_time(time, 720)
         retries += 1
     return qry["*recnum*"].values[0]
+
 
 def aia_rec_find(qstr, keys, retries, time_add):
     r"""
@@ -360,6 +361,7 @@ def aia_rec_find(qstr, keys, retries, time_add):
     if qry["QUALITY"].values[0] == 0:
         return qry["FSN"].values
 
+
 def l1_file_save(export, query, path):
     r"""
     Save the exported data as level 1 FITS files.
@@ -380,8 +382,8 @@ def l1_file_save(export, query, path):
     """
     instr = query["INSTRUME"][0][0:3]
     path_prefix = []
-    export.urls.drop_duplicates(ignore_index = True, inplace = True)
-    query.drop_duplicates(ignore_index = True, inplace = True)
+    export.urls.drop_duplicates(ignore_index=True, inplace=True)
+    query.drop_duplicates(ignore_index=True, inplace=True)
     for time in query["T_REC"]:
         time = sunpy.time.parse_time(time).to_value("ymdhms")
         year, month, day = time["year"], time["month"], time["day"]
@@ -437,6 +439,7 @@ def aia_process(aia_map, deconv: bool = False, degcorr: bool = False, exnorm: bo
         aia_map = sunpy.map.Map(aiad.astype(int), aia_map.fits_header)
     return aia_map
 
+
 def aia_reproject(aia_map, hmi_map):
     r"""
     Reproject an AIA map to the same coordinate system as an HMI map.
@@ -464,6 +467,7 @@ def aia_reproject(aia_map, hmi_map):
 
     return rpr_aia_map
 
+
 def hmi_mask(hmimap):
     r"""
     Mask pixels outside of Rsun_obs in an HMI map.
@@ -484,6 +488,7 @@ def hmi_mask(hmimap):
     hmidata[mask] = np.nan
     hmimap = sunpy.map.Map(hmidata, hmimap.meta)
     return hmimap
+
 
 def hmi_l2(hmi_map):
     r"""
@@ -515,6 +520,7 @@ def hmi_l2(hmi_map):
     sys.stdout.flush()
 
     return proc_path
+
 
 def aia_l2(packed_maps):
     r"""
@@ -548,6 +554,7 @@ def aia_l2(packed_maps):
 
     return proc_path
 
+
 def l2_file_save(fits_map, path: str, overwrite: bool = False):
     r"""
     Save a "level 2" FITS map.
@@ -575,6 +582,7 @@ def l2_file_save(fits_map, path: str, overwrite: bool = False):
         fits_map.save(fits_path, hdu_type=CompImageHDU, overwrite=True)
     return fits_path
 
+
 def l2_table_match(aia_maps, hmi_maps):
     r"""
     Matches l2 AIA maps with corresponding HMI maps based on the closest time difference, and returns Astropy Tab;e
@@ -599,10 +607,7 @@ def l2_table_match(aia_maps, hmi_maps):
     hmi_quality = []
 
     for aia_map in aia_maps:
-        t_d = [
-            abs((Time(fits.open(aia_map)[1].header["date-obs"]) - hmi_time).value)
-            for hmi_time in hmi_times
-        ]
+        t_d = [abs((Time(fits.open(aia_map)[1].header["date-obs"]) - hmi_time).value) for hmi_time in hmi_times]
         hmi_match = hmi_maps[t_d.index(min(t_d))]
         aia_paths.append(aia_map)
         hmi_paths.append(hmi_match)
