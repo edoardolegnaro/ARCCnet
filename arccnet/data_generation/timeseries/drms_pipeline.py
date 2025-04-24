@@ -3,66 +3,64 @@ from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor
 
 from tqdm import tqdm
+import time
+import traceback
+from arccnet import config
 
 from astropy.table import Table
 
-from arccnet.data_generation.timeseries.SDOprocessing import (
-    DrmsDownload,
-    SDOproc,
-    load_config,
+from arccnet.data_generation.timeseries.sdo_processing import (
+    drms_pipeline,
+    hmi_l2,
+    aia_l2,
+    l2_table_match,
     match_files,
     read_data,
 )
 
 if __name__ == "__main__":
     logger = logging.getLogger(__name__)
-    logging.basicConfig(filename="test.log", encoding="utf-8", level=logging.DEBUG)
-    config = load_config()
     starts = read_data(
         "/Users/danielgass/Desktop/ARCCnetDan/ARCCnet/hek_swpc_1996-01-01T00:00:00-2023-01-01T00:00:00_dev.parq", 10, 6
     )
-
-    with ProcessPoolExecutor(6) as executor:
-        for record in starts[0:5]:
-            status = "Config"
+    cores = int(config["drms"]["cores"])
+    with ProcessPoolExecutor(cores) as executor:
+        for record in [starts[2]]:
+            noaa_ar, fl_class, start, end = record[0], record[1], record[2], record[3]
+            date = start.value.split("T")[0]
+            file_name = f"{fl_class}_{noaa_ar}_{date}"
             try:
                 print(record)
-                noaa_ar, fl_class, start, end = record[0], record[1], record[2], record[3]
-                status = "Downloading"
-                aia_maps, hmi_maps = DrmsDownload.drms_pipeline(
-                    start,
-                    end,
-                    config["path"],
-                    config["hmi_keys"],
-                    config["aia_keys"],
-                    config["wavelengths"],
-                    config["sample"],
+                aia_maps, hmi_maps = drms_pipeline(
+                    start_t = start,
+                    end_t = end,
+                    path = config["paths"]["data_folder"],
+                    hmi_keys = config["drms"]["hmi_keys"],
+                    aia_keys = config["drms"]["aia_keys"],
+                    wavelengths = config["drms"]["wavelengths"],
+                    sample = config["drms"]["sample"],
                 )
-                date = start.value.split("T")[0]
-                status = "HMI processing"
+                
                 hmi_proc = tqdm(
-                    executor.map(SDOproc.hmi_l2, hmi_maps),
+                    executor.map(hmi_l2, hmi_maps),
                     total=len(hmi_maps),
                     desc=f"{fl_class}_{start}_HMI Processing",
                 )
                 packed_files = match_files(aia_maps, hmi_maps)
-                status = "AIA processing"
                 aia_proc = tqdm(
-                    executor.map(SDOproc.aia_l2, packed_files),
+                    executor.map(aia_l2, packed_files),
                     total=len(aia_maps),
                     desc=f"{fl_class}_{start}_AIA Processing",
                 )
-                # For some reason, aia_proc becomes an empty list after the next line.
-                status = "Batching and Tabling"
-                home_table, aia_maps, aia_quality, hmi_maps, hmi_quality = SDOproc.l2_table_match(
+                # For some reason, aia_proc becomes an empty list after this function call.
+                home_table, aia_maps, aia_quality, hmi_maps, hmi_quality = l2_table_match(
                     list(aia_proc), list(hmi_proc)
                 )
 
                 # This can probably streamlined/functionalized to make the pipeline look better.
-                batched_name = f'{config["path"]}/03_batched'
+                batched_name = f"{config['paths']['data_folder']}/04_final"
                 Path(f"{batched_name}/records").mkdir(parents=True, exist_ok=True)
                 Path(f"{batched_name}/tars").mkdir(parents=True, exist_ok=True)
-                file_name = f"{fl_class}_{noaa_ar}_{date}"
                 aia_away = ["AIA/" + Path(file).name for file in aia_maps]
                 hmi_away = ["HMI/" + Path(file).name for file in hmi_maps]
                 away_table = Table(
@@ -76,14 +74,7 @@ if __name__ == "__main__":
 
                 home_table.write(f"{batched_name}/records/{file_name}.csv", overwrite=True)
 
-            except Exception as error:
-                print(f"{error} - ERROR HAS OCCURRED - LOGGING DETAILS AND CONTINUING")
-                logger.info(record)
-                logger.info(error)
-                logger.info(status)
-
             ## Commented out until we're ready to deliver.
-
             # away_table.write(f"{batched_name}/records/out_{file_name}.csv", overwrite=True)
             # with tarfile.open(f"{batched_name}/tars/{file_name}.tar", "w") as tar:
             #     for file in aia_maps:
@@ -94,7 +85,16 @@ if __name__ == "__main__":
             #         tar.add(file, arcname=f"HMI/{name}")
             #     tar.add(f"{batched_name}/records/out_{file_name}.csv", arcname=f"{file_name}.csv")
 
+            except Exception as error:
+                Path(f"{config['paths']['data_dir_logs']}").mkdir(parents=True, exist_ok=True)
+                logging.basicConfig(filename=f"{config['paths']['data_dir_logs']}/{file_name}.log", encoding="utf-8", level=logging.INFO)
+                print(f'ERROR HAS OCCURRED - {type(error).__name__} : {error} - SEE LOG {file_name}')
+                run_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
+                logging.warning(f'ERROR HAS OCCURRED AT {run_time} - {type(error).__name__} : {error}')
+                er_tcb = traceback.format_tb(error.__traceback__)
+                [logging.info(f'{line.name}, line {line.lineno}') for line in traceback.extract_tb(error.__traceback__)]
 
+                
 # 70 X class flares.
 # Read the flare list.
 # Not just HEK, look for save files for flares.
