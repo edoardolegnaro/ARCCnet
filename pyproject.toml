@@ -31,7 +31,7 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Physics"
 ]
 dependencies = [
-    "aiapy = 0.7",
+    "aiapy ~= 0.7",
     "sunpy[all]~=6.1",
     "packaging>=23.0",
     "scikit-learn~=1.3",
