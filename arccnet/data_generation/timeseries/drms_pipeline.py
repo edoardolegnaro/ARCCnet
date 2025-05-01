@@ -86,15 +86,7 @@ if __name__ == "__main__":
             #     tar.add(f"{batched_name}/records/out_{file_name}.csv", arcname=f"{file_name}.csv")
 
             except Exception as error:
-                Path(f"{config['paths']['data_dir_logs']}").mkdir(parents=True, exist_ok=True)
-                logging.basicConfig(
-                    filename=f"{config['paths']['data_dir_logs']}/{file_name}.log", encoding="utf-8", level=logging.INFO
-                )
-                print(f"ERROR HAS OCCURRED - {type(error).__name__} : {error} - SEE LOG {file_name}")
-                run_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-                logging.warning(f"ERROR HAS OCCURRED AT {run_time} - {type(error).__name__} : {error}")
-                er_tcb = traceback.format_tb(error.__traceback__)
-                [logging.info(f"{line.name}, line {line.lineno}") for line in traceback.extract_tb(error.__traceback__)]
+                logging.error(error, exc_info=True)
 
 
 # 70 X class flares.
