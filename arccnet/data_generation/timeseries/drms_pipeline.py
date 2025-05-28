@@ -73,10 +73,10 @@ if __name__ == "__main__":
                     executor.map(aia_l2, packed_files),
                     total=len(aia_maps),
                 )
-                packed_maps = namedtuple("packed_maps", ["hmi_origin", "l2_map"])
+                packed_maps = namedtuple("packed_maps", ["hmi_origin", "l2_map", "ar_num"])
                 hmi_origin_patch = crop_map(hmi_proc[0], center, patch_height, patch_width, date)
-                l2_hmi_packed = [packed_maps(hmi_origin_patch, hmi_map) for hmi_map in hmi_proc]
-                l2_aia_packed = [packed_maps(hmi_origin_patch, aia_map) for aia_map in aia_proc]
+                l2_hmi_packed = [packed_maps(hmi_origin_patch, hmi_map, noaa_ar) for hmi_map in hmi_proc]
+                l2_aia_packed = [packed_maps(hmi_origin_patch, aia_map, noaa_ar) for aia_map in aia_proc]
                 hmi_patch_paths = tqdm(executor.map(map_reproject, l2_hmi_packed), total=len(l2_hmi_packed))
                 aia_patch_paths = tqdm(executor.map(map_reproject, l2_aia_packed), total=len(l2_aia_packed))
 

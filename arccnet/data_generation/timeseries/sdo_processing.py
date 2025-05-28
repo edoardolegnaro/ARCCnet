@@ -696,7 +696,7 @@ def map_reproject(sdo_packed):
     path = config["paths"]["data_folder"]
     map_path = f"{path}/03_processed/{year}/{month}/{day}/SDO/{sdo_map.nickname}"
     Path(map_path).mkdir(parents=True, exist_ok=True)
-    fits_path = f"{map_path}/03_smap_{sdo_map.meta['fname']}"
+    fits_path = f"{map_path}/{sdo_map.ar_num}_03_{sdo_map.meta['fname']}"
     sdo_rpr.meta["quality"] = sdo_map.meta["quality"]
     sdo_rpr.meta["wavelnth"] = sdo_map.meta["wavelnth"]
     save_compressed_map(sdo_rpr, fits_path, hdu_type=CompImageHDU, overwrite=True)
