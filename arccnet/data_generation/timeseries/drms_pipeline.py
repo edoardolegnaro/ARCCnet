@@ -36,10 +36,10 @@ packed_maps = namedtuple("packed_maps", ["hmi_origin", "l2_map"])
 
 if __name__ == "__main__":
     starts = read_data(
-        hek_path="/Users/danielgass/Desktop/ARCCnetDan/ARCCnet/hek_swpc_1996-01-01T00:00:00-2023-01-01T00:00:00_dev.parq",
-        srs_path="/Users/danielgass/Desktop/ARCCnetDan/ARCCnet/arccnet/data_generation/timeseries/srs_processed_catalog.parq",
+        hek_path="/Users/danielgass/Desktop/ARCCnet/ARCCnet/hek_swpc_1996-01-01T00:00:00-2023-01-01T00:00:00_dev.parq",
+        srs_path="/Users/danielgass/Desktop/ARCCnet/ARCCnet/arccnet/data_generation/timeseries/srs_processed_catalog.parq",
         size=10,
-        duration=6,
+        duration=24,
     )
     cores = int(config["drms"]["cores"])
     with ProcessPoolExecutor(cores) as executor:
@@ -77,10 +77,16 @@ if __name__ == "__main__":
                 )
                 packed_maps = namedtuple("packed_maps", ["hmi_origin", "l2_map", "ar_num"])
                 hmi_origin_patch = crop_map(hmi_proc[0], center, patch_height, patch_width, date)
-                l2_hmi_packed = [packed_maps(hmi_origin_patch, hmi_map, noaa_ar) for hmi_map in hmi_proc]
-                l2_aia_packed = [packed_maps(hmi_origin_patch, aia_map, noaa_ar) for aia_map in aia_proc]
+                l2_hmi_packed = [[hmi_origin_patch, hmi_map, noaa_ar] for hmi_map in hmi_proc]
+                l2_aia_packed = [[hmi_origin_patch, aia_map, noaa_ar] for aia_map in aia_proc]
+
+                # Went back to tuples because this was failing in a weird way - something to do with pickle and concurrent futures. Left for future debugging.
+                # l2_hmi_packed = [packed_maps(hmi_origin_patch, hmi_map, noaa_ar) for hmi_map in hmi_proc]
+                # l2_aia_packed = [packed_maps(hmi_origin_patch, aia_map, noaa_ar) for aia_map in aia_proc]
+
                 hmi_patch_paths = tqdm(executor.map(map_reproject, l2_hmi_packed), total=len(l2_hmi_packed))
                 aia_patch_paths = tqdm(executor.map(map_reproject, l2_aia_packed), total=len(l2_aia_packed))
+                print(hmi_patch_paths)
 
                 # For some reason, aia_proc becomes an empty list after this function call.
                 home_table, aia_patch_paths, aia_quality, hmi_patch_paths, hmi_quality = table_match(

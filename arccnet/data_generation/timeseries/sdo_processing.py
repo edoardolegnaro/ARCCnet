@@ -227,6 +227,7 @@ def drms_pipeline(
         aia_maps, hmi_maps : `tuple`
             A tuple containing the AIA maps and HMI maps.
     """
+    # print(start_t)
     hmi_query, hmi_export = hmi_query_export(start_t, end_t, hmi_keys, sample)
     aia_query, aia_export = aia_query_export(hmi_query, aia_keys, wavelengths)
 
@@ -283,7 +284,7 @@ def hmi_query_export(time_1, time_2, keys: list, sample: int):
     return hmi_query_full, hmi_result
 
 
-def aia_query_export(hmi_query, keys, wavelength="171, 193, 304, 211, 335, 94, 131"):
+def aia_query_export(hmi_query, keys, wavelength):
     r"""
     Query and export AIA data from the JSOC database.
 
@@ -369,15 +370,16 @@ def aia_rec_find(qstr, keys, retries, time_add):
     retry = 0
     qry = client.query(ds=qstr, key=keys)
     qstr_head = qstr.split("[")[0]
-    time, wvl = qry["T_REC"].values[0][0:-1], qry["WAVELNTH"].values[0]
-    if wvl == "4500":
-        return qry["FSN"].values
-    while qry["QUALITY"].values[0] != 0 and retry < retries:
-        qry = client.query(ds=f"{qstr_head}[{time}][{wvl}]" + "{image}", key=keys)
-        time = change_time(time, time_add)
-        retry += 1
-    if qry["QUALITY"].values[0] == 0:
-        return qry["FSN"].values
+    if not qry.empty:
+        time, wvl = qry["T_REC"].values[0][0:-1], qry["WAVELNTH"].values[0]
+        if wvl == "4500":
+            return qry["FSN"].values
+        while qry["QUALITY"].values[0] != 0 and retry < retries:
+            qry = client.query(ds=f"{qstr_head}[{time}][{wvl}]" + "{image}", key=keys)
+            time = change_time(time, time_add)
+            retry += 1
+        if qry["QUALITY"].values[0] == 0:
+            return qry["FSN"].values
 
 
 def l1_file_save(export, query, path):
@@ -688,17 +690,20 @@ def map_reproject(sdo_packed):
         fits_path : `str`
             The path location of the saved submap.
     """
-    sdo_map = sunpy.map.Map(sdo_packed.l2_map)
+    hmi_origin, sdo_path, ar_num = sdo_packed
+    # sdo_map = sunpy.map.Map(sdo_packed.l2_map)
+    sdo_map = sunpy.map.Map(sdo_path)
     with propagate_with_solar_surface():
-        sdo_rpr = sdo_map.reproject_to(sdo_packed.hmi_origin.wcs)
-    time = sdo_rpr.date.to_value("ymdhms")
+        sdo_rpr = sdo_map.reproject_to(hmi_origin.wcs)
+    time = sdo_map.date.to_value("ymdhms")
     year, month, day = time[0], time[1], time[2]
     path = config["paths"]["data_folder"]
     map_path = f"{path}/03_processed/{year}/{month}/{day}/SDO/{sdo_map.nickname}"
     Path(map_path).mkdir(parents=True, exist_ok=True)
-    fits_path = f"{map_path}/{sdo_map.ar_num}_03_{sdo_map.meta['fname']}"
+    fits_path = f"{map_path}/{ar_num}_03_{sdo_map.meta['fname']}"
     sdo_rpr.meta["quality"] = sdo_map.meta["quality"]
     sdo_rpr.meta["wavelnth"] = sdo_map.meta["wavelnth"]
+    sdo_rpr.meta["date-obs"] = sdo_map.meta["date-obs"]
     save_compressed_map(sdo_rpr, fits_path, hdu_type=CompImageHDU, overwrite=True)
 
     return fits_path
