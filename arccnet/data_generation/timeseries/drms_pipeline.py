@@ -11,6 +11,7 @@ from astropy import log as astropy_log
 from astropy.table import Table
 
 from arccnet import config
+
 from arccnet.data_generation.timeseries.sdo_processing import (
     aia_l2,
     crop_map,
@@ -20,6 +21,7 @@ from arccnet.data_generation.timeseries.sdo_processing import (
     match_files,
     read_data,
     table_match,
+    vid_match,
 )
 
 __all__ = []
@@ -38,12 +40,13 @@ if __name__ == "__main__":
     starts = read_data(
         hek_path="/Users/danielgass/Desktop/ARCCnet/ARCCnet/hek_swpc_1996-01-01T00:00:00-2023-01-01T00:00:00_dev.parq",
         srs_path="/Users/danielgass/Desktop/ARCCnet/ARCCnet/arccnet/data_generation/timeseries/srs_processed_catalog.parq",
-        size=10,
-        duration=24,
+        size=40,
+        duration=6,
     )
     cores = int(config["drms"]["cores"])
     with ProcessPoolExecutor(cores) as executor:
-        for record in [starts[0]]:
+        print(len(starts))
+        for record in starts:
             noaa_ar, fl_class, start, end, date, center = record
             pointing_table = calibrate.util.get_pointing_table(source="jsoc", time_range=[start - 6 * u.hour, end])
 
@@ -110,16 +113,17 @@ if __name__ == "__main__":
 
                 home_table.write(f"{batched_name}/records/{file_name}.csv", overwrite=True)
 
-            ## Commented out until we're ready to package.
-            # away_table.write(f"{batched_name}/records/out_{file_name}.csv", overwrite=True)
-            # with tarfile.open(f"{batched_name}/tars/{file_name}.tar", "w") as tar:
-            #     for file in aia_maps:
-            #         name = Path(file).name
-            #         tar.add(file, arcname=f"AIA/{name}")
-            #     for file in np.unique(hmi_maps):
-            #         name = Path(file).name
-            #         tar.add(file, arcname=f"HMI/{name}")
-            #     tar.add(f"{batched_name}/records/out_{file_name}.csv", arcname=f"{file_name}.csv")
+            # Commented out until we're ready to package.
+                # away_table.write(f"{batched_name}/records/out_{file_name}.csv", overwrite=True)
+                # with tarfile.open(f"{batched_name}/tars/{file_name}.tar", "w") as tar:
+                #     for file in aia_maps:
+                #         name = Path(file).name
+                #         tar.add(file, arcname=f"AIA/{name}")
+                #     for file in np.unique(hmi_maps):
+                #         name = Path(file).name
+                #         tar.add(file, arcname=f"HMI/{name}")
+                #     tar.add(f"{batched_name}/records/out_{file_name}.csv", arcname=f"{file_name}.csv")
+                vid_match(home_table, file_name, batched_name)
 
             except Exception as error:
                 logging.error(error, exc_info=True)
