@@ -1,15 +1,3 @@
-import logging
-from pathlib import Path
-from collections import namedtuple
-from concurrent.futures import ProcessPoolExecutor
-
-from aiapy import calibrate
-from tqdm import tqdm
-
-import astropy.units as u
-from astropy import log as astropy_log
-from astropy.table import Table
-
 from arccnet import config
 from arccnet.data_generation.timeseries.sdo_processing import (
     aia_l2,
@@ -23,6 +11,18 @@ from arccnet.data_generation.timeseries.sdo_processing import (
     table_match,
     vid_match,
 )
+
+import logging
+from pathlib import Path
+from collections import namedtuple
+from concurrent.futures import ProcessPoolExecutor
+
+from aiapy import calibrate
+from tqdm import tqdm
+
+import astropy.units as u
+from astropy import log as astropy_log
+from astropy.table import Table
 
 if __name__ == "__main__":
     __all__ = []
