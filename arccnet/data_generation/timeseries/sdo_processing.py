@@ -2,13 +2,15 @@
 import os
 import sys
 import glob
+import shutil
+import warnings
 import itertools
 from random import sample
 from pathlib import Path
-import matplotlib.pyplot as plt
-import cv2
 
+import cv2
 import drms
+import matplotlib.pyplot as plt
 import numpy as np
 import sunpy.map
 from aiapy.calibrate import correct_degradation, register, update_pointing
@@ -23,15 +25,12 @@ from astropy.io import fits
 from astropy.io.fits import CompImageHDU
 from astropy.table import Table, join, vstack
 from astropy.time import Time
-import warnings
-import shutil
 
-warnings.simplefilter('ignore', RuntimeWarning)
+warnings.simplefilter("ignore", RuntimeWarning)
 
 from arccnet import config
 from arccnet.data_generation.mag_processing import pixel_to_bboxcoords
 from arccnet.data_generation.utils.utils import save_compressed_map
-
 
 os.environ["JSOC_EMAIL"] = "danielgass192@gmail.com"
 
@@ -106,9 +105,8 @@ def read_data(hek_path: str, srs_path: str, size: int, duration: int):
     # c_flares = c_flares[sample(range(len(c_flares)), k=int(0.6 * size))]
     # c_flares = c_flares[c_flares["noaa_number"] == 11818]
     # c_flares = c_flares[c_flares["goes_class"] == "C1.6"]
-    c_flares = c_flares[c_flares['tb_date'] == '2013-08-20']
+    c_flares = c_flares[c_flares["tb_date"] == "2013-08-20"]
     # 025925
-
 
     combined = vstack([x_flares, m_flares, c_flares])
     combined["c_coord"] = [
@@ -730,7 +728,6 @@ def map_reproject(sdo_packed):
     return fits_path
 
 
-
 def vid_match(table, name, path):
     r"""
     Creates an animated mosaic of images from the data run - including all AIA wavelengths and HMI 720s magnetogram.
@@ -750,62 +747,62 @@ def vid_match(table, name, path):
             A string containing the path of the completed mosaic animation.
     """
     # Check this carefully
-    hmi_files = table['HMI files'].value
-    aia_files = table['AIA files'].value
+    hmi_files = table["HMI files"].value
+    aia_files = table["AIA files"].value
     wvls = np.unique([table["Wavelength"].value])
     hmi_files = np.unique(hmi_files)
     nrows, ncols = 4, 3  # define your subplot grid
     for file in range(len(hmi_files)):
         fig = plt.figure()
-        plt.title(name, size = 7)
-        plt.axis('off')
+        plt.title(name, size=7)
+        plt.axis("off")
         hmi = hmi_files[file]
         hmi_map = sunpy.map.Map(hmi)
-        for i in range(len(wvls)+1):
+        for i in range(len(wvls) + 1):
             row = i // ncols
             col = i % ncols
             if i < 10:
                 wv = wvls[i]
-                files = table[table['Wavelength'] == wv]
-                files = files[files['HMI files'] == hmi]
-                aia_files = files['AIA files']
+                files = table[table["Wavelength"] == wv]
+                files = files[files["HMI files"] == hmi]
+                aia_files = files["AIA files"]
                 try:
                     aia_map = sunpy.map.Map(aia_files.value[0])
                     ax = fig.add_subplot(nrows, ncols, i + 1)
-                    ax.imshow(np.sqrt(aia_map.data), cmap=f'sdoaia{wv}')
-                    ax.text(0.05, 0.05, f'{wv} - {aia_map.date}', color='w', transform=ax.transAxes, fontsize = 5)
+                    ax.imshow(np.sqrt(aia_map.data), cmap=f"sdoaia{wv}")
+                    ax.text(0.05, 0.05, f"{wv} - {aia_map.date}", color="w", transform=ax.transAxes, fontsize=5)
                 except IndexError:
                     aia_map = np.zeros(hmi_map.data.shape)
                     ax = fig.add_subplot(nrows, ncols, i + 1)
-                    ax.imshow(np.sqrt(aia_map.data), cmap=f'sdoaia{wv}')
-                    ax.text(0.05, 0.05, f'{wv} - MISSING', color='w', transform=ax.transAxes, fontsize = 5)
+                    ax.imshow(np.sqrt(aia_map.data), cmap=f"sdoaia{wv}")
+                    ax.text(0.05, 0.05, f"{wv} - MISSING", color="w", transform=ax.transAxes, fontsize=5)
 
             else:
                 ax = fig.add_subplot(nrows, ncols, i + 1)
-                ax.imshow(hmi_map.data, cmap='Greys')
-                ax.text(0.05, 0.05, f'HMI - {hmi_map.date}', color='w', transform=ax.transAxes, fontsize = 5)
+                ax.imshow(hmi_map.data, cmap="Greys")
+                ax.text(0.05, 0.05, f"HMI - {hmi_map.date}", color="w", transform=ax.transAxes, fontsize=5)
 
             # Hide axis tick labels except for bottom row and left column
             if row < nrows - 1 or i != 8:
-                ax.set_xlabel('')  # Hides bottom (Latitude)
+                ax.set_xlabel("")  # Hides bottom (Latitude)
                 ax.set_xticklabels([])
             if col > 0:
-                ax.set_ylabel('')  # Hides left (Longitude)
+                ax.set_ylabel("")  # Hides left (Longitude)
                 ax.set_yticklabels([])
 
         fig.subplots_adjust(left=0.017, bottom=0.068, right=1, top=0.962, wspace=0, hspace=0)
-        
-        plt.savefig(fname=f'{path}/frames/{file}-{name}_frame.png',dpi=1000)
+
+        plt.savefig(fname=f"{path}/frames/{file}-{name}_frame.png", dpi=1000)
         plt.close()
 
-    image_dir = f'{path}/frames/'
-    output_file = f'{path}/anims/{name}.mp4'
+    image_dir = f"{path}/frames/"
+    output_file = f"{path}/anims/{name}.mp4"
     fps = 1.5
-    png_files = sorted([os.path.join(image_dir, f) for f in os.listdir(image_dir) if f.endswith(f'-{name}_frame.png')])
-    sorted_files = sorted(png_files, key=lambda x: int(os.path.basename(x).split('-')[0]))
+    png_files = sorted([os.path.join(image_dir, f) for f in os.listdir(image_dir) if f.endswith(f"-{name}_frame.png")])
+    sorted_files = sorted(png_files, key=lambda x: int(os.path.basename(x).split("-")[0]))
     first_frame = cv2.imread(sorted_files[0])
     height, width, _ = first_frame.shape
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
     out = cv2.VideoWriter(output_file, fourcc, fps, (width, height))
 
     for file in sorted_files:
@@ -814,6 +811,7 @@ def vid_match(table, name, path):
     out.release()
     print(f"Video saved to {output_file}")
     return output_file
+
 
 def l4_file_pack(aia_paths, hmi_paths, dir_path, rec, out_table, anim_path):
     r"""

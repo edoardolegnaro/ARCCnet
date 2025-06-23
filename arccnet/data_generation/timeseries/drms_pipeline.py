@@ -11,17 +11,16 @@ from astropy import log as astropy_log
 from astropy.table import Table
 
 from arccnet import config
-
 from arccnet.data_generation.timeseries.sdo_processing import (
     aia_l2,
     crop_map,
     drms_pipeline,
     hmi_l2,
+    l4_file_pack,
     map_reproject,
     match_files,
     read_data,
     table_match,
-    l4_file_pack,
     vid_match,
 )
 
@@ -92,8 +91,8 @@ if __name__ == "__main__":
                 print(hmi_patch_paths)
 
                 # For some reason, aia_proc becomes an empty list after this function call.
-                home_table, aia_patch_paths, aia_quality, aia_time, hmi_patch_paths, hmi_quality, hmi_time = table_match(
-                    list(aia_patch_paths), list(hmi_patch_paths)
+                home_table, aia_patch_paths, aia_quality, aia_time, hmi_patch_paths, hmi_quality, hmi_time = (
+                    table_match(list(aia_patch_paths), list(hmi_patch_paths))
                 )
 
                 # This can probably be streamlined/functionalized to make the pipeline look better.
@@ -102,7 +101,7 @@ if __name__ == "__main__":
                 Path(f"{batched_name}/tars").mkdir(parents=True, exist_ok=True)
                 hmi_away = ["HMI/" + Path(file).name for file in hmi_patch_paths]
                 aia_away = ["AIA/" + Path(file).name for file in aia_patch_paths]
-                aia_wvl = home_table['Wavelength']
+                aia_wvl = home_table["Wavelength"]
                 away_table = Table(
                     {
                         "AIA wavelength": aia_wvl,
@@ -114,7 +113,7 @@ if __name__ == "__main__":
                 )
 
                 home_table.write(f"{batched_name}/records/{file_name}.csv", overwrite=True)
-            
+
                 vid_path = vid_match(home_table, file_name, batched_name)
                 l4_file_pack(aia_patch_paths, hmi_patch_paths, batched_name, file_name, away_table, vid_path)
 
