@@ -1,8 +1,4 @@
 # Define required libraries - check to see if Arccnet already has these as requirements.
-from arccnet import config
-from arccnet.data_generation.mag_processing import pixel_to_bboxcoords
-from arccnet.data_generation.utils.utils import save_compressed_map
-
 import os
 import sys
 import glob
@@ -29,6 +25,10 @@ from astropy.io import fits
 from astropy.io.fits import CompImageHDU
 from astropy.table import Table, join, vstack
 from astropy.time import Time
+
+from arccnet import config
+from arccnet.data_generation.mag_processing import pixel_to_bboxcoords
+from arccnet.data_generation.utils.utils import save_compressed_map
 
 warnings.simplefilter("ignore", RuntimeWarning)
 
