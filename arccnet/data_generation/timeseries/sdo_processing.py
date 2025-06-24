@@ -51,7 +51,7 @@ __all__ = [
 ]
 
 
-def read_data(hek_path: str, srs_path: str, size: int, duration: int):
+def read_data(hek_path: str, srs_path: str, size: int, duration: int, flares: str):
     r"""
     Read and process data from a parquet file containing HEK catalogue information regarding flaring events.
 
@@ -65,6 +65,9 @@ def read_data(hek_path: str, srs_path: str, size: int, duration: int):
             The size of the sample to be generated. (Generates 10% X, 30% M, 60% C by default)
         duration : `int`
             The duration of the data sample in hours.
+        flares : `str`
+            Determines if runs provided are 'positive' (flares), 'negative' (no flares), or 'both' (50/50 split of both)
+
 
     Returns
     -------
@@ -77,7 +80,8 @@ def read_data(hek_path: str, srs_path: str, size: int, duration: int):
             - The date of the run, used for reprojection
             - The coordinate of the noaa active region
     """
-
+    assert (flares == 'positive' or flares == 'negative' or flares == 'both')
+    # if flares == 'positive' or flares == 'both':
     table = Table.read(hek_path)
     noaa_num_df = table[table["noaa_number"] > 0]
     flares = noaa_num_df[noaa_num_df["event_type"] == "FL"]
@@ -106,7 +110,6 @@ def read_data(hek_path: str, srs_path: str, size: int, duration: int):
     # c_flares = c_flares[c_flares["noaa_number"] == 11818]
     # c_flares = c_flares[c_flares["goes_class"] == "C1.6"]
     c_flares = c_flares[c_flares["tb_date"] == "2013-08-20"]
-    # 025925
 
     combined = vstack([x_flares, m_flares, c_flares])
     combined["c_coord"] = [
@@ -116,9 +119,31 @@ def read_data(hek_path: str, srs_path: str, size: int, duration: int):
     combined["start_time"] = [time - (duration + 1) * u.hour for time in combined["start_time"]]
     combined["start_time"].format = "fits"
     combined["end_time"] = combined["start_time"] + duration * u.hour
-    subset = combined["noaa_number", "goes_class", "start_time", "end_time", "frm_daterun", "c_coord"]
+    if flares == 'positive' or flares == 'both':
+        combined['category'] = [f"F{flare_check(row['start_time'], row['end_time'], row['noaa_number'], combined)}" for row in combined]
+        srs_isolated = srs[srs['target_time'] > "2011-01-01"]
+        srs_isolated = srs_isolated[abs(srs_isolated["longitude"].value) <= 65]
+        ar_cat = []
+        for ar in srs_isolated:
+            erl_time = Time(ar['target_time']) - (duration+1) * u.hour
+            cat = flare_check(erl_time, Time(ar['target_time']) - 1 * u.hour, ar['number'], combined)
+            ar_cat.append(cat)
+            srs_isolated['category'] = ar_cat
+        
 
-    return subset
+        if flares == 'positive':
+            subset = combined["noaa_number", "goes_class", "start_time", "end_time", "frm_daterun", "c_coord", 'category']
+            return subset
+        
+        # if flares == 'both':
+        #     Combine both the flare samples and the non flare samples into subset and return
+        #     return subset
+
+        # if flares == 'negative':
+        #     return only the non flare samples as subset
+        #     return subset
+
+        
 
 
 def change_time(time: str, shift: int):
@@ -709,7 +734,8 @@ def map_reproject(sdo_packed):
         fits_path : `str`
             The path location of the saved submap.
     """
-    hmi_origin, sdo_path, ar_num = sdo_packed
+    hmi_origin, sdo_path, ar_num, center = sdo_packed
+    lon = int(center.lon.value)
     # sdo_map = sunpy.map.Map(sdo_packed.l2_map)
     sdo_map = sunpy.map.Map(sdo_path)
     with propagate_with_solar_surface():
@@ -723,6 +749,8 @@ def map_reproject(sdo_packed):
     sdo_rpr.meta["quality"] = sdo_map.meta["quality"]
     sdo_rpr.meta["wavelnth"] = sdo_map.meta["wavelnth"]
     sdo_rpr.meta["date-obs"] = sdo_map.meta["date-obs"]
+    if sdo_rpr.dimensions[0].value > config["drms"]["patch_width"]:
+        sdo_rpr = pad_map(sdo_rpr, lon, config["drms"]["patch_width"])
     save_compressed_map(sdo_rpr, fits_path, hdu_type=CompImageHDU, overwrite=True)
 
     return fits_path
@@ -856,3 +884,58 @@ def l4_file_pack(aia_paths, hmi_paths, dir_path, rec, out_table, anim_path):
 
     shutil.copy(anim_path, f"{dir_path}/data/{rec}")
     out_table.write(f"{dir_path}/data/{rec}/{rec}.csv", overwrite=True)
+
+def pad_map(map, long, targ_width):
+    r"""
+    Pads the map data of a submap which is narrower than the specified submap width due to reaching the edge of the image array.
+
+    Parameters
+    ----------
+        map : `sunpy.map`
+            The sunpy submap to be resized.
+        long : `float` or `int`
+            The longitude of the active region, used only to check which side of the disk it is located.
+        targ_width : `int`
+            The target width of the submaps within the data run.
+
+    Returns
+    ----------
+        new_map : `sunpy.map`
+            The new, padded submap.
+    """
+    x_dim = map.dimensions[0].value
+    diff = int(targ_width - x_dim)
+    if long > 0:
+        data = np.pad(map.data, ((0,0),(diff,0)), constant_values=np.nan)
+    else:
+        data = np.pad(map.data, ((0,0),(0,diff)), constant_values=np.nan)
+    new_map = sunpy.map.Map(data,map.meta)
+    return new_map
+
+def flare_check(start, end, ar_num, table):
+    r"""
+    Checks a provided start time and end time, along with an active region number, and determines if a flare occurs within that period.
+
+    Parameters
+    ----------
+        start : `Astropy.Time`
+            The start time (duration - 1 hour) of a target run.
+        end : `Astropy.Time`
+            The end time (start_time - 1 hour) of a target run.
+        ar_num : `str`
+            The active region number of a target run.
+        table : `int`
+            The table of flare times used to check for flare events within run duration.
+
+    Returns
+    ----------
+        category : `int`
+            The category of the run. If no flare detected in run, category = 1, otherwise, category = 2.
+    """
+    ar_table = table[table["noaa_number"] == ar_num]
+    ar_table = ar_table[Time(ar_table["start_time"]) < end]
+    ar_table = ar_table[Time(ar_table["start_time"]) > start]
+    category = 1
+    if (len(ar_table) > 0):
+        category = 2
+    return category

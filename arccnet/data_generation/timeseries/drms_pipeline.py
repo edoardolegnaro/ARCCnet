@@ -79,8 +79,8 @@ if __name__ == "__main__":
                 )
                 packed_maps = namedtuple("packed_maps", ["hmi_origin", "l2_map", "ar_num"])
                 hmi_origin_patch = crop_map(hmi_proc[0], center, patch_height, patch_width, date)
-                l2_hmi_packed = [[hmi_origin_patch, hmi_map, noaa_ar] for hmi_map in hmi_proc]
-                l2_aia_packed = [[hmi_origin_patch, aia_map, noaa_ar] for aia_map in aia_proc]
+                l2_hmi_packed = [[hmi_origin_patch, hmi_map, noaa_ar, center] for hmi_map in hmi_proc]
+                l2_aia_packed = [[hmi_origin_patch, aia_map, noaa_ar, center] for aia_map in aia_proc]
 
                 # Went back to tuples because this was failing in a weird way - something to do with pickle and concurrent futures. Left for future debugging.
                 # l2_hmi_packed = [packed_maps(hmi_origin_patch, hmi_map, noaa_ar) for hmi_map in hmi_proc]
@@ -88,12 +88,13 @@ if __name__ == "__main__":
 
                 hmi_patch_paths = tqdm(executor.map(map_reproject, l2_hmi_packed), total=len(l2_hmi_packed))
                 aia_patch_paths = tqdm(executor.map(map_reproject, l2_aia_packed), total=len(l2_aia_packed))
-                print(hmi_patch_paths)
 
                 # For some reason, aia_proc becomes an empty list after this function call.
                 home_table, aia_patch_paths, aia_quality, aia_time, hmi_patch_paths, hmi_quality, hmi_time = (
                     table_match(list(aia_patch_paths), list(hmi_patch_paths))
                 )
+
+                
 
                 # This can probably be streamlined/functionalized to make the pipeline look better.
                 batched_name = f"{config['paths']['data_folder']}/04_final"
