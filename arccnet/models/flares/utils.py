@@ -1,6 +1,8 @@
 import os
 
+import pandas as pd
 from sklearn.model_selection import train_test_split
+from tqdm import tqdm
 
 FLARE_CLASSES = ["A", "B", "C", "M", "X"]
 MAG_CLASS_MAPPING = {
@@ -17,44 +19,39 @@ MAG_CLASS_ORDER = ["α", "β", "β-δ", "β-γ", "β-γ-δ", "γ", "γ-δ"]  # O
 
 def check_fits_file_existence(df, data_folder, dataset_folder):
     """
-    Iterates through rows of a DataFrame, checks if a corresponding FITS file exists,
-    adds a column indicating existence, and collects indices where path info is missing.
-
-    Args:
-        df (pd.DataFrame): The DataFrame containing potential paths to FITS files
-                                        in columns like 'path_image_cutout_hmi' or 'path_image_cutout_mdi'.
-        data_folder (str): The base directory where the data is stored.
-        dataset_folder (str): The subdirectory within data_folder where the dataset is located.
-
-    Returns:
-        tuple: A tuple containing:
-                - pd.DataFrame: The DataFrame with a new column 'file_exists' (boolean).
-                - list: A list of indices from the original DataFrame where both
-                            'path_image_cutout_hmi' and 'path_image_cutout_mdi' were None.
+    Vectorized version with progress bar for better performance.
     """
-
     df["file_exists"] = False
     missing_path_indices = []
 
-    for index, row in df.iterrows():
-        path_key = None  # Initialize path_key for the current row
-        if "path_image_cutout_hmi" in row and row["path_image_cutout_hmi"] is not None:
-            path_key = "path_image_cutout_hmi"
-        elif "path_image_cutout_mdi" in row and row["path_image_cutout_mdi"] is not None:
-            path_key = "path_image_cutout_mdi"
+    # Get valid paths and their indices
+    valid_mask = (df["path_image_cutout_hmi"].notna()) | (df["path_image_cutout_mdi"].notna())
 
-        if path_key is None:
-            missing_path_indices.append(index)
-            continue
+    missing_path_indices = df[~valid_mask].index.tolist()
+    valid_df = df[valid_mask].copy()
 
-        path_value = row[path_key]  # At this point, path_key is set to either 'hmi' or 'mdi' column name
+    # Prepare paths for checking
+    paths_to_check = []
+    indices_to_update = []
+
+    print("Preparing file paths...")
+    for idx, row in tqdm(valid_df.iterrows(), total=len(valid_df), desc="Preparing paths"):
+        if pd.notna(row["path_image_cutout_hmi"]):
+            path_value = row["path_image_cutout_hmi"]
+        else:
+            path_value = row["path_image_cutout_mdi"]
 
         base_filename = os.path.basename(path_value)
         fits_file_path = os.path.join(data_folder, dataset_folder, "fits", base_filename)
 
-        # Check if the constructed file path exists
-        if os.path.exists(fits_file_path):
-            df.loc[index, "file_exists"] = True
+        paths_to_check.append(fits_file_path)
+        indices_to_update.append(idx)
+
+    # Check file existence with progress bar
+    print("Checking file existence...")
+    for i, file_path in enumerate(tqdm(paths_to_check, desc="Checking files")):
+        if os.path.exists(file_path):
+            df.loc[indices_to_update[i], "file_exists"] = True
 
     return df, missing_path_indices
 

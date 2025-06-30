@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # ---
 # jupyter:
 #   jupytext:
@@ -186,3 +187,5 @@ for i, threshold in enumerate(flare_summary["Threshold"]):
 plt.ylim([0, 36000])
 plt.tight_layout()
 plt.show()
+
+# %%
