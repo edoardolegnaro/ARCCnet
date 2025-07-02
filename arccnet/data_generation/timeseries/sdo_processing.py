@@ -31,12 +31,10 @@ from arccnet import config
 from arccnet.data_generation.mag_processing import pixel_to_bboxcoords
 from arccnet.data_generation.utils.utils import save_compressed_map
 
-
 warnings.simplefilter("ignore", RuntimeWarning)
 reproj_log = logging.getLogger("reproject.common")
 reproj_log.setLevel("WARNING")
 os.environ["JSOC_EMAIL"] = "danielgass192@gmail.com"
-# Added comment
 
 __all__ = [
     "read_data",
