@@ -240,7 +240,7 @@ def test(
     loader: DataLoader,
     valid_p_for_z: dict,
     valid_c_for_zp: dict,
-    teacher_forcing_ratio=None,
+    teacher_forcing_ratio=None,  # noqa
 ) -> tuple:
     """
     Tests the model and computes accuracy and F1 scores for each component with optional Teacher Forcing.
