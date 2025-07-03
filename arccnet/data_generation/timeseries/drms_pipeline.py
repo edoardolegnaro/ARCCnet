@@ -10,7 +10,7 @@ import astropy.units as u
 from astropy import log as astropy_log
 from astropy.table import Table
 
-from arccnet import catalogs, config
+from arccnet import config
 from arccnet.data_generation.timeseries.sdo_processing import (
     aia_l2,
     crop_map,
@@ -34,12 +34,11 @@ if __name__ == "__main__":
     reproj_log.setLevel("WARNING")
     # May need to find a more robust solution with filters/exceptions for this.
     astropy_log.setLevel("ERROR")
-
+    data_path = config["paths"]["data_folder"]
     packed_maps = namedtuple("packed_maps", ["hmi_origin", "l2_map"])
-    catalog_path = Path(catalogs.__file__).parent
     starts = read_data(
-        hek_path=Path(f"{catalog_path}/hek_swpc_1996-01-01T00:00:00-2023-01-01T00:00:00_dev.parq"),
-        srs_path=Path(f"{catalog_path}/srs_processed_catalog.parq"),
+        hek_path=Path(f"{data_path}/flare_files/hek_swpc_1996-01-01T00:00:00-2023-01-01T00:00:00_dev.parq"),
+        srs_path=Path(f"{data_path}/flare_files/srs_processed_catalog.parq"),
         size=10,
         duration=6,
     )
