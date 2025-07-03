@@ -37,8 +37,8 @@ if __name__ == "__main__":
     astropy_log.setLevel("ERROR")
     packed_maps = namedtuple("packed_maps", ["hmi_origin", "l2_map"])
     starts = read_data(
-        hek_path=f"{arccnet_path}/catalogs/hek_swpc_1996-01-01T00:00:00-2023-01-01T00:00:00_dev.parq",
-        srs_path=f"{arccnet_path}/catalogs/srs_processed_catalog.parq",
+        hek_path=Path(f"{arccnet_path}/catalogs/hek_swpc_1996-01-01T00:00:00-2023-01-01T00:00:00_dev.parq"),
+        srs_path=Path(f"{arccnet_path}/catalogs/srs_processed_catalog.parq"),
         size=10,
         duration=6,
     )
