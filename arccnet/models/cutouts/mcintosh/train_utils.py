@@ -234,13 +234,14 @@ def apply_mask_at_evaluation(output_logits, z_pred, p_pred=None, valid_dict=None
     return masked_logits
 
 
-def test(
+# Changed function name from test to validate to avoid PyTest trying to run it as a test. Will need to update func calls.
+def validate(
     model: nn.Module,
     device: torch.device,
     loader: DataLoader,
     valid_p_for_z: dict,
     valid_c_for_zp: dict,
-    teacher_forcing_ratio=None,
+    teacher_forcing_ratio=None,  # noqa
 ) -> tuple:
     """
     Tests the model and computes accuracy and F1 scores for each component with optional Teacher Forcing.

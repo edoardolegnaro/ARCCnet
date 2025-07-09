@@ -1,20 +1,15 @@
 # Define required libraries - check to see if Arccnet already has these as requirements.
-from arccnet import config
-from arccnet.data_generation.mag_processing import pixel_to_bboxcoords
-from arccnet.data_generation.utils.utils import save_compressed_map
-
 import os
 import sys
 import glob
 import shutil
+import logging
 import warnings
 import itertools
 from random import sample
 from pathlib import Path
 
-import cv2
 import drms
-import matplotlib.pyplot as plt
 import numpy as np
 import sunpy.map
 from aiapy.calibrate import correct_degradation, register, update_pointing
@@ -30,10 +25,15 @@ from astropy.io.fits import CompImageHDU
 from astropy.table import Table, join, vstack
 from astropy.time import Time
 
+from arccnet import config
+from arccnet.data_generation.mag_processing import pixel_to_bboxcoords
+from arccnet.data_generation.utils.utils import save_compressed_map
+from arccnet.visualisation.data import mosaic_animate, mosaic_plot
+
 warnings.simplefilter("ignore", RuntimeWarning)
-
+reproj_log = logging.getLogger("reproject.common")
+reproj_log.setLevel("WARNING")
 os.environ["JSOC_EMAIL"] = "danielgass192@gmail.com"
-
 
 __all__ = [
     "read_data",
@@ -100,15 +100,15 @@ def read_data(hek_path: str, srs_path: str, size: int, duration: int, flares: st
     x_flares = flares[[flare.startswith("X") for flare in flares["goes_class"]]]
     # x_flares = x_flares[x_flares["noaa_number"] == 11158]
     # x_flares = x_flares[x_flares["goes_class"] == "X2.2"]
-    # x_flares = x_flares[x_flares['tb_date'] == '2014-10-27']
+    # x_flares = x_flares[x_flares["tb_date"] == "2014-10-27"]
     x_flares = x_flares[sample(range(len(x_flares)), k=int(0.1 * size))]
     m_flares = flares[[flare.startswith("M") for flare in flares["goes_class"]]]
     m_flares = m_flares[sample(range(len(m_flares)), k=int(0.3 * size))]
 
     c_flares = flares[[flare.startswith("C") for flare in flares["goes_class"]]]
     # c_flares = c_flares[sample(range(len(c_flares)), k=int(0.6 * size))]
-    # c_flares = c_flares[c_flares["noaa_number"] == 11818]
-    # c_flares = c_flares[c_flares["goes_class"] == "C1.6"]
+    c_flares = c_flares[c_flares["noaa_number"] == 11818]
+    c_flares = c_flares[c_flares["goes_class"] == "C1.6"]
     c_flares = c_flares[c_flares["tb_date"] == "2013-08-20"]
 
     combined = vstack([x_flares, m_flares, c_flares])
@@ -776,69 +776,14 @@ def vid_match(table, name, path):
     """
     # Check this carefully
     hmi_files = table["HMI files"].value
-    aia_files = table["AIA files"].value
     wvls = np.unique([table["Wavelength"].value])
     hmi_files = np.unique(hmi_files)
     nrows, ncols = 4, 3  # define your subplot grid
     for file in range(len(hmi_files)):
-        fig = plt.figure()
-        plt.title(name, size=7)
-        plt.axis("off")
         hmi = hmi_files[file]
-        hmi_map = sunpy.map.Map(hmi)
-        for i in range(len(wvls) + 1):
-            row = i // ncols
-            col = i % ncols
-            if i < 10:
-                wv = wvls[i]
-                files = table[table["Wavelength"] == wv]
-                files = files[files["HMI files"] == hmi]
-                aia_files = files["AIA files"]
-                try:
-                    aia_map = sunpy.map.Map(aia_files.value[0])
-                    ax = fig.add_subplot(nrows, ncols, i + 1)
-                    ax.imshow(np.sqrt(aia_map.data), cmap=f"sdoaia{wv}")
-                    ax.text(0.05, 0.05, f"{wv} - {aia_map.date}", color="w", transform=ax.transAxes, fontsize=5)
-                except IndexError:
-                    aia_map = np.zeros(hmi_map.data.shape)
-                    ax = fig.add_subplot(nrows, ncols, i + 1)
-                    ax.imshow(np.sqrt(aia_map.data), cmap=f"sdoaia{wv}")
-                    ax.text(0.05, 0.05, f"{wv} - MISSING", color="w", transform=ax.transAxes, fontsize=5)
+        mosaic_plot(hmi, name, file, nrows, ncols, wvls, table, path)
 
-            else:
-                ax = fig.add_subplot(nrows, ncols, i + 1)
-                ax.imshow(hmi_map.data, cmap="Greys")
-                ax.text(0.05, 0.05, f"HMI - {hmi_map.date}", color="w", transform=ax.transAxes, fontsize=5)
-
-            # Hide axis tick labels except for bottom row and left column
-            if row < nrows - 1 or i != 8:
-                ax.set_xlabel("")  # Hides bottom (Latitude)
-                ax.set_xticklabels([])
-            if col > 0:
-                ax.set_ylabel("")  # Hides left (Longitude)
-                ax.set_yticklabels([])
-
-        fig.subplots_adjust(left=0.017, bottom=0.068, right=1, top=0.962, wspace=0, hspace=0)
-
-        plt.savefig(fname=f"{path}/frames/{file}-{name}_frame.png", dpi=1000)
-        plt.close()
-
-    image_dir = f"{path}/frames/"
-    output_file = f"{path}/anims/{name}.mp4"
-    fps = 1.5
-    png_files = sorted([os.path.join(image_dir, f) for f in os.listdir(image_dir) if f.endswith(f"-{name}_frame.png")])
-    sorted_files = sorted(png_files, key=lambda x: int(os.path.basename(x).split("-")[0]))
-    first_frame = cv2.imread(sorted_files[0])
-    height, width, _ = first_frame.shape
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    out = cv2.VideoWriter(output_file, fourcc, fps, (width, height))
-
-    for file in sorted_files:
-        frame = cv2.imread(file)
-        out.write(frame)
-    out.release()
-    print(f"Video saved to {output_file}")
-    return output_file
+    return mosaic_animate(path, name)
 
 
 def l4_file_pack(aia_paths, hmi_paths, dir_path, rec, out_table, anim_path):
@@ -859,11 +804,6 @@ def l4_file_pack(aia_paths, hmi_paths, dir_path, rec, out_table, anim_path):
             The table containing the records specific to the folder containing information for the current run.
         anim_path: `str`
             The path to the mosaic animation of the current run.
-
-    Returns
-    ----------
-        output_file : `str`
-            A string containing the path of the completed mosaic animation.
     """
     folder_hmi = f"{dir_path}/data/{rec}/HMI/"
     Path(folder_hmi).mkdir(parents=True, exist_ok=True)

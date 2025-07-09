@@ -1,3 +1,15 @@
+import logging
+from pathlib import Path
+from collections import namedtuple
+from concurrent.futures import ProcessPoolExecutor
+
+from aiapy import calibrate
+from tqdm import tqdm
+
+import astropy.units as u
+from astropy import log as astropy_log
+from astropy.table import Table
+
 from arccnet import config
 from arccnet.data_generation.timeseries.sdo_processing import (
     aia_l2,
@@ -12,18 +24,6 @@ from arccnet.data_generation.timeseries.sdo_processing import (
     vid_match,
 )
 
-import logging
-from pathlib import Path
-from collections import namedtuple
-from concurrent.futures import ProcessPoolExecutor
-
-from aiapy import calibrate
-from tqdm import tqdm
-
-import astropy.units as u
-from astropy import log as astropy_log
-from astropy.table import Table
-
 if __name__ == "__main__":
     __all__ = []
 
@@ -34,17 +34,16 @@ if __name__ == "__main__":
     reproj_log.setLevel("WARNING")
     # May need to find a more robust solution with filters/exceptions for this.
     astropy_log.setLevel("ERROR")
+    data_path = config["paths"]["data_folder"]
     packed_maps = namedtuple("packed_maps", ["hmi_origin", "l2_map"])
-
     starts = read_data(
-        hek_path="/Users/danielgass/Desktop/ARCCnet/ARCCnet/hek_swpc_1996-01-01T00:00:00-2023-01-01T00:00:00_dev.parq",
-        srs_path="/Users/danielgass/Desktop/ARCCnet/ARCCnet/arccnet/data_generation/timeseries/srs_processed_catalog.parq",
+        hek_path=Path(f"{data_path}/flare_files/hek_swpc_1996-01-01T00:00:00-2023-01-01T00:00:00_dev.parq"),
+        srs_path=Path(f"{data_path}/flare_files/srs_processed_catalog.parq"),
         size=10,
         duration=6,
     )
     cores = int(config["drms"]["cores"])
     with ProcessPoolExecutor(cores) as executor:
-        print(starts[-1])
         for record in [starts[-1]]:
             noaa_ar, fl_class, start, end, date, center = record
             pointing_table = calibrate.util.get_pointing_table(source="jsoc", time_range=[start - 6 * u.hour, end])
