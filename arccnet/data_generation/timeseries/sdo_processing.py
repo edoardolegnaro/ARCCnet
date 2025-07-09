@@ -2,6 +2,9 @@
 import os
 import sys
 import glob
+import shutil
+import logging
+import warnings
 import itertools
 from random import sample
 from pathlib import Path
@@ -25,9 +28,12 @@ from astropy.time import Time
 from arccnet import config
 from arccnet.data_generation.mag_processing import pixel_to_bboxcoords
 from arccnet.data_generation.utils.utils import save_compressed_map
+from arccnet.visualisation.data import mosaic_animate, mosaic_plot
 
+warnings.simplefilter("ignore", RuntimeWarning)
+reproj_log = logging.getLogger("reproject.common")
+reproj_log.setLevel("WARNING")
 os.environ["JSOC_EMAIL"] = "danielgass192@gmail.com"
-
 
 __all__ = [
     "read_data",
@@ -41,6 +47,7 @@ __all__ = [
     "table_match",
     "crop_map",
     "map_reproject",
+    "l4_file_pack",
 ]
 
 
@@ -55,7 +62,7 @@ def read_data(hek_path: str, srs_path: str, size: int, duration: int):
         srs_path : `str`
             The path to the parquet file containing parsed noaa srs active region information.
         size : `int`
-            The size of the sample to be generated. (Generates 10% X, 30% M, 60% C)
+            The size of the sample to be generated. (Generates 10% X, 30% M, 60% C by default)
         duration : `int`
             The duration of the data sample in hours.
 
@@ -84,17 +91,21 @@ def read_data(hek_path: str, srs_path: str, size: int, duration: int):
     flares["tb_date"] = [date.split(" ")[0] for date in flares["tb_date"]]
     flares = join(flares, srs, keys_left="noaa_number", keys_right="number")
 
-    flares = flares[abs(flares["longitude"].value) <= 70]
+    flares = flares[abs(flares["longitude"].value) <= 65]
     flares = flares[flares["tb_date"] == flares["srs_date"]]
     x_flares = flares[[flare.startswith("X") for flare in flares["goes_class"]]]
-    x_flares = x_flares[x_flares["noaa_number"] == 12192]
-    x_flares = x_flares[x_flares["goes_class"] == "X1.0"]
-    # x_flares = x_flares[x_flares['tb_date'] == '2014-10-27']
-    # x_flares = x_flares[sample(range(len(x_flares)), k=int(0.1 * size))]
+    # x_flares = x_flares[x_flares["noaa_number"] == 11158]
+    # x_flares = x_flares[x_flares["goes_class"] == "X2.2"]
+    # x_flares = x_flares[x_flares["tb_date"] == "2014-10-27"]
+    x_flares = x_flares[sample(range(len(x_flares)), k=int(0.1 * size))]
     m_flares = flares[[flare.startswith("M") for flare in flares["goes_class"]]]
     m_flares = m_flares[sample(range(len(m_flares)), k=int(0.3 * size))]
+
     c_flares = flares[[flare.startswith("C") for flare in flares["goes_class"]]]
-    c_flares = c_flares[sample(range(len(c_flares)), k=int(0.6 * size))]
+    # c_flares = c_flares[sample(range(len(c_flares)), k=int(0.6 * size))]
+    c_flares = c_flares[c_flares["noaa_number"] == 11818]
+    c_flares = c_flares[c_flares["goes_class"] == "C1.6"]
+    c_flares = c_flares[c_flares["tb_date"] == "2013-08-20"]
 
     combined = vstack([x_flares, m_flares, c_flares])
     combined["c_coord"] = [
@@ -621,26 +632,33 @@ def table_match(aia_maps, hmi_maps):
     aia_quality = []
     hmi_paths = []
     hmi_times = [Time(fits.open(hmi_map)[1].header["date-obs"]) for hmi_map in hmi_maps]
+    paired_times = []
+    aia_times = []
     hmi_quality = []
 
     for aia_map in aia_maps:
-        t_d = [abs((Time(fits.open(aia_map)[1].header["date-obs"]) - hmi_time).value) for hmi_time in hmi_times]
+        date = fits.open(aia_map)[1].header["date-obs"]
+        t_d = [abs((Time(date) - hmi_time).value) for hmi_time in hmi_times]
         hmi_match = hmi_maps[t_d.index(min(t_d))]
         aia_paths.append(aia_map)
         hmi_paths.append(hmi_match)
+        paired_times.append(fits.open(hmi_match)[1].header["date-obs"])
         hmi_quality.append(fits.open(hmi_match)[1].header["quality"])
         aia_quality.append(fits.open(aia_map)[1].header["quality"])
         aia_wavelnth.append(fits.open(aia_map)[1].header["wavelnth"])
+        aia_times.append(date)
     paired_table = Table(
         {
             "Wavelength": aia_wavelnth,
             "AIA files": aia_paths,
             "AIA quality": aia_quality,
+            "AIA time": aia_times,
             "HMI files": hmi_paths,
             "HMI quality": hmi_quality,
+            "HMI time": paired_times,
         }
     )
-    return paired_table, aia_paths, aia_quality, hmi_paths, hmi_quality
+    return paired_table, aia_paths, aia_quality, aia_times, hmi_paths, hmi_quality, paired_times
 
 
 def crop_map(sdo_map, center, height, width, noaa_time):
@@ -707,3 +725,73 @@ def map_reproject(sdo_packed):
     save_compressed_map(sdo_rpr, fits_path, hdu_type=CompImageHDU, overwrite=True)
 
     return fits_path
+
+
+def vid_match(table, name, path):
+    r"""
+    Creates an animated mosaic of images from the data run - including all AIA wavelengths and HMI 720s magnetogram.
+
+    Parameters
+    ----------
+        table : `AstropyTable`
+            An astropy table containing the filenames of all AIA wavelengths and their paired HMI files.
+        name : `str`
+            A string containing the name of the file to be appended, matching all versions of a file above level 1.
+        path: `str`
+            The base path of the processed data.
+
+    Returns
+    ----------
+        output_file : `str`
+            A string containing the path of the completed mosaic animation.
+    """
+    # Check this carefully
+    hmi_files = table["HMI files"].value
+    wvls = np.unique([table["Wavelength"].value])
+    hmi_files = np.unique(hmi_files)
+    nrows, ncols = 4, 3  # define your subplot grid
+    for file in range(len(hmi_files)):
+        hmi = hmi_files[file]
+        mosaic_plot(hmi, name, file, nrows, ncols, wvls, table, path)
+
+    return mosaic_animate(path, name)
+
+
+def l4_file_pack(aia_paths, hmi_paths, dir_path, rec, out_table, anim_path):
+    r"""
+    Packs files into folders along with folder specific records identifying .fits files
+
+    Parameters
+    ----------
+        aia_paths : `list`
+            The paths to the aia files to be packed.
+        hmi_paths : `list`
+            The paths to the hmi files to be packed.
+        dir_path : `str`
+            The path to the directory of the l4 data.
+        rec : `str`
+            The record value unique to the current run (date, ar number, flare class).
+        out_table : `AstropyTable`
+            The table containing the records specific to the folder containing information for the current run.
+        anim_path: `str`
+            The path to the mosaic animation of the current run.
+    """
+    folder_hmi = f"{dir_path}/data/{rec}/HMI/"
+    Path(folder_hmi).mkdir(parents=True, exist_ok=True)
+    folder_aia = f"{dir_path}/data/{rec}/AIA/"
+    Path(folder_aia).mkdir(parents=True, exist_ok=True)
+    for file in aia_paths:
+        name = Path(file).name
+        if os.path.exists(f"{folder_aia}/{name}"):
+            os.remove(f"{folder_aia}/{name}")
+        shutil.copy(file, f"{folder_aia}/{name}")
+
+    for file in np.unique(hmi_paths):
+        name = Path(file).name
+        name = Path(f"{folder_hmi}/{name}").name
+        if os.path.exists(f"{folder_hmi}/{name}"):
+            os.remove(f"{folder_hmi}/{name}")
+        shutil.copy(file, f"{folder_hmi}/{name}")
+
+    shutil.copy(anim_path, f"{dir_path}/data/{rec}")
+    out_table.write(f"{dir_path}/data/{rec}/{rec}.csv", overwrite=True)

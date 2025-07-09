@@ -16,39 +16,40 @@ from arccnet.data_generation.timeseries.sdo_processing import (
     crop_map,
     drms_pipeline,
     hmi_l2,
+    l4_file_pack,
     map_reproject,
     match_files,
     read_data,
     table_match,
+    vid_match,
 )
 
-__all__ = []
-
-# Logging settings here.
-drms_log = logging.getLogger("drms")
-drms_log.setLevel("WARNING")
-reproj_log = logging.getLogger("reproject.common")
-reproj_log.setLevel("WARNING")
-# May need to find a more robust solution with filters/exceptions for this.
-astropy_log.setLevel("ERROR")
-
-packed_maps = namedtuple("packed_maps", ["hmi_origin", "l2_map"])
-
 if __name__ == "__main__":
+    __all__ = []
+
+    # Logging settings here.
+    drms_log = logging.getLogger("drms")
+    drms_log.setLevel("WARNING")
+    reproj_log = logging.getLogger("reproject.common")
+    reproj_log.setLevel("WARNING")
+    # May need to find a more robust solution with filters/exceptions for this.
+    astropy_log.setLevel("ERROR")
+    data_path = config["paths"]["data_folder"]
+    packed_maps = namedtuple("packed_maps", ["hmi_origin", "l2_map"])
     starts = read_data(
-        hek_path="/Users/danielgass/Desktop/ARCCnet/ARCCnet/hek_swpc_1996-01-01T00:00:00-2023-01-01T00:00:00_dev.parq",
-        srs_path="/Users/danielgass/Desktop/ARCCnet/ARCCnet/arccnet/data_generation/timeseries/srs_processed_catalog.parq",
+        hek_path=Path(f"{data_path}/flare_files/hek_swpc_1996-01-01T00:00:00-2023-01-01T00:00:00_dev.parq"),
+        srs_path=Path(f"{data_path}/flare_files/srs_processed_catalog.parq"),
         size=10,
-        duration=24,
+        duration=6,
     )
     cores = int(config["drms"]["cores"])
     with ProcessPoolExecutor(cores) as executor:
-        for record in [starts[0]]:
+        for record in [starts[-1]]:
             noaa_ar, fl_class, start, end, date, center = record
             pointing_table = calibrate.util.get_pointing_table(source="jsoc", time_range=[start - 6 * u.hour, end])
 
             start_split = start.value.split("T")[0]
-            file_name = f"{fl_class}_{noaa_ar}_{start_split}"
+            file_name = f"{start_split}_{fl_class}_{noaa_ar}"
             patch_height = int(config["drms"]["patch_height"]) * u.pix
             patch_width = int(config["drms"]["patch_width"]) * u.pix
             try:
@@ -89,8 +90,8 @@ if __name__ == "__main__":
                 print(hmi_patch_paths)
 
                 # For some reason, aia_proc becomes an empty list after this function call.
-                home_table, aia_patch_paths, aia_quality, hmi_patch_paths, hmi_quality = table_match(
-                    list(aia_patch_paths), list(hmi_patch_paths)
+                home_table, aia_patch_paths, aia_quality, aia_time, hmi_patch_paths, hmi_quality, hmi_time = (
+                    table_match(list(aia_patch_paths), list(hmi_patch_paths))
                 )
 
                 # This can probably be streamlined/functionalized to make the pipeline look better.
@@ -99,8 +100,10 @@ if __name__ == "__main__":
                 Path(f"{batched_name}/tars").mkdir(parents=True, exist_ok=True)
                 hmi_away = ["HMI/" + Path(file).name for file in hmi_patch_paths]
                 aia_away = ["AIA/" + Path(file).name for file in aia_patch_paths]
+                aia_wvl = home_table["Wavelength"]
                 away_table = Table(
                     {
+                        "AIA wavelength": aia_wvl,
                         "AIA files": aia_away,
                         "AIA quality": aia_quality,
                         "HMI files": hmi_away,
@@ -110,19 +113,8 @@ if __name__ == "__main__":
 
                 home_table.write(f"{batched_name}/records/{file_name}.csv", overwrite=True)
 
-            ## Commented out until we're ready to package.
-            # away_table.write(f"{batched_name}/records/out_{file_name}.csv", overwrite=True)
-            # with tarfile.open(f"{batched_name}/tars/{file_name}.tar", "w") as tar:
-            #     for file in aia_maps:
-            #         name = Path(file).name
-            #         tar.add(file, arcname=f"AIA/{name}")
-            #     for file in np.unique(hmi_maps):
-            #         name = Path(file).name
-            #         tar.add(file, arcname=f"HMI/{name}")
-            #     tar.add(f"{batched_name}/records/out_{file_name}.csv", arcname=f"{file_name}.csv")
+                vid_path = vid_match(home_table, file_name, batched_name)
+                l4_file_pack(aia_patch_paths, hmi_patch_paths, batched_name, file_name, away_table, vid_path)
 
             except Exception as error:
                 logging.error(error, exc_info=True)
-# 70 X class flares.
-# Random sample (100 ish for M and below flares)
-# Make a .gif of patch for each run

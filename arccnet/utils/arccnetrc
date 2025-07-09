@@ -25,7 +25,7 @@ aia_keys = T_REC, T_OBS, QUALITY, FSN, WAVELNTH, INSTRUME
 wavelengths = 171, 193, 304, 211, 335, 94, 131
 patch_height = 400
 patch_width = 800
-cores = 6
+cores = 4
 
 
 ;;;;;;;;;;;;;;;;
