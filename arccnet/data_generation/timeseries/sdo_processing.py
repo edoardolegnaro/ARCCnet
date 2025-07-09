@@ -9,9 +9,7 @@ import itertools
 from random import sample
 from pathlib import Path
 
-import cv2
 import drms
-import matplotlib.pyplot as plt
 import numpy as np
 import sunpy.map
 from aiapy.calibrate import correct_degradation, register, update_pointing
@@ -30,6 +28,7 @@ from astropy.time import Time
 from arccnet import config
 from arccnet.data_generation.mag_processing import pixel_to_bboxcoords
 from arccnet.data_generation.utils.utils import save_compressed_map
+from arccnet.visualisation.data import mosaic_animate, mosaic_plot
 
 warnings.simplefilter("ignore", RuntimeWarning)
 reproj_log = logging.getLogger("reproject.common")
@@ -95,17 +94,17 @@ def read_data(hek_path: str, srs_path: str, size: int, duration: int):
     flares = flares[abs(flares["longitude"].value) <= 65]
     flares = flares[flares["tb_date"] == flares["srs_date"]]
     x_flares = flares[[flare.startswith("X") for flare in flares["goes_class"]]]
-    x_flares = x_flares[x_flares["noaa_number"] == 11158]
-    x_flares = x_flares[x_flares["goes_class"] == "X2.2"]
-    x_flares = x_flares[x_flares["tb_date"] == "2014-10-27"]
-    # x_flares = x_flares[sample(range(len(x_flares)), k=int(0.1 * size))]
+    # x_flares = x_flares[x_flares["noaa_number"] == 11158]
+    # x_flares = x_flares[x_flares["goes_class"] == "X2.2"]
+    # x_flares = x_flares[x_flares["tb_date"] == "2014-10-27"]
+    x_flares = x_flares[sample(range(len(x_flares)), k=int(0.1 * size))]
     m_flares = flares[[flare.startswith("M") for flare in flares["goes_class"]]]
     m_flares = m_flares[sample(range(len(m_flares)), k=int(0.3 * size))]
 
     c_flares = flares[[flare.startswith("C") for flare in flares["goes_class"]]]
     # c_flares = c_flares[sample(range(len(c_flares)), k=int(0.6 * size))]
-    # c_flares = c_flares[c_flares["noaa_number"] == 11818]
-    # c_flares = c_flares[c_flares["goes_class"] == "C1.6"]
+    c_flares = c_flares[c_flares["noaa_number"] == 11818]
+    c_flares = c_flares[c_flares["goes_class"] == "C1.6"]
     c_flares = c_flares[c_flares["tb_date"] == "2013-08-20"]
 
     combined = vstack([x_flares, m_flares, c_flares])
@@ -756,106 +755,6 @@ def vid_match(table, name, path):
         mosaic_plot(hmi, name, file, nrows, ncols, wvls, table, path)
 
     return mosaic_animate(path, name)
-
-
-def mosaic_plot(hmi, name, file, nrows, ncols, wvls, table, path):
-    r"""
-    Plots a frame of a mosaic animation as a png, provided the specific fits files for each timestep.
-
-    Parameters
-    ----------
-        hmi : `str`
-            The string of the path of the specific hmi at the timestep to be plotted.
-        name : `str`
-            The name of the associated target run to save file to.
-        file : `int`
-            The number of the provided file in the sequence of hmi files, allows for sequential plotting.
-        nrows : `int`
-            The number of rows in the mosaic plot.
-        ncols : `int`
-            The number of columns in the mosaic plot.
-        wvls : `list`
-            List containing the wavelengths within the AIA portion of the data.
-        table : `list`
-            Table containing the AIA/HMI pairings for the S3 files of current target run.
-        path : `str`
-            The path of the directory of S4 data.
-    """
-
-    fig = plt.figure()
-    plt.title(name, size=7)
-    plt.axis("off")
-    hmi_map = sunpy.map.Map(hmi)
-    for i in range(len(wvls) + 1):
-        row = i // ncols
-        col = i % ncols
-        if i < 10:
-            wv = wvls[i]
-            files = table[table["Wavelength"] == wv]
-            files = files[files["HMI files"] == hmi]
-            aia_files = files["AIA files"]
-            try:
-                aia_map = sunpy.map.Map(aia_files.value[0])
-                ax = fig.add_subplot(nrows, ncols, i + 1)
-                ax.imshow(np.sqrt(aia_map.data), cmap=f"sdoaia{wv}")
-                ax.text(0.05, 0.05, f"{wv} - {aia_map.date}", color="w", transform=ax.transAxes, fontsize=5)
-            except IndexError:
-                aia_map = np.zeros(hmi_map.data.shape)
-                ax = fig.add_subplot(nrows, ncols, i + 1)
-                ax.imshow(np.sqrt(aia_map.data), cmap=f"sdoaia{wv}")
-                ax.text(0.05, 0.05, f"{wv} - MISSING", color="w", transform=ax.transAxes, fontsize=5)
-
-        else:
-            ax = fig.add_subplot(nrows, ncols, i + 1)
-            ax.imshow(hmi_map.data, cmap="Greys")
-            ax.text(0.05, 0.05, f"HMI - {hmi_map.date}", color="w", transform=ax.transAxes, fontsize=5)
-
-        # Hide axis tick labels except for bottom row and left column
-        if row < nrows - 1 or i != 8:
-            ax.set_xlabel("")  # Hides bottom (Latitude)
-            ax.set_xticklabels([])
-        if col > 0:
-            ax.set_ylabel("")  # Hides left (Longitude)
-            ax.set_yticklabels([])
-
-    fig.subplots_adjust(left=0.017, bottom=0.068, right=1, top=0.962, wspace=0, hspace=0)
-
-    plt.savefig(fname=f"{path}/frames/{file}-{name}_frame.png", dpi=1000)
-    plt.close()
-
-
-def mosaic_animate(base_dir, name):
-    r"""
-    Animates a set of mosaic frames into an mp4, given a provided base directory and a filename.
-
-    Parameters
-    ----------
-        base_dir : `str`
-            The paths to the aia files to be packed.
-        name : `str`
-            The name of the associated target run to save file to.
-
-    Returns
-    ----------
-        output_file : `str`
-            A string containing the path of the completed mosaic animation.
-    """
-    image_dir = f"{base_dir}/frames/"
-    output_file = f"{base_dir}/anims/{name}.mp4"
-    fps = 1.5
-    png_files = sorted([os.path.join(image_dir, f) for f in os.listdir(image_dir) if f.endswith(f"-{name}_frame.png")])
-    sorted_files = sorted(png_files, key=lambda x: int(os.path.basename(x).split("-")[0]))
-    first_frame = cv2.imread(sorted_files[0])
-    height, width, _ = first_frame.shape
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    out = cv2.VideoWriter(output_file, fourcc, fps, (width, height))
-
-    for file in sorted_files:
-        frame = cv2.imread(file)
-        out.write(frame)
-    out.release()
-    print(f"Video saved to {output_file}")
-    return output_file
 
 
 def l4_file_pack(aia_paths, hmi_paths, dir_path, rec, out_table, anim_path):

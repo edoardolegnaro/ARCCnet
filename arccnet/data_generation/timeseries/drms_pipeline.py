@@ -44,7 +44,7 @@ if __name__ == "__main__":
     )
     cores = int(config["drms"]["cores"])
     with ProcessPoolExecutor(cores) as executor:
-        for record in [starts[1]]:
+        for record in [starts[-1]]:
             noaa_ar, fl_class, start, end, date, center = record
             pointing_table = calibrate.util.get_pointing_table(source="jsoc", time_range=[start - 6 * u.hour, end])
 
