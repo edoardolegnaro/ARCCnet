@@ -136,10 +136,8 @@ def read_data(hek_path: str, srs_path: str, size: int, duration: int, long_lim: 
     flares["category"] = [
         f"F{flare_check(row['start_time'], row['end_time'], row['noaa_number'], flares)}" for row in flares
     ]
-
     flares = join(flares, srs, keys_left="noaa_number", keys_right="number")
     flares = flares[flares["tb_date"] == flares["srs_date"]]
-
     flares["c_coord"] = [
         SkyCoord(lon * u.deg, lat * u.deg, obstime=t_time, observer="earth", frame=frames.HeliographicStonyhurst)
         for lat, lon, t_time in zip(flares["latitude"], flares["longitude"], flares["target_time"])
@@ -156,7 +154,6 @@ def read_data(hek_path: str, srs_path: str, size: int, duration: int, long_lim: 
         ar_cat.append(cat)
     srs["category"] = ar_cat
     srs["ar"] = "N"
-
     srs_exp = srs["number", "ar", "target_time", "srs_end_time", "srs_date", "c_coord", "category"]
     flares_exp = flares["noaa_number", "goes_class", "start_time", "end_time", "tb_date", "c_coord", "category"]
     srs_exp.rename_columns(
