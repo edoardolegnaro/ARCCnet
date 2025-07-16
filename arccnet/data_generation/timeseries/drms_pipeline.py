@@ -39,21 +39,22 @@ if __name__ == "__main__":
     starts = read_data(
         hek_path=Path(f"{data_path}/flare_files/hek_swpc_1996-01-01T00:00:00-2023-01-01T00:00:00_dev.parq"),
         srs_path=Path(f"{data_path}/flare_files/srs_processed_catalog.parq"),
-        size=10,
+        size=1,
         duration=6,
+        long_lim=65,
+        types=["F1", "F2", "N1", "N2"],
     )
     cores = int(config["drms"]["cores"])
     with ProcessPoolExecutor(cores) as executor:
-        for record in [starts[-1]]:
-            noaa_ar, fl_class, start, end, date, center = record
+        for record in starts:
+            noaa_ar, fl_class, start, end, date, center, category = record
             pointing_table = calibrate.util.get_pointing_table(source="jsoc", time_range=[start - 6 * u.hour, end])
-
             start_split = start.value.split("T")[0]
-            file_name = f"{start_split}_{fl_class}_{noaa_ar}"
+            file_name = f"{category}_{start_split}_{fl_class}_{noaa_ar}"
             patch_height = int(config["drms"]["patch_height"]) * u.pix
             patch_width = int(config["drms"]["patch_width"]) * u.pix
             try:
-                print(record["noaa_number"], record["goes_class"], record["start_time"])
+                print(record["noaa_number"], record["goes_class"], record["start_time"], record["category"])
                 aia_maps, hmi_maps = drms_pipeline(
                     start_t=start,
                     end_t=end,
@@ -93,9 +94,6 @@ if __name__ == "__main__":
                     table_match(list(aia_patch_paths), list(hmi_patch_paths))
                 )
 
-                
-
-                # This can probably be streamlined/functionalized to make the pipeline look better.
                 batched_name = f"{config['paths']['data_folder']}/04_final"
                 Path(f"{batched_name}/records").mkdir(parents=True, exist_ok=True)
                 Path(f"{batched_name}/tars").mkdir(parents=True, exist_ok=True)
