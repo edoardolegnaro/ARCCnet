@@ -50,30 +50,6 @@ __all__ = [
     "l4_file_pack",
 ]
 
-# def test_rand():
-#     combined = read_data(
-#     hek_path=Path(f"{data_path}/flare_files/hek_swpc_1996-01-01T00:00:00-2023-01-01T00:00:00_dev.parq"),
-#     srs_path=Path(f"{data_path}/flare_files/srs_processed_catalog.parq"),
-#     size=1,
-#     duration=6,
-#     long_lim=65,
-#     types=["F1", "F2", "N1", "N2"],
-#     )[1]
-
-#     types=["F1", "F2", "N1", "N2"]
-
-#     # 1. test with full list of samples
-#     rand_comb_1 = rand_select(combined, 1, types)
-#     rand_comb_2 = rand_select(combined, 1, types)
-#     assert (rand_comb_1 != rand_comb_2)
-#     # 2. test with partial list of samples
-#     rand_comb_1 = rand_select(combined, 1, ["F1", "N1"])
-
-#     # 3. test with higher number of sizes
-#     rand_comb_1 = rand_select(combined, 3, types)
-#     rand_comb_2 = rand_select(combined, 3, types)
-#     assert (rand_comb_1 != rand_comb_2)
-
 
 def rand_select(table, size, types: list):
     r"""
@@ -321,23 +297,28 @@ def drms_pipeline(
         aia_maps, hmi_maps : `tuple`
             A tuple containing the AIA maps and HMI maps.
     """
-    # print(start_t)
-    hmi_query, hmi_export = hmi_query_export(start_t, end_t, hmi_keys, sample)
+
+    hmi_query, hmi_export, ic_query, ic_export = hmi_query_export(start_t, end_t, hmi_keys, sample)
     aia_query, aia_export = aia_query_export(hmi_query, aia_keys, wavelengths)
+    # ic_query.rename(columns={"*recnum*":"FSN"}, inplace=True)
+    # img_query = pd.concat([aia_query, ic_query],ignore_index=True)
+    # img_urls = pd.concat([aia_export.urls, ic_export.urls], ignore_index=True)
 
     hmi_dls, hmi_exs = l1_file_save(hmi_export, hmi_query, path)
+    cnt_dls, cnt_exs = l1_file_save(ic_query, ic_export, path)
     aia_dls, aia_exs = l1_file_save(aia_export, aia_query, path)
+    img_exs = list(itertools.chain(aia_exs, cnt_exs))
 
     hmi_maps = sunpy.map.Map(hmi_exs)
     hmi_maps = add_fnames(hmi_maps, hmi_exs)
-    aia_maps = sunpy.map.Map(aia_exs)
-    aia_maps = add_fnames(aia_maps, aia_exs)
-    return aia_maps, hmi_maps
+    img_maps = sunpy.map.Map(img_exs)
+    img_maps = add_fnames(img_maps, aia_exs)
+    return img_maps, hmi_maps
 
 
 def hmi_query_export(time_1, time_2, keys: list, sample: int):
     r"""
-    Query and export HMI data from the JSOC database.
+    Query and export HMI magnetogram data from the JSOC database.
 
     Parameters
     ----------
@@ -352,8 +333,8 @@ def hmi_query_export(time_1, time_2, keys: list, sample: int):
 
     Returns
     -------
-        hmi_query_full, hmi_result : `tuple`
-            A tuple containing the query result (pandas df) and the export data response (drms export object).
+        hmi_query_full, hmi_result, ic_query_full, ic_export : `tuple`
+            A tuple containing the query results of the hmi mag and ic_no_limbdark (pandas df) and the export data response (drms export object).
     """
     client = drms.Client()
     duration = round((time_2 - time_1).to_value(u.hour))
@@ -365,12 +346,13 @@ def hmi_query_export(time_1, time_2, keys: list, sample: int):
     bad_result = hmi_query[hmi_query.QUALITY != 0]
 
     qstrs_m_hmi = [f"hmi.M_720s[{time}]" + "{magnetogram}" for time in bad_result["T_REC"]]
-    hmi_values = [hmi_rec_find(qstr, keys, True) for qstr in qstrs_m_hmi]
+    hmi_values = [hmi_rec_find(qstr, keys, 3, 720) for qstr in qstrs_m_hmi]
     patched_num = [*hmi_values]
 
     joined_num = [*good_num, *patched_num]
     joined_num = [str(num) for num in joined_num]
     hmi_num_str = str(joined_num).strip("[]")
+
     hmi_qstr = f"hmi.M_720s[! recnum in ({hmi_num_str}) !]" + "{magnetogram}"
     hmi_query_full = client.query(ds=hmi_qstr, key=keys)
     hmi_result = client.export(hmi_qstr, method="url", protocol="fits", email=os.environ["JSOC_EMAIL"])
@@ -380,14 +362,29 @@ def hmi_query_export(time_1, time_2, keys: list, sample: int):
 
 
 def hmi_continuum_export(hmi_query, keys):
+    r"""
+    Query and export HMI continuum data from the JSOC database.
+
+    Parameters
+    ----------
+        hmi_query : `drms query`
+            HMI query result containing target times.
+        keys : `list`
+            A list of keys to query.
+
+    Returns
+    -------
+        hmi_query_full, hmi_result, ic_query_full, ic_export : `tuple`
+            A tuple containing the query results of the hmi mag and ic_no_limbdark (pandas df) and the export data response (drms export object).
+    """
     client = drms.Client()
-    qstrs_ic = [f"hmi.Ic_720s[{time}]" + "{image}" for time in hmi_query["T_REC"]]
+    qstrs_ic = [f"hmi.Ic_noLimbDark_720s[{time}]" + "{image}" for time in hmi_query["T_REC"]]
 
     ic_value = [hmi_rec_find(qstr, keys, 3, 12) for qstr in qstrs_ic]
     unpacked_ic = list(itertools.chain.from_iterable(ic_value))
     joined_num = [str(num) for num in unpacked_ic]
     ic_num_str = str(joined_num).strip("[]")
-    ic_comb_qstr = f"aia.lev1[! FSN in ({ic_num_str}) !]" + "{image_lev1}"
+    ic_comb_qstr = f"hmi.Ic_noLimbDark_720s[! recnum in ({ic_num_str}) !]" + "{image}"
 
     ic_query_full = client.query(ds=ic_comb_qstr, key=keys)
 
@@ -403,7 +400,7 @@ def aia_query_export(hmi_query, keys, wavelength):
     Parameters
     ----------
         hmi_query : `drms query`
-            The HMI query result.
+            The HMI query result containing target times.
         keys : `list`
             List of keys to query.
         wavelength : `list`
@@ -416,11 +413,11 @@ def aia_query_export(hmi_query, keys, wavelength):
     client = drms.Client()
     qstrs_euv = [f"aia.lev1_euv_12s[{time}][{wavelength}]" + "{image}" for time in hmi_query["T_REC"]]
     qstrs_uv = [f"aia.lev1_uv_24s[{time}]{[1600, 1700]}" + "{image}" for time in hmi_query["T_REC"]]
-    qstrs_vis = [f"aia.lev1_vis_1h[{time}]{[4500]}" + "{image}" for time in hmi_query["T_REC"]]
+    # qstrs_vis = [f"aia.lev1_vis_1h[{time}]{[4500]}" + "{image}" for time in hmi_query["T_REC"]]
     euv_value = [aia_rec_find(qstr, keys, 3, 12) for qstr in qstrs_euv]
     uv_value = [aia_rec_find(qstr, keys, 2, 24) for qstr in qstrs_uv]
-    vis_value = [aia_rec_find(qstr, keys, 1, 60) for qstr in qstrs_vis]
-    unpacked_aia = list(itertools.chain(euv_value, uv_value, vis_value))
+    # vis_value = [aia_rec_find(qstr, keys, 1, 60) for qstr in qstrs_vis]
+    # unpacked_aia = list(itertools.chain(euv_value, uv_value, vis_value))
     unpacked_aia = list(itertools.chain(euv_value, uv_value))
     unpacked_aia = [set for set in unpacked_aia if set is not None]
     unpacked_aia = list(itertools.chain.from_iterable(unpacked_aia))
@@ -435,7 +432,7 @@ def aia_query_export(hmi_query, keys, wavelength):
     return aia_query_full, aia_result
 
 
-def hmi_rec_find(qstr, keys, cont=False):
+def hmi_rec_find(qstr, keys, retries, sample, cont=False):
     r"""
     Find the HMI record number for a given query string.
 
@@ -445,9 +442,9 @@ def hmi_rec_find(qstr, keys, cont=False):
             A query string.
         keys : `list`
             List of keys to query.
+        resample: `int`
         cont : `bool`
             indicates whether continuum is needed, searches for magnetogram if false.
-
     Returns
     -------
         `int`
@@ -456,17 +453,16 @@ def hmi_rec_find(qstr, keys, cont=False):
     seg = "{magnetogram}"
     series = "hmi.M_720s"
     if cont:
-        seg = "{image}"
-        series = "hmi.Ic_720s"
-
+        seg = "{continuum}"
+        series = "hmi.Ic_noLimbDark_720s"
     client = drms.Client()
-    retries = 0
+    count = 0
     qry = client.query(ds=qstr, key=keys)
     time = sunpy.time.parse_time(qry["T_REC"].values[0])
-    while qry["QUALITY"].values[0] != 0 and retries <= 3:
+    while qry["QUALITY"].values[0] != 0 and count <= retries:
         qry = client.query(ds=f"{series}[{time}]" + seg, key=keys)
-        time = change_time(time, 720)
-        retries += 1
+        time = change_time(time, sample)
+        count += 1
     return qry["*recnum*"].values[0]
 
 
@@ -677,17 +673,20 @@ def aia_l2(packed_maps):
             Path to the processed AIA map.
     """
     path = config["paths"]["data_folder"]
-    aia_map, hmi_match, table = packed_maps
-    time = aia_map.date.to_value("ymdhms")
-    year, month, day = time[0], time[1], time[2]
-    map_path = f"{path}/02_intermediate/{year}/{month}/{day}/SDO/{aia_map.nickname}"
-    proc_path = f"{map_path}/02_{aia_map.meta['fname']}"
-    if not os.path.exists(proc_path):
-        aia_map = aia_process(aia_map, table)
-        aia_map = aia_reproject(aia_map, hmi_match)
-        proc_path = l2_file_save(aia_map, path)
-    # This updates process status for tqdm more effectively.
-    sys.stdout.flush()
+    sdo_map, hmi_match, table = packed_maps
+    if sdo_map.nickname == "HMI":
+        proc_path = hmi_l2(sdo_map)
+    else:
+        time = sdo_map.date.to_value("ymdhms")
+        year, month, day = time[0], time[1], time[2]
+        map_path = f"{path}/02_intermediate/{year}/{month}/{day}/SDO/{sdo_map.nickname}"
+        proc_path = f"{map_path}/02_{sdo_map.meta['fname']}"
+        if not os.path.exists(proc_path):
+            sdo_map = aia_process(sdo_map, table)
+            sdo_map = aia_reproject(sdo_map, hmi_match)
+            proc_path = l2_file_save(sdo_map, path)
+        # This updates process status for tqdm more effectively.
+        sys.stdout.flush()
 
     return proc_path
 
@@ -909,19 +908,6 @@ def l4_file_pack(aia_paths, hmi_paths, dir_path, rec, out_table, anim_path):
     out_table.write(f"{dir_path}/data/{rec}/{rec}.csv", overwrite=True)
 
 
-# def test_padding():
-#     map_width = int(config["drms"]["patch_width"])
-#     # 1. test with undersized AR cutout on right side of map, check map size.
-#     sdo_map = sunpy.map.Map('/Users/danielgass/Library/Application Support/ARCCnet/arccnet/03_processed/2013/8/20/SDO/AIA/11818_03_171.aia.lev1.2013-08-20T075936Z.73314087.image_lev1.fits')
-#     assert(int(pad_map(sdo_map, map_width).dimensions[0].value) == map_width)
-#     # 2. test with undersized AR cutout on left side of map, check map size.
-#     sdo_map = sunpy.map.Map('/Users/danielgass/Library/Application Support/ARCCnet/arccnet/03_processed/2013/1/6/SDO/AIA/11653_03_1700.aia.lev1.2013-01-06T234743Z.60394065.image_lev1.fits')
-#     assert(int(pad_map(sdo_map, int(map_width)).dimensions[0].value) == map_width)
-#     # 3. test with different targ width, to check that it works with arbitrary widths.
-#     sdo_map = sunpy.map.Map('/Users/danielgass/Library/Application Support/ARCCnet/arccnet/03_processed/2013/1/6/SDO/AIA/11653_03_1700.aia.lev1.2013-01-06T234743Z.60394065.image_lev1.fits')
-#     assert(int(pad_map(sdo_map, 900).dimensions[0].value) == 900)
-
-
 def pad_map(map, targ_width):
     r"""
     Pads the map data of a submap which is narrower than the specified submap width due to reaching the edge of the image array.
@@ -946,41 +932,6 @@ def pad_map(map, targ_width):
         data = np.pad(map.data, ((0, 0), (0, diff)), constant_values=np.nan)
     new_map = sunpy.map.Map(data, map.meta)
     return new_map
-
-
-# def test_flare_check():
-#     combined = read_data(
-#     hek_path=Path(f"{data_path}/flare_files/hek_swpc_1996-01-01T00:00:00-2023-01-01T00:00:00_dev.parq"),
-#     srs_path=Path(f"{data_path}/flare_files/srs_processed_catalog.parq"),
-#     size=1,
-#     duration=6,
-#     long_lim=65,
-#     types=["F1", "F2", "N1", "N2"],
-#     )[1]
-#     # 1. test a flare run known to contain flares
-#     flares = combined[combined['goes_class'] != 'N']
-#     flare = flares[flares['goes_class'] == "C3.7"]
-#     flare = flare[flare["noaa_number"] == 12644]
-#     assert(flare_check(flare['start_time'], flare['end_time'], flare['noaa_number'], flares)[0]) == 2
-#     # 2. test a non flare run known to contain flares
-#     ar = combined[combined['goes_class'] == "N"]
-#     ar = ar[ar["noaa_number"] == 12038]
-#     ar = ar[ar['tb_date'] == '2014-04-23']
-#     erl_time = Time(ar["start_time"]) - (6 + 1) * u.hour
-#     assert(flare_check(erl_time, Time(ar["start_time"]) - 1 * u.hour, ar["noaa_number"], flares)[0]) == 2
-#     # 3. test a flare run without flares
-#     flares = combined[combined['goes_class'] != 'N']
-#     flare = combined[combined['goes_class'] == "M1.6"]
-#     flare = flare[flare["noaa_number"] == 12192]
-#     print(flare)
-#     assert(flare_check(flare['start_time'], flare['end_time'], flare['noaa_number'], flares)[0]) == 1
-#     # 4. test a non flare run without flares
-#     ar = combined[combined['goes_class'] == "N"]
-#     ar = ar[ar["noaa_number"] == 12524]
-#     ar = ar[ar['tb_date'] == '2016-03-20']
-#     erl_time = Time(ar["start_time"]) - (6 + 1) * u.hour
-#     assert(flare_check(erl_time, Time(ar["start_time"]) - 1 * u.hour, ar["noaa_number"], flares)[0]) == 1
-# assert(flare_check(flare['start_time'], flare['end_time'], flare['noaa_number'], combined)[0]) == 1
 
 
 def flare_check(start, end, ar_num, table):
