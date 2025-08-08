@@ -13,11 +13,11 @@ from arccnet import config
 from arccnet.data_generation.timeseries.sdo_processing import crop_map, flare_check, pad_map, rand_select
 
 data_path = config["paths"]["data_folder"]
-test_path = Path().resolve().parent
+test_path = Path(__file__).resolve().parent
 
 
 def test_rand():
-    combined = Table.read(f"{test_path}/tests/data/ts_test_data.parq")
+    combined = Table.read(f"{test_path}/data/ts_test_data.parq")
     types = ["F1", "F2", "N1", "N2"]
 
     # 1. test with full list of samples
@@ -54,7 +54,7 @@ def test_padding():
 
 
 def test_flare_check():
-    combined = Table.read(f"{test_path}/tests/data/ts_test_data.parq")
+    combined = Table.read(f"{test_path}/data/ts_test_data.parq")
     flares = combined[combined["goes_class"] != "N"]
     flare = flares[flares["goes_class"] == "C3.7"]
     flare = flare[flare["noaa_number"] == 12644]
