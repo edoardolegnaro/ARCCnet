@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 import sunpy.data.sample
 import sunpy.map
 
@@ -9,7 +10,7 @@ from astropy.table import Table
 from astropy.time import Time
 
 from arccnet import config
-from arccnet.data_generation.timeseries.sdo_processing import crop_map, pad_map, rand_select
+from arccnet.data_generation.timeseries.sdo_processing import crop_map, flare_check, pad_map, rand_select
 
 data_path = config["paths"]["data_folder"]
 test_path = Path().resolve().parent
@@ -33,6 +34,7 @@ def test_rand():
     assert list(rand_comb_1) != list(rand_comb_2)
 
 
+@pytest.mark.remote_data
 def test_padding():
     map_width = int(config["drms"]["patch_width"])
     map_height = int(config["drms"]["patch_height"])
@@ -51,28 +53,27 @@ def test_padding():
     assert int(pad_map(aia_smap, 900).dimensions[0].value) == 900
 
 
-# This test won't work correctly unless we use the full flare catalogue from HEK, as we don't want to add large files to repo, skipping for now.
-# def test_flare_check():
-# 	combined = Table.read(f"{test_path}/tests/data/ts_test_data.parq")
-# 	flares = combined[combined['goes_class'] != 'N']
-# 	flare = flares[flares['goes_class'] == "C3.7"]
-# 	flare = flare[flare["noaa_number"] == 12644]
-# 	assert(flare_check(flare['start_time'], flare['end_time'], flare['noaa_number'], flares)[0]) == 2
-# 	# 2. test a non flare run known to contain flares
-# 	ar = combined[combined['goes_class'] == "N"]
-# 	ar = ar[ar["noaa_number"] == 12038]
-# 	ar = ar[ar['tb_date'] == '2014-04-23']
-# 	erl_time = Time(ar["start_time"]) - (6 + 1) * u.hour
-# 	assert(flare_check(erl_time, Time(ar["start_time"]) - 1 * u.hour, ar["noaa_number"], flares)[0]) == 2
-# 	# 3. test a flare run without flares
-# 	flares = combined[combined['goes_class'] != 'N']
-# 	flare = combined[combined['goes_class'] == "M1.6"]
-# 	flare = flare[flare["noaa_number"] == 12192]
-# 	print(flare)
-# 	assert(flare_check(flare['start_time'], flare['end_time'], flare['noaa_number'], flares)[0]) == 1
-# 	# 4. test a non flare run without flares
-# 	ar = combined[combined['goes_class'] == "N"]
-# 	ar = ar[ar["noaa_number"] == 12524]
-# 	ar = ar[ar['tb_date'] == '2016-03-20']
-# 	erl_time = Time(ar["start_time"]) - (6 + 1) * u.hour
-# 	assert(flare_check(erl_time, Time(ar["start_time"]) - 1 * u.hour, ar["noaa_number"], flares)[0]) == 1
+def test_flare_check():
+    combined = Table.read(f"{test_path}/tests/data/ts_test_data.parq")
+    flares = combined[combined["goes_class"] != "N"]
+    flare = flares[flares["goes_class"] == "C3.7"]
+    flare = flare[flare["noaa_number"] == 12644]
+    assert (flare_check(flare["start_time"], flare["end_time"], flare["noaa_number"], flares)[0]) == 2
+    # 2. test a non flare run known to contain flares
+    ar = combined[combined["goes_class"] == "N"]
+    ar = ar[ar["noaa_number"] == 12038]
+    ar = ar[ar["tb_date"] == "2014-04-23"]
+    erl_time = Time(ar["start_time"]) - (6 + 1) * u.hour
+    assert (flare_check(erl_time, Time(ar["start_time"]) - 1 * u.hour, ar["noaa_number"], flares)[0]) == 2
+    # 3. test a flare run without flares
+    flares = combined[combined["goes_class"] != "N"]
+    flare = combined[combined["goes_class"] == "M1.6"]
+    flare = flare[flare["noaa_number"] == 12192]
+    print(flare)
+    assert (flare_check(flare["start_time"], flare["end_time"], flare["noaa_number"], flares)[0]) == 1
+    # 4. test a non flare run without flares
+    ar = combined[combined["goes_class"] == "N"]
+    ar = ar[ar["noaa_number"] == 12524]
+    ar = ar[ar["tb_date"] == "2016-03-20"]
+    erl_time = Time(ar["start_time"]) - (6 + 1) * u.hour
+    assert (flare_check(erl_time, Time(ar["start_time"]) - 1 * u.hour, ar["noaa_number"], flares)[0]) == 1
