@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # ---
 # jupyter:
 #   jupytext:
@@ -10,7 +9,7 @@
 #       format_version: '1.3'
 #       jupytext_version: 1.11.2
 #   kernelspec:
-#     display_name: ARCAFF
+#     display_name: py_3.11
 #     language: python
 #     name: python3
 # ---
@@ -43,9 +42,9 @@ pd.set_option("display.max_columns", None)
 
 
 # %%
-data_folder = os.getenv("ARCAFF_DATA_FOLDER", "../../../../data")
-dataset_folder = "arccnet-cutout-dataset-v20240715"
-df_file_name = "cutout-mcintosh-catalog-v20240715.parq"
+data_folder = os.getenv("ARCAFF_DATA_FOLDER", "/ARCAFF/data")
+dataset_folder = "arccnet-v20250805/04_final"
+df_file_name = "srs_clean_catalog.parq"
 
 # %% [markdown]
 # # McIntosh Classification
@@ -206,11 +205,12 @@ plt.legend(loc="upper left")  # Choose location as appropriate
 
 plt.show()
 
+from datetime import datetime
+
+import matplotlib.dates as mdates
 # %%
 import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
 import numpy as np
-from datetime import datetime
 
 # Define color variables
 mdi_color = "royalblue"
@@ -222,11 +222,8 @@ tick_dates = [datetime(year, 1, 1) for year in years]
 
 with plt.style.context("seaborn-v0_8-darkgrid"):
     # Create subplots with a shared x-axis and custom height ratios (top panel larger)
-    fig, (ax1, ax2) = plt.subplots(
-        2, 1, figsize=(16, 9), sharex=True,
-        gridspec_kw={'height_ratios': [4, 1]}
-    )
-    
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(16, 9), sharex=True, gridspec_kw={"height_ratios": [4, 1]})
+
     # --- Top Panel: Bar Plot ---
     ax1.bar(time_counts_MDI.index, time_counts_MDI.values, width=0.8, color=mdi_color, alpha=0.9, label="MDI")
     ax1.bar(time_counts_HMI.index, time_counts_HMI.values, width=0.8, color=hmi_color, alpha=0.9, label="HMI")
@@ -236,7 +233,7 @@ with plt.style.context("seaborn-v0_8-darkgrid"):
     ax1.set_ylim([0, 17])
     ax1.legend(loc="upper left", fontsize=14)
     ax1.grid(True, which="both", linestyle="--", alpha=0.5)
-    
+
     # --- Bottom Panel: Timeline as Vertical Bars ---
     colors = [mdi_color, hmi_color]
     labels = ["MDI", "HMI"]
@@ -247,26 +244,26 @@ with plt.style.context("seaborn-v0_8-darkgrid"):
         else:
             ymin, ymax = 1.2, 1.8
         ax2.vlines(dates_val, ymin, ymax, color=color, alpha=0.9, label=label)
-    
+
     ax2.set_yticks([])  # Hide y-axis ticks
     ax2.set_ylim([0, 2])
     # Optionally, you can add a title or legend here if needed
     # ax2.set_title("Dataset Timeline", fontsize=16)
     # ax2.legend(loc="upper left", fontsize=14)
     ax2.grid(True, which="both", linestyle="--", alpha=0.75)
-    
+
     # --- Shared X-Axis Formatting ---
     # Format the x-axis to display only the year
     ax2.xaxis_date()
     ax2.xaxis.set_major_locator(mdates.AutoDateLocator())
     ax2.xaxis.set_major_formatter(mdates.DateFormatter("%Y"))
     ax2.tick_params(axis="x", labelsize=14)
-    
+
     # Set custom x-ticks to the list of even years from 1996 to 2023
     ax2.set_xticks(tick_dates)
     plt.xticks(rotation=45)
     ax2.set_xlabel("Time", fontsize=16)
-    
+
     plt.tight_layout()
     plt.show()
 
@@ -368,7 +365,7 @@ plt.show()
 
 print(f"Rear ARs: {len(rear_latV)}")
 print(f"Front ARs: {len(front_latV)}")
-print(f"Percentage of rear ARs: {100*len(rear_latV)/( len(rear_latV) + len(front_latV)):.2f}%")
+print(f"Percentage of rear ARs: {100 * len(rear_latV) / (len(rear_latV) + len(front_latV)):.2f}%")
 
 # %%
 ut_v.make_classes_histogram(AR_df_filtered["label"], title="Front ARs", y_off=10, figsz=(11, 5))
@@ -514,26 +511,35 @@ cache_dir = os.path.join(os.getcwd(), "cache")
 os.makedirs(cache_dir, exist_ok=True)
 results_alpha = compute_statistics(df_alpha, cache=True, cache_file=os.path.join(cache_dir, "results_alpha_cache.pkl"))
 results_beta = compute_statistics(df_beta, cache=True, cache_file=os.path.join(cache_dir, "results_beta_cache.pkl"))
-#results_betax = compute_statistics(df_betax, cache=True, cache_file=os.path.join(cache_dir, "results_betax_cache.pkl"))
-results_beta_delta = compute_statistics(df_beta_delta, cache=True, cache_file=os.path.join(cache_dir, "results_beta_delta_cache.pkl"))
-results_beta_gamma_delta = compute_statistics(df_beta_gamma_delta, cache=True, cache_file=os.path.join(cache_dir, "results_beta_delta__gamma_cache.pkl"))
-results_beta_gamma = compute_statistics(df_beta_gamma, cache=True, cache_file=os.path.join(cache_dir, "results_beta_gamma_cache.pkl"))
+# results_betax = compute_statistics(df_betax, cache=True, cache_file=os.path.join(cache_dir, "results_betax_cache.pkl"))
+results_beta_delta = compute_statistics(
+    df_beta_delta, cache=True, cache_file=os.path.join(cache_dir, "results_beta_delta_cache.pkl")
+)
+results_beta_gamma_delta = compute_statistics(
+    df_beta_gamma_delta, cache=True, cache_file=os.path.join(cache_dir, "results_beta_delta__gamma_cache.pkl")
+)
+results_beta_gamma = compute_statistics(
+    df_beta_gamma, cache=True, cache_file=os.path.join(cache_dir, "results_beta_gamma_cache.pkl")
+)
 
 # %%
 df_alpha_results = pd.DataFrame(results_alpha)
 df_beta_results = pd.DataFrame(results_beta)
-#df_betax_results = pd.DataFrame(results_betax)
+# df_betax_results = pd.DataFrame(results_betax)
 df_beta_delta_results = pd.DataFrame(results_beta_delta)
 df_beta_gamma_delta_results = pd.DataFrame(results_beta_gamma_delta)
 df_beta_gamma_results = pd.DataFrame(results_beta_gamma)
 df_alpha_results["Group"] = "Alpha"
 df_beta_results["Group"] = "Beta"
-#df_betax_results["Group"] = "Beta-X"
+# df_betax_results["Group"] = "Beta-X"
 df_beta_delta_results["Group"] = "Beta-Delta"
 df_beta_gamma_delta_results["Group"] = "Beta-Gamma-Delta"
 df_beta_gamma_results["Group"] = "Beta-Gamma"
-#df_results_combined = pd.concat([df_alpha_results, df_beta_results, df_betax_results], ignore_index=True)
-df_results_combined = pd.concat([df_alpha_results, df_beta_results, df_beta_delta_results, df_beta_gamma_results, df_beta_gamma_delta_results], ignore_index=True)
+# df_results_combined = pd.concat([df_alpha_results, df_beta_results, df_betax_results], ignore_index=True)
+df_results_combined = pd.concat(
+    [df_alpha_results, df_beta_results, df_beta_delta_results, df_beta_gamma_results, df_beta_gamma_delta_results],
+    ignore_index=True,
+)
 combined_describe = df_results_combined.groupby("Group").describe()
 
 # %% [markdown]
@@ -566,11 +572,11 @@ def plot_histograms(key):
     weights_beta_delta = np.ones_like(results_beta_delta[key]) / len(results_beta[key])
     weights_beta_gamma = np.ones_like(results_beta_gamma[key]) / len(results_beta[key])
     weights_beta_gamma_delta = np.ones_like(results_beta_gamma_delta[key]) / len(results_beta[key])
-    #weights_betax = np.ones_like(results_betax[key]) / len(results_betax[key])
+    # weights_betax = np.ones_like(results_betax[key]) / len(results_betax[key])
     # Plot histograms
     plt.hist(results_alpha[key], weights=weights_alpha, alpha=0.35, label="Alpha", density=True)
     plt.hist(results_beta[key], weights=weights_beta, alpha=0.35, label="Beta", density=True)
-    #plt.hist(results_betax[key], weights=weights_betax, alpha=0.35, label="Beta-X", density=True)
+    # plt.hist(results_betax[key], weights=weights_betax, alpha=0.35, label="Beta-X", density=True)
     plt.hist(results_beta_delta[key], weights=weights_beta_delta, alpha=0.35, label="Beta-X", density=True)
     plt.hist(results_beta_gamma[key], weights=weights_beta_gamma, alpha=0.35, label="Beta-X", density=True)
     plt.hist(results_beta_gamma_delta[key], weights=weights_beta_gamma_delta, alpha=0.35, label="Beta-X", density=True)
@@ -610,8 +616,13 @@ def results_to_df(results, label):
 #     [results_to_df(results_alpha, "Alpha"), results_to_df(results_beta, "Beta"), results_to_df(results_betax, "Beta-x")]
 # )
 combined_df = pd.concat(
-    [results_to_df(results_alpha, "Alpha"), results_to_df(results_beta, "Beta"), results_to_df(results_beta_delta, "Beta-Delta"),
-    results_to_df(results_beta_gamma, "Beta-Gamma"), results_to_df(results_beta_gamma_delta, "Beta-Gamma-Delta")]
+    [
+        results_to_df(results_alpha, "Alpha"),
+        results_to_df(results_beta, "Beta"),
+        results_to_df(results_beta_delta, "Beta-Delta"),
+        results_to_df(results_beta_gamma, "Beta-Gamma"),
+        results_to_df(results_beta_gamma_delta, "Beta-Gamma-Delta"),
+    ]
 )
 
 if combined_df.isnull().values.any():
@@ -634,7 +645,7 @@ for key in title_mapping:
         [
             results_alpha[key][~np.isnan(results_alpha[key])],
             results_beta[key][~np.isnan(results_beta[key])],
-            #results_betax[key][~np.isnan(results_betax[key])],
+            # results_betax[key][~np.isnan(results_betax[key])],
             results_beta_delta[key][~np.isnan(results_beta_delta[key])],
             results_beta_gamma[key][~np.isnan(results_beta_gamma[key])],
             results_beta_gamma_delta[key][~np.isnan(results_beta_gamma_delta[key])],
@@ -648,7 +659,13 @@ for key in title_mapping:
 
 # %%
 table = []
-keys = set(results_alpha.keys()) | set(results_beta.keys()) | set(results_beta_delta.keys()) | set(results_beta_gamma.keys())  | set(results_beta_gamma_delta.keys())# Union of all keys
+keys = (
+    set(results_alpha.keys())
+    | set(results_beta.keys())
+    | set(results_beta_delta.keys())
+    | set(results_beta_gamma.keys())
+    | set(results_beta_gamma_delta.keys())
+)  # Union of all keys
 
 for key in sorted(keys):
     alpha_count = len(find_outliers(results_alpha.get(key, [])))
@@ -656,7 +673,7 @@ for key in sorted(keys):
     beta_delta_count = len(find_outliers(results_beta_delta.get(key, [])))
     beta_gamma_count = len(find_outliers(results_beta_gamma.get(key, [])))
     beta_gamma_delta_count = len(find_outliers(results_beta_gamma_delta.get(key, [])))
-    #betax_count = len(find_outliers(results_betax.get(key, [])))
+    # betax_count = len(find_outliers(results_betax.get(key, [])))
     table.append([key, alpha_count, beta_count, beta_delta_count, beta_gamma_count, beta_gamma_delta_count])
 
 outliers_df = pd.DataFrame(table, columns=["Key", "Alpha", "Beta", "Beta-Delta", "Beta-Gamma", "Beta-Gamma-Delta"])
