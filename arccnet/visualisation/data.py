@@ -1,5 +1,7 @@
+import os
 from datetime import datetime
 
+import cv2
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -482,3 +484,103 @@ def plot_maps_regions(map_one, regions_one, map_two, regions_two, **kwargs):
         map_two.draw_quadrangle(row["bottom_left_cutout"], axes=ax1, top_right=row["top_right_cutout"], **kwargs)
 
     return fig, [ax0, ax1]
+
+
+def mosaic_plot(hmi, name, file, nrows, ncols, wvls, table, path):
+    r"""
+    Plots a frame of a mosaic animation as a png, provided the specific fits files for each timestep.
+
+    Parameters
+    ----------
+        hmi : `str`
+            The string of the path of the specific hmi at the timestep to be plotted.
+        name : `str`
+            The name of the associated target run to save file to.
+        file : `int`
+            The number of the provided file in the sequence of hmi files, allows for sequential plotting.
+        nrows : `int`
+            The number of rows in the mosaic plot.
+        ncols : `int`
+            The number of columns in the mosaic plot.
+        wvls : `list`
+            List containing the wavelengths within the AIA portion of the data.
+        table : `list`
+            Table containing the AIA/HMI pairings for the S3 files of current target run.
+        path : `str`
+            The path of the directory of S4 data.
+    """
+
+    fig = plt.figure()
+    plt.title(name, size=7)
+    plt.axis("off")
+    hmi_map = Map(hmi)
+    for i in range(len(wvls) + 1):
+        row = i // ncols
+        col = i % ncols
+        if i < 10:
+            wv = wvls[i]
+            files = table[table["Wavelength"] == wv]
+            files = files[files["HMI files"] == hmi]
+            aia_files = files["AIA files"]
+            try:
+                aia_map = Map(aia_files.value[0])
+                ax = fig.add_subplot(nrows, ncols, i + 1)
+                ax.imshow(np.sqrt(aia_map.data), cmap=f"sdoaia{wv}")
+                ax.text(0.05, 0.05, f"{wv} - {aia_map.date}", color="w", transform=ax.transAxes, fontsize=5)
+            except IndexError:
+                aia_map = np.zeros(hmi_map.data.shape)
+                ax = fig.add_subplot(nrows, ncols, i + 1)
+                ax.imshow(np.sqrt(aia_map.data), cmap=f"sdoaia{wv}")
+                ax.text(0.05, 0.05, f"{wv} - MISSING", color="w", transform=ax.transAxes, fontsize=5)
+
+        else:
+            ax = fig.add_subplot(nrows, ncols, i + 1)
+            ax.imshow(hmi_map.data, cmap="Greys")
+            ax.text(0.05, 0.05, f"HMI - {hmi_map.date}", color="w", transform=ax.transAxes, fontsize=5)
+
+        # Hide axis tick labels except for bottom row and left column
+        if row < nrows - 1 or i != 8:
+            ax.set_xlabel("")  # Hides bottom (Latitude)
+            ax.set_xticklabels([])
+        if col > 0:
+            ax.set_ylabel("")  # Hides left (Longitude)
+            ax.set_yticklabels([])
+
+    fig.subplots_adjust(left=0.017, bottom=0.068, right=1, top=0.962, wspace=0, hspace=0)
+
+    plt.savefig(fname=f"{path}/frames/{file}-{name}_frame.png", dpi=1000)
+    plt.close()
+
+
+def mosaic_animate(base_dir, name):
+    r"""
+    Animates a set of mosaic frames into an mp4, given a provided base directory and a filename.
+
+    Parameters
+    ----------
+        base_dir : `str`
+            The paths to the aia files to be packed.
+        name : `str`
+            The name of the associated target run to save file to.
+
+    Returns
+    ----------
+        output_file : `str`
+            A string containing the path of the completed mosaic animation.
+    """
+    image_dir = f"{base_dir}/frames/"
+    output_file = f"{base_dir}/anims/{name}.mp4"
+    fps = 1.5
+    png_files = sorted([os.path.join(image_dir, f) for f in os.listdir(image_dir) if f.endswith(f"-{name}_frame.png")])
+    sorted_files = sorted(png_files, key=lambda x: int(os.path.basename(x).split("-")[0]))
+    first_frame = cv2.imread(sorted_files[0])
+    height, width, _ = first_frame.shape
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    out = cv2.VideoWriter(output_file, fourcc, fps, (width, height))
+
+    for file in sorted_files:
+        frame = cv2.imread(file)
+        out.write(frame)
+    out.release()
+    print(f"Video saved to {output_file}")
+    return output_file

@@ -48,7 +48,10 @@ class HierarchicalResNet(nn.Module):
                 f"Unsupported resnet_version: {resnet_version}. Supported versions are: {list(resnet_versions.keys())}"
             )
 
+<<<<<<< HEAD
         # Get the selected ResNet model, weights, and output size
+=======
+>>>>>>> main
         resnet_fn, resnet_weights, backbone_output_size = resnet_versions[resnet_version]
         self.resnet = resnet_fn(weights=resnet_weights)
 

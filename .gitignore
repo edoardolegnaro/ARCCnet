@@ -75,7 +75,11 @@ instance/
 
 # Sphinx documentation
 docs/_build/
+<<<<<<< HEAD
 docs/api
+=======
+docs/api/
+>>>>>>> main
 
 # PyBuilder
 target/
@@ -219,6 +223,7 @@ $RECYCLE.BIN/
 docs/_build
 docs/generated
 docs/whatsnew/latest_changelog.txt
+docs/api
 
 ### Pycharm(?)
 .idea
@@ -236,6 +241,7 @@ data/**
 arccnet/models/temp
 arccnet/models/weights
 arccnet/models/trained_models
+<<<<<<< HEAD
 arccnet/models/fulldisk/YOLO/runs/
 arccnet/models/fulldisk/fasterrcnn/cache
 arccnet/models/fulldisk/YOLO/yolo*.pt
@@ -243,3 +249,5 @@ arccnet/visualisation/images
 arccnet/visualisation/cache
 *lightning_logs/
 *checkpoints/
+=======
+>>>>>>> main

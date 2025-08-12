@@ -1,6 +1,11 @@
 import os
+<<<<<<< HEAD
 from typing import Any, Optional
 
+=======
+
+import matplotlib.pyplot as plt
+>>>>>>> main
 import numpy as np
 import pandas as pd
 import torch
@@ -25,10 +30,13 @@ def display_sample_image(data_folder: str, dataset_folder: str, df: pd.DataFrame
         df (pd.DataFrame): DataFrame containing dataset information.
         index (int, optional): Index of the sample to display. Defaults to 15.
     """
+<<<<<<< HEAD
     import matplotlib.pyplot as plt
     import numpy as np
 
     from astropy.io import fits
+=======
+>>>>>>> main
 
     row = df.iloc[index]
     path_key = "path_image_cutout_hmi" if row["path_image_cutout_hmi"] != "" else "path_image_cutout_mdi"
@@ -46,12 +54,22 @@ def display_sample_image(data_folder: str, dataset_folder: str, df: pd.DataFrame
 
 
 def process_ar_dataset(
+<<<<<<< HEAD
     data_folder: Optional[str] = None,
     dataset_folder: str = "arccnet-cutout-dataset-v20240715",
     df_name: str = "cutout-magnetic-catalog-v20240715.parq",
     plot_histograms: bool = True,
     histogram_params: Optional[dict[str, Any]] = None,
 ) -> tuple[pd.DataFrame, dict[str, LabelEncoder], dict[str, dict[str, str]]]:
+=======
+    data_folder,
+    dataset_folder="arccnet-cutout-dataset-v20240715",
+    df_name="cutout-magnetic-catalog-v20240715.parq",
+    plot_histograms=True,
+    histogram_params=None,
+    verbose=False,
+):
+>>>>>>> main
     """
     Processes the AR dataset by loading, filtering, grouping, encoding, and optionally visualizing class distributions.
 
@@ -75,7 +93,10 @@ def process_ar_dataset(
     if data_folder is None:
         data_folder = os.getenv("ARCAFF_DATA_FOLDER", "../../../../../data/")
 
+<<<<<<< HEAD
     # Load the DataFrame using utility function
+=======
+>>>>>>> main
     df, _ = ut_d.make_dataframe(data_folder, dataset_folder, df_name)
 
     # Filter out rows where 'magnetic_class' is empty
@@ -86,14 +107,21 @@ def process_ar_dataset(
     AR_df["p_component"] = AR_df["mcintosh_class"].str[1]
     AR_df["c_component"] = AR_df["mcintosh_class"].str[2]
 
+<<<<<<< HEAD
     # Default histogram parameters
+=======
+    # Histogram parameters
+>>>>>>> main
     default_hist_params = {
         "Z_component": {"y_off": 50, "ylim": 6600, "figsz": (10, 6), "title": "Z McIntosh Component"},
         "p_component": {"y_off": 50, "ylim": None, "figsz": (9, 6), "title": "p McIntosh Component"},
         "c_component": {"y_off": 50, "ylim": None, "figsz": (6, 6), "title": "c McIntosh Component"},
     }
 
+<<<<<<< HEAD
     # Update histogram parameters if provided
+=======
+>>>>>>> main
     if histogram_params is not None:
         default_hist_params.update(histogram_params)
 
@@ -177,9 +205,16 @@ def process_ar_dataset(
     AR_df["c_grouped_encoded"] = c_encoder.fit_transform(AR_df["c_component_grouped"])
 
     # Optionally, inspect the mappings
+<<<<<<< HEAD
     print("Z Component Label Encoding:", dict(zip(z_encoder.classes_, z_encoder.transform(z_encoder.classes_))))
     print("p Component Label Encoding:", dict(zip(p_encoder.classes_, p_encoder.transform(p_encoder.classes_))))
     print("c Component Label Encoding:", dict(zip(c_encoder.classes_, c_encoder.transform(c_encoder.classes_))))
+=======
+    if verbose:
+        print("Z Component Label Encoding:", dict(zip(z_encoder.classes_, z_encoder.transform(z_encoder.classes_))))
+        print("p Component Label Encoding:", dict(zip(p_encoder.classes_, p_encoder.transform(p_encoder.classes_))))
+        print("c Component Label Encoding:", dict(zip(c_encoder.classes_, c_encoder.transform(c_encoder.classes_))))
+>>>>>>> main
 
     # Compile encoders into a dictionary for easy access
     encoders = {"Z_encoder": z_encoder, "p_encoder": p_encoder, "c_encoder": c_encoder}
@@ -260,9 +295,15 @@ def split_dataset(
     if verbose:
         # Display split sizes and proportions
         total_samples = len(df)
+<<<<<<< HEAD
         print(f"Train set: {len(train_df)} ({len(train_df)/total_samples*100:.2f}%)")
         print(f"Validation set: {len(val_df)} ({len(val_df)/total_samples*100:.2f}%)")
         print(f"Test set: {len(test_df)} ({len(test_df)/total_samples*100:.2f}%)\n")
+=======
+        print(f"Train set: {len(train_df)} ({len(train_df) / total_samples * 100:.2f}%)")
+        print(f"Validation set: {len(val_df)} ({len(val_df) / total_samples * 100:.2f}%)")
+        print(f"Test set: {len(test_df)} ({len(test_df) / total_samples * 100:.2f}%)\n")
+>>>>>>> main
 
         # Verify that no groups are shared between splits
         train_groups = set(train_df[group_column])
@@ -352,6 +393,7 @@ class SunspotDataset(Dataset):
 
     def __init__(
         self,
+<<<<<<< HEAD
         data_folder: str,
         dataset_folder: str,
         df: pd.DataFrame,
@@ -359,6 +401,15 @@ class SunspotDataset(Dataset):
         target_height: int = 100,
         target_width: int = 200,
         divisor: float = 800.0,
+=======
+        data_folder,
+        dataset_folder,
+        df,
+        transform=None,
+        target_height=100,
+        target_width=200,
+        divisor=800.0,
+>>>>>>> main
     ):
         """
         Initializes the SunspotDataset.
@@ -393,7 +444,10 @@ class SunspotDataset(Dataset):
         with fits.open(fits_file_path, memmap=True) as img_fits:
             image_data = np.array(img_fits[1].data, dtype=np.float32)
 
+<<<<<<< HEAD
         # Handle NaN values
+=======
+>>>>>>> main
         image_data = np.nan_to_num(image_data, nan=0.0)
 
         # Apply transformations
@@ -405,7 +459,10 @@ class SunspotDataset(Dataset):
         # Convert to tensor and add channel dimension
         image = torch.from_numpy(image_data).unsqueeze(0)  # Shape: (1, H, W)
 
+<<<<<<< HEAD
         # Extract labels
+=======
+>>>>>>> main
         label = (int(row["Z_grouped_encoded"]), int(row["p_grouped_encoded"]), int(row["c_grouped_encoded"]))
 
         return image, label
@@ -435,8 +492,14 @@ def compute_weights(labels, num_classes):
         torch.Tensor: Tensor of class weights.
     """
     class_weights = compute_class_weight(
+<<<<<<< HEAD
         class_weight="balanced",  # Option for balanced weights
         classes=np.arange(num_classes),  # All class indices
         y=labels,  # Labels for the dataset
+=======
+        class_weight="balanced",
+        classes=np.arange(num_classes),
+        y=labels,
+>>>>>>> main
     )
     return torch.tensor(class_weights, dtype=torch.float)

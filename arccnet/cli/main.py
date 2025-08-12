@@ -9,9 +9,9 @@ from collections import ChainMap, defaultdict
 from collections.abc import Mapping
 
 from arccnet import load_config
-from arccnet.models.cutouts import config as config_module
-from arccnet.models.cutouts.inference import predict
-from arccnet.models.cutouts.train import run_training
+from arccnet.models.cutouts.hale import config as config_module
+from arccnet.models.cutouts.hale.inference import predict
+from arccnet.models.cutouts.hale.train import run_training
 from arccnet.pipeline.main import process_ar_catalogs, process_ars, process_flares
 from arccnet.utils.logging import get_logger
 

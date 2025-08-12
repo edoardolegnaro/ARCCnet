@@ -1,6 +1,7 @@
 import os
 
 import matplotlib  # noqa: F401
+<<<<<<< HEAD
 import matplotlib.pyplot as plt
 import numpy as np
 import plotly.express as px
@@ -11,13 +12,22 @@ import torch
 import torch.nn.functional as F
 from matplotlib.patches import Rectangle
 from p_tqdm import p_map
+=======
+import numpy as np
+import torch
+import torch.nn.functional as F
+from matplotlib import pyplot as plt
+>>>>>>> main
 from skimage import transform
 from sunpy.visualization import colormaps as cm  # noqa: F401
 from torchvision.transforms.functional import to_tensor
 
+<<<<<<< HEAD
 import astropy.units as u
 from astropy.io import fits
 
+=======
+>>>>>>> main
 from arccnet.models import labels
 
 magnetic_map = matplotlib.colormaps["hmimag"]
@@ -71,9 +81,14 @@ def pad_resize_normalize(image, target_height=224, target_width=224):
 
 def make_classes_histogram(
     series,
+<<<<<<< HEAD
     horizontal=False,
     figsz=(13, 5),
     y_off=None,
+=======
+    figsz=(13, 5),
+    y_off=300,
+>>>>>>> main
     ylim=None,
     title=None,
     ylabel="n° of ARs",
@@ -87,7 +102,10 @@ def make_classes_histogram(
     show_percentages=True,
     ax=None,
     save_path=None,
+<<<<<<< HEAD
     transparent=False,
+=======
+>>>>>>> main
 ):
     """
     Creates and displays a bar chart (histogram) that visualizes the distribution of classes in a given pandas Series.
@@ -95,6 +113,7 @@ def make_classes_histogram(
     Parameters:
     - series (pandas.Series):
         The input series containing the class labels.
+<<<<<<< HEAD
     - horizontal (bool, optional):
         Whether to create a horizontal bar chart. Default is False.
     - figsz (tuple, optional):
@@ -112,10 +131,22 @@ def make_classes_histogram(
     - ylabel (str, optional):
         The label for the count axis. For vertical charts, this is the y-axis label;
         for horizontal charts, this is the x-axis label. Default is "n° of ARs".
+=======
+    - figsz (tuple, optional):
+        A tuple representing the size of the figure (width, height) in inches.
+        Default is (13, 5).
+    - y_off (int, optional):
+        The vertical offset for the text labels above the bars.
+        Default is 300.
+    - title (str, optional):
+        The title of the histogram plot. If `None`, no title will be displayed.
+        Default is None.
+>>>>>>> main
     - titlesize (int, optional):
         The font size of the title text. Ignored if `title` is `None`.
         Default is 14.
     - x_rotation (int, optional):
+<<<<<<< HEAD
         The rotation angle for the x-axis labels (vertical) or y-axis labels (horizontal).
         Default is 0.
     - fontsize (int, optional):
@@ -130,12 +161,35 @@ def make_classes_histogram(
         The matplotlib style to be used for the plot. Default is 'seaborn-v0_8-darkgrid'.
     - show_percentages (bool, optional):
         Whether to display percentages on top of the bars. Default is True.
+=======
+        The rotation angle for the x-axis labels.
+        Default is 0.
+    - fontsize (int, optional):
+        The font size of the x and y axis labels.
+        Default is 11.
+    - bar_color (str, optional):
+        The color of the bars in the histogram.
+        Default is '#4C72B0'.
+    - edgecolor (str, optional):
+        The color of the edges of the bars.
+        Default is 'black'.
+    - text_fontsize (int, optional):
+        The font size of the text displayed above the bars.
+        Default is 11.
+    - style (str, optional):
+        The matplotlib style to be used for the plot.
+        Default is 'seaborn-v0_8-darkgrid'.
+    - show_percentages (bool, optional):
+        Whether to display percentages on top of the bars.
+        Default is True.
+>>>>>>> main
     - ax (matplotlib.axes.Axes, optional):
         An existing matplotlib Axes object to plot on. If `None`, a new figure and Axes will be created.
         Default is None.
     - save_path (str, optional):
         Path to save the figure. If `None`, the plot will be displayed instead of saved.
         Default is None.
+<<<<<<< HEAD
     - transparent (bool, optional):
         Whether to save the figure with a transparent background. Default is False.
     """
@@ -222,12 +276,99 @@ def make_classes_histogram(
         if ax is None:
             if save_path:
                 plt.savefig(save_path, bbox_inches="tight", transparent=transparent)
+=======
+    """
+
+    # Remove None values before sorting
+    classes_names = sorted(filter(lambda x: x is not None, series.unique()))
+
+    greek_labels = labels.convert_to_greek_label(classes_names)
+    classes_counts = series.value_counts().reindex(classes_names)
+    values = classes_counts.values
+    total = np.sum(values)
+
+    with plt.style.context(style):
+        if ax is None:
+            plt.figure(figsize=figsz)
+            bars = plt.bar(greek_labels, values, color=bar_color, edgecolor=edgecolor)
+        else:
+            bars = ax.bar(greek_labels, values, color=bar_color, edgecolor=edgecolor)
+
+        # Add text on top of the bars
+        for bar in bars:
+            yval = bar.get_height()
+            if show_percentages:
+                percentage = f"{yval / total * 100:.2f}%" if total > 0 else "0.00%"
+                if ax is None:
+                    plt.text(
+                        bar.get_x() + bar.get_width() / 2,
+                        yval + y_off,
+                        f"{yval} ({percentage})",
+                        ha="center",
+                        va="bottom",
+                        fontsize=text_fontsize,
+                    )
+                else:
+                    ax.text(
+                        bar.get_x() + bar.get_width() / 2,
+                        yval + y_off,
+                        f"{yval} ({percentage})",
+                        ha="center",
+                        va="bottom",
+                        fontsize=text_fontsize,
+                    )
+            else:
+                if ax is None:
+                    plt.text(
+                        bar.get_x() + bar.get_width() / 2,
+                        yval + y_off,
+                        f"{yval}",
+                        ha="center",
+                        va="bottom",
+                        fontsize=text_fontsize,
+                    )
+                else:
+                    ax.text(
+                        bar.get_x() + bar.get_width() / 2,
+                        yval + y_off,
+                        f"{yval}",
+                        ha="center",
+                        va="bottom",
+                        fontsize=text_fontsize,
+                    )
+
+        # Setting x and y ticks
+        if ax is None:
+            plt.xticks(rotation=x_rotation, ha="center", fontsize=fontsize)
+            plt.yticks(fontsize=fontsize)
+            plt.ylabel(ylabel, fontsize=fontsize)
+            if ylim:
+                plt.ylim([0, ylim])
+        else:
+            ax.set_xticks(np.arange(len(greek_labels)))
+            ax.set_xticklabels(greek_labels, rotation=x_rotation, ha="center", fontsize=fontsize)
+            ax.tick_params(axis="y", labelsize=fontsize)
+
+        if title:
+            if ax is None:
+                plt.title(title, fontsize=titlesize)
+            else:
+                ax.set_title(title, fontsize=titlesize)
+
+        # If a new figure was created, show the plot
+        if ax is None:
+            if save_path:
+                plt.savefig(save_path, bbox_inches="tight")
+>>>>>>> main
                 plt.close()
             else:
                 plt.show()
 
+<<<<<<< HEAD
     return ax
 
+=======
+>>>>>>> main
 
 class HardTanhTransform:
     """
@@ -322,7 +463,11 @@ def visualize_transformations(images, transforms, n_samples=16):
         # Plot transformed image
         plt.subplot(4, 4, i + 1)
         plt.imshow(transformed_image, cmap=magnetic_map, vmin=-1, vmax=1)
+<<<<<<< HEAD
         plt.title(f"Transformed Image {i+1}")
+=======
+        plt.title(f"Transformed Image {i + 1}")
+>>>>>>> main
         plt.axis("off")
 
     plt.tight_layout()
@@ -399,9 +544,13 @@ def plot_location_on_sun(df, long_limit_deg=60, experiment=None):
     num_front_cutouts = len(front_latV)
     percentage_rear = 100 * num_rear_cutouts / (num_rear_cutouts + num_front_cutouts)
 
+<<<<<<< HEAD
     text_output = (
         f"Rear: {num_rear_cutouts}\n" f"Front: {num_front_cutouts}\n" f"Percentage of Rear: {percentage_rear:.2f}%"
     )
+=======
+    text_output = f"Rear: {num_rear_cutouts}\nFront: {num_front_cutouts}\nPercentage of Rear: {percentage_rear:.2f}%"
+>>>>>>> main
 
     if experiment:
         plot_path = os.path.join("temp", "solar_disc_plot.png")
@@ -411,6 +560,7 @@ def plot_location_on_sun(df, long_limit_deg=60, experiment=None):
 
     print(text_output)
     plt.show()
+<<<<<<< HEAD
 
 
 def months_years_heatmap(df, datetime_column, title, colorbar_title, height=900, width=650):
@@ -895,3 +1045,5 @@ def plot_confusion_matrix(cmc, labels, title, figsize=(10, 10), save_path=None):
 
     # Show the plot
     plt.show()
+=======
+>>>>>>> main

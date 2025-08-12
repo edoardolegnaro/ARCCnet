@@ -3,10 +3,15 @@ import time
 import random
 import socket
 
+<<<<<<< HEAD
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
+=======
+import numpy as np
+import pandas as pd
+>>>>>>> main
 import timm
 import torch
 import torch.nn as nn
@@ -77,8 +82,13 @@ class FITSDataset(Dataset):
 
     Examples
     --------
+<<<<<<< HEAD
     >>> dataset = FITSDataset(data_folder='path/to/data/', dataset_folder='dataset_folder', df=df, transform=your_transforms)
     >>> dataloader = DataLoader(dataset, batch_size=32, shuffle=True, num_workers=4, pin_memory=True)
+=======
+    dataset = FITSDataset(data_folder='path/to/data/', dataset_folder='dataset_folder', df=df, transform=your_transforms)
+    dataloader = DataLoader(dataset, batch_size=32, shuffle=True, num_workers=4, pin_memory=True)
+>>>>>>> main
     """
 
     def __init__(
@@ -143,8 +153,13 @@ def replace_activations(module, old_act, new_act, **kwargs):
 
     Examples
     --------
+<<<<<<< HEAD
     >>> model = MyModel()
     >>> replace_activations(model, torch.nn.ReLU, torch.nn.LeakyReLU, negative_slope=0.01)
+=======
+    model = MyModel()
+    replace_activations(model, torch.nn.ReLU, torch.nn.LeakyReLU, negative_slope=0.01)
+>>>>>>> main
     """
     for name, child in module.named_children():
         if isinstance(child, old_act):
@@ -217,6 +232,7 @@ def train_one_epoch(epoch, model, train_loader, criterion, optimizer, device, sc
 
     Examples
     --------
+<<<<<<< HEAD
     >>> avg_loss, accuracy = train_one_epoch(
     ...     epoch=10,
     ...     model=my_model,
@@ -226,13 +242,28 @@ def train_one_epoch(epoch, model, train_loader, criterion, optimizer, device, sc
     ...     device=torch.device('cuda'),
     ...     scaler=torch.amp.GradScaler()
     ... )
+=======
+    avg_loss, accuracy = train_one_epoch(
+            epoch=10,
+            model=my_model,
+            train_loader=my_train_loader,
+            criterion=torch.nn.CrossEntropyLoss(),
+            optimizer=torch.optim.Adam(my_model.parameters()),
+            device=torch.device('cuda'),
+            scaler=torch.amp.GradScaler()
+            )
+>>>>>>> main
     """
     model.train()
     total_loss = 0
     total_correct = 0
     total_images = 0
 
+<<<<<<< HEAD
     for inputs, labels in tqdm(train_loader, desc=f"Epoch {epoch+1}", unit="batch"):
+=======
+    for inputs, labels in tqdm(train_loader, desc=f"Epoch {epoch + 1}", unit="batch"):
+>>>>>>> main
         labels = labels.long()
         inputs, labels = inputs.to(device), labels.to(device)
 
@@ -301,12 +332,21 @@ def evaluate(model, val_loader, criterion, device):
 
     Examples
     --------
+<<<<<<< HEAD
     >>> avg_loss, accuracy, precision, recall, f1 = evaluate(
     ...     model=my_model,
     ...     val_loader=my_val_loader,
     ...     criterion=torch.nn.CrossEntropyLoss(),
     ...     device=torch.device('cuda')
     ... )
+=======
+    avg_loss, accuracy, precision, recall, f1 = evaluate(
+         model=my_model,
+         val_loader=my_val_loader,
+         criterion=torch.nn.CrossEntropyLoss(),
+         device=torch.device('cuda')
+        s)
+>>>>>>> main
     """
     model.eval()
     total_loss = 0
@@ -378,6 +418,7 @@ def check_early_stopping(val_metric, best_val_metric, patience_counter, model, w
 
     Examples
     --------
+<<<<<<< HEAD
     >>> best_val_metric, patience_counter, stop_training = check_early_stopping(
     ...     val_metric=0.85,
     ...     best_val_metric=0.80,
@@ -387,6 +428,17 @@ def check_early_stopping(val_metric, best_val_metric, patience_counter, model, w
     ...     config=my_config,
     ...     fold_n=1
     ... )
+=======
+    best_val_metric, patience_counter, stop_training = check_early_stopping(
+         val_metric=0.85,
+         best_val_metric=0.80,
+         patience_counter=2,
+         model=my_model,
+         weights_dir="./model_weights/",
+         config=my_config,
+         fold_n=1
+     )
+>>>>>>> main
     """
     stop_training = False
     if val_metric > best_val_metric:
@@ -433,7 +485,11 @@ def print_epoch_summary(
         The validation F1 score for the current epoch.
     """
     print(
+<<<<<<< HEAD
         f"Epoch Summary {epoch+1}: "
+=======
+        f"Epoch Summary {epoch + 1}: "
+>>>>>>> main
         f"Train Loss: {avg_train_loss:.4f}, Train Acc.: {train_accuracy:.4f}, "
         f"Val. Loss: {avg_val_loss:.4f}, Val. Acc.: {val_accuracy:.4f}, "
         f"Val. Precision: {val_precision:.4f}, Val. Recall: {val_recall:.4f}, "
@@ -467,6 +523,7 @@ def load_model_test(weights_dir, model, device, fold_n=None):
     This function loads the best model weights saved during training from a specified file and
     prepares the model for testing by moving it to the specified device (CPU or GPU) and setting it
     to evaluation mode (`model.eval()`).
+<<<<<<< HEAD
 
     Examples
     --------
@@ -476,6 +533,8 @@ def load_model_test(weights_dir, model, device, fold_n=None):
     ...     device=torch.device('cuda'),
     ...     fold_n=1
     ... )
+=======
+>>>>>>> main
     """
     if fold_n is not None:
         model_path = os.path.join(weights_dir, f"best_model_fold{fold_n}.pth")
@@ -714,7 +773,11 @@ def train_model(config, df, weights_dir, experiment=None, fold=1):
         )
 
     # Evaluate the best model on the test set
+<<<<<<< HEAD
     print("Testing...")
+=======
+    print("Testing")
+>>>>>>> main
     model = load_model_test(weights_dir, model, device)
     (
         avg_test_loss,
@@ -750,6 +813,7 @@ def train_model(config, df, weights_dir, experiment=None, fold=1):
             file_name="test_confusion_matrix_best_epoch.json",
             labels=unique_lbls,
         )
+<<<<<<< HEAD
 
         # Calculate the row percentages
         row_sums = cm_test.sum(axis=1, keepdims=True)
@@ -783,6 +847,8 @@ def train_model(config, df, weights_dir, experiment=None, fold=1):
         plt.close()
         experiment.log_image(heatmap_filename, name="Confusion Matrix Heatmap")
 
+=======
+>>>>>>> main
         experiment.log_text(report_df.to_string(), metadata={"type": "Classification Report"})
         csv_file_path = os.path.join(weights_dir, "classification_report.csv")
         report_df.to_csv(csv_file_path, index=False)
@@ -797,14 +863,22 @@ def train_model(config, df, weights_dir, experiment=None, fold=1):
             pred_label = all_preds[idx]
             experiment.log_image(
                 img,
+<<<<<<< HEAD
                 name=f"Misclassified_{idx}_true{unique_lbls[int(true_label)]}_pred{unique_lbls[int(pred_label)]}",
                 metadata={
                     "predicted_label": unique_lbls[int(true_label)].title(),
                     "true_label": unique_lbls[int(true_label)].title(),
+=======
+                name=f"Misclassified_{idx}_true{true_label}_pred{pred_label}",
+                metadata={
+                    "predicted_label": lbs.index_to_label[pred_label].title(),
+                    "true_label": lbs.index_to_label[true_label].title(),
+>>>>>>> main
                 },
             )
 
     return (avg_test_loss, test_accuracy, test_precision, test_recall, test_f1, cm_test, report_df)
+<<<<<<< HEAD
 
 
 def get_device():
@@ -822,3 +896,5 @@ def get_device():
         return torch.device("mps")  # Apple Silicon
     else:
         return torch.device("cpu")
+=======
+>>>>>>> main

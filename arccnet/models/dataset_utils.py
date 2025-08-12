@@ -8,6 +8,10 @@ from sklearn.utils import resample
 from astropy.time import Time
 
 from arccnet import load_config
+<<<<<<< HEAD
+=======
+from arccnet.models import labels
+>>>>>>> main
 
 config = load_config()
 
@@ -43,11 +47,18 @@ def make_dataframe(data_folder, dataset_folder, file_name):
 
     Examples
     --------
+<<<<<<< HEAD
     >>> df, AR_df = make_dataframe(
     ...     data_folder='../../data/',
     ...     dataset_folder='arccnet-cutout-dataset-v20240715',
     ...     file_name='cutout-mcintosh-catalog-v20240715.parq'
     ... )
+=======
+    df, AR_df = make_dataframe(
+         data_folder='../../data/',
+         dataset_folder='arccnet-cutout-dataset-v20240715',
+         file_name='cutout-mcintosh-catalog-v20240715.parq')
+>>>>>>> main
     """
     # Read the parquet file
     df = pd.read_parquet(os.path.join(data_folder, dataset_folder, file_name))
@@ -115,6 +126,7 @@ def undersample_group_filter(df, label_mapping, long_limit_deg=60, undersample=T
 
     Examples
     --------
+<<<<<<< HEAD
     >>> label_mapping = {'A': 'group1', 'B': 'group1', 'C': 'group2'}
     >>> df, undersampled_df = undersample_group_filter(
     ...     df=my_dataframe,
@@ -123,6 +135,16 @@ def undersample_group_filter(df, label_mapping, long_limit_deg=60, undersample=T
     ...     undersample=True,
     ...     buffer_percentage=0.1
     ... )
+=======
+    label_mapping = {'A': 'group1', 'B': 'group1', 'C': 'group2'}
+    df, undersampled_df = undersample_group_filter(
+         df=my_dataframe,
+         label_mapping=label_mapping,
+         long_limit_deg=60,
+         undersample=True,
+        buffer_percentage=0.1
+        )
+>>>>>>> main
     """
     lonV = np.deg2rad(np.where(df["processed_path_image_hmi"] != "", df["longitude_hmi"], df["longitude_mdi"]))
     condition = (lonV < -np.deg2rad(long_limit_deg)) | (lonV > np.deg2rad(long_limit_deg))
@@ -133,12 +155,16 @@ def undersample_group_filter(df, label_mapping, long_limit_deg=60, undersample=T
 
     # Apply label mapping to the dataframe
     df["grouped_labels"] = df["label"].map(label_mapping)
+<<<<<<< HEAD
 
     # Create zero-indexed mapping for grouped labels
     unique_labels = sorted(label for label in set(label_mapping.values()) if label is not None)
     zero_indexed_mapping = {label: idx for idx, label in enumerate(unique_labels)}
 
     df["encoded_labels"] = df["grouped_labels"].map(zero_indexed_mapping)
+=======
+    df["encoded_labels"] = df["grouped_labels"].map(labels.LABEL_TO_INDEX)
+>>>>>>> main
 
     if undersample:
         class_counts = df["grouped_labels"].value_counts()
@@ -160,7 +186,11 @@ def undersample_group_filter(df, label_mapping, long_limit_deg=60, undersample=T
     # Filter out rows with 'rear' location
     df_du = df_du[df_du["location"] != "rear"]
 
+<<<<<<< HEAD
     return df, df_du, zero_indexed_mapping
+=======
+    return df, df_du
+>>>>>>> main
 
 
 def split_data(df_du, label_col, group_col, random_state=42):
@@ -201,12 +231,21 @@ def split_data(df_du, label_col, group_col, random_state=42):
 
     Examples
     --------
+<<<<<<< HEAD
     >>> fold_splits = split_data(
     ...     df_du=my_dataframe,
     ...     label_col='grouped_labels',
     ...     group_col='number',
     ...     random_state=42
     ... )
+=======
+    fold_splits = split_data(
+       df_du=my_dataframe,
+         label_col='grouped_labels',
+         group_col='number',
+        random_state=42
+     )
+>>>>>>> main
     """
     fold_df = []
     inner_fold_choice = [0, 1, 2, 3, 4]
@@ -264,10 +303,16 @@ def assign_fold_sets(df, fold_df):
 
     Examples
     --------
+<<<<<<< HEAD
     >>> df = assign_fold_sets(
     ...     df=df,
     ...     fold_df=fold_splits
     ... )
+=======
+    df = assign_fold_sets(
+        df=df,
+        fold_df=fold_splits)
+>>>>>>> main
     """
     for fold, train_set, val_set, test_set in fold_df:
         df.loc[train_set.index, f"Fold {fold}"] = "train"
