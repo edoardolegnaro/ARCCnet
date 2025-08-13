@@ -522,15 +522,19 @@ def mosaic_plot(hmi, name, file, nrows, ncols, wvls, table, path):
             files = table[table["Wavelength"] == wv]
             files = files[files["HMI files"] == hmi]
             aia_files = files["AIA files"]
+            cmap = f"sdoaia{wv}"
+            if wv == 6173:
+                # keep yellow cmap
+                cmap = "sdoaia4500"
             try:
                 aia_map = Map(aia_files.value[0])
                 ax = fig.add_subplot(nrows, ncols, i + 1)
-                ax.imshow(np.sqrt(aia_map.data), cmap=f"sdoaia{wv}")
+                ax.imshow(np.sqrt(aia_map.data), cmap=cmap)
                 ax.text(0.05, 0.05, f"{wv} - {aia_map.date}", color="w", transform=ax.transAxes, fontsize=5)
             except IndexError:
                 aia_map = np.zeros(hmi_map.data.shape)
                 ax = fig.add_subplot(nrows, ncols, i + 1)
-                ax.imshow(np.sqrt(aia_map.data), cmap=f"sdoaia{wv}")
+                ax.imshow(np.sqrt(aia_map.data), cmap=cmap)
                 ax.text(0.05, 0.05, f"{wv} - MISSING", color="w", transform=ax.transAxes, fontsize=5)
 
         else:

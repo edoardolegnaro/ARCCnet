@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import glob
 import shutil
@@ -33,7 +34,6 @@ warnings.simplefilter("ignore", RuntimeWarning)
 reproj_log = logging.getLogger("reproject.common")
 reproj_log.setLevel("WARNING")
 os.environ["JSOC_EMAIL"] = "danielgass192@gmail.com"
-data_path = config["paths"]["data_folder"]
 
 __all__ = [
     "read_data",
@@ -110,12 +110,6 @@ def read_data(hek_path: str, srs_path: str, size: int, duration: int, long_lim: 
             - The date of the run, used for reprojection
             - The coordinate of the noaa active region
     """
-    # table_name = f"{size}_{duration}_{long_lim}_{types}.parq".strip(' ')
-    # if os.path.exists(f"{data_path}/flare_files/{table_name}"):
-    #     print("Run table cached - loading")
-    #     combined = Table.read(table_name)
-    # else:
-    #     print("No run table cached - creating new table")
     table = Table.read(hek_path)
     srs = Table.read(srs_path)
 
@@ -172,7 +166,6 @@ def read_data(hek_path: str, srs_path: str, size: int, duration: int, long_lim: 
         new_names=("noaa_number", "goes_class", "start_time", "end_time", "tb_date", "c_coord", "category", "fl_count"),
     )
     combined = vstack([flares_exp, srs_exp])
-    # combined.write(f"{data_path}/flare_files/{table_name}", format='parquet')
 
     final = rand_select(combined, size, types)
     subset = final["noaa_number", "goes_class", "start_time", "end_time", "tb_date", "c_coord", "category"]
@@ -300,19 +293,16 @@ def drms_pipeline(
 
     hmi_query, hmi_export, ic_query, ic_export = hmi_query_export(start_t, end_t, hmi_keys, sample)
     aia_query, aia_export = aia_query_export(hmi_query, aia_keys, wavelengths)
-    # ic_query.rename(columns={"*recnum*":"FSN"}, inplace=True)
-    # img_query = pd.concat([aia_query, ic_query],ignore_index=True)
-    # img_urls = pd.concat([aia_export.urls, ic_export.urls], ignore_index=True)
 
     hmi_dls, hmi_exs = l1_file_save(hmi_export, hmi_query, path)
-    cnt_dls, cnt_exs = l1_file_save(ic_query, ic_export, path)
+    cnt_dls, cnt_exs = l1_file_save(ic_export, ic_query, path)
     aia_dls, aia_exs = l1_file_save(aia_export, aia_query, path)
     img_exs = list(itertools.chain(aia_exs, cnt_exs))
 
     hmi_maps = sunpy.map.Map(hmi_exs)
     hmi_maps = add_fnames(hmi_maps, hmi_exs)
     img_maps = sunpy.map.Map(img_exs)
-    img_maps = add_fnames(img_maps, aia_exs)
+    img_maps = add_fnames(img_maps, img_exs)
     return img_maps, hmi_maps
 
 
@@ -378,13 +368,11 @@ def hmi_continuum_export(hmi_query, keys):
             A tuple containing the query results of the hmi mag and ic_no_limbdark (pandas df) and the export data response (drms export object).
     """
     client = drms.Client()
-    qstrs_ic = [f"hmi.Ic_noLimbDark_720s[{time}]" + "{image}" for time in hmi_query["T_REC"]]
-
-    ic_value = [hmi_rec_find(qstr, keys, 3, 12) for qstr in qstrs_ic]
-    unpacked_ic = list(itertools.chain.from_iterable(ic_value))
-    joined_num = [str(num) for num in unpacked_ic]
+    qstrs_ic = [f"hmi.Ic_noLimbDark_720s[{time}]{{continuum}}" for time in hmi_query["T_REC"]]
+    ic_value = [hmi_rec_find(qstr, keys, 3, 12, cont=True) for qstr in qstrs_ic]
+    joined_num = [str(num) for num in ic_value]
     ic_num_str = str(joined_num).strip("[]")
-    ic_comb_qstr = f"hmi.Ic_noLimbDark_720s[! recnum in ({ic_num_str}) !]" + "{image}"
+    ic_comb_qstr = f"hmi.Ic_noLimbDark_720s[! recnum in ({ic_num_str}) !]" + "{continuum}"
 
     ic_query_full = client.query(ds=ic_comb_qstr, key=keys)
 
@@ -413,11 +401,8 @@ def aia_query_export(hmi_query, keys, wavelength):
     client = drms.Client()
     qstrs_euv = [f"aia.lev1_euv_12s[{time}][{wavelength}]" + "{image}" for time in hmi_query["T_REC"]]
     qstrs_uv = [f"aia.lev1_uv_24s[{time}]{[1600, 1700]}" + "{image}" for time in hmi_query["T_REC"]]
-    # qstrs_vis = [f"aia.lev1_vis_1h[{time}]{[4500]}" + "{image}" for time in hmi_query["T_REC"]]
     euv_value = [aia_rec_find(qstr, keys, 3, 12) for qstr in qstrs_euv]
     uv_value = [aia_rec_find(qstr, keys, 2, 24) for qstr in qstrs_uv]
-    # vis_value = [aia_rec_find(qstr, keys, 1, 60) for qstr in qstrs_vis]
-    # unpacked_aia = list(itertools.chain(euv_value, uv_value, vis_value))
     unpacked_aia = list(itertools.chain(euv_value, uv_value))
     unpacked_aia = [set for set in unpacked_aia if set is not None]
     unpacked_aia = list(itertools.chain.from_iterable(unpacked_aia))
@@ -457,12 +442,24 @@ def hmi_rec_find(qstr, keys, retries, sample, cont=False):
         series = "hmi.Ic_noLimbDark_720s"
     client = drms.Client()
     count = 0
+    # print(qstr)
     qry = client.query(ds=qstr, key=keys)
-    time = sunpy.time.parse_time(qry["T_REC"].values[0])
+    # print(qry)
+    if qry.empty:
+        time = sunpy.time.parse_time(re.search(r"\[(.*?)\]", qstr).group(1))
+        qry["QUALITY"] = [10000]
+        # print(qry)
+    else:
+        time = sunpy.time.parse_time(qry["T_REC"].values[0])
+    # print(qry["QUALITY"])
     while qry["QUALITY"].values[0] != 0 and count <= retries:
         qry = client.query(ds=f"{series}[{time}]" + seg, key=keys)
+        if qry.empty:
+            time = sunpy.time.parse_time(re.search(r"\[(.*?)\]", qstr).group(1))
+            qry["QUALITY"] = [10000]
         time = change_time(time, sample)
         count += 1
+        qry["*recnum*"] = [0]
     return qry["*recnum*"].values[0]
 
 
@@ -817,8 +814,6 @@ def map_reproject(sdo_packed):
             The path location of the saved submap.
     """
     hmi_origin, sdo_path, ar_num, center = sdo_packed
-    lon = int(center.lon.value)
-    # sdo_map = sunpy.map.Map(sdo_packed.l2_map)
     sdo_map = sunpy.map.Map(sdo_path)
     with propagate_with_solar_surface():
         sdo_rpr = sdo_map.reproject_to(hmi_origin.wcs)
@@ -832,7 +827,7 @@ def map_reproject(sdo_packed):
     sdo_rpr.meta["wavelnth"] = sdo_map.meta["wavelnth"]
     sdo_rpr.meta["date-obs"] = sdo_map.meta["date-obs"]
     if sdo_rpr.dimensions[0].value < int(config["drms"]["patch_width"]):
-        sdo_rpr = pad_map(sdo_rpr, lon, config["drms"]["patch_width"])
+        sdo_rpr = pad_map(sdo_rpr, config["drms"]["patch_width"])
     save_compressed_map(sdo_rpr, fits_path, hdu_type=CompImageHDU, overwrite=True)
 
     return fits_path
@@ -856,11 +851,12 @@ def vid_match(table, name, path):
         output_file : `str`
             A string containing the path of the completed mosaic animation.
     """
-    # Check this carefully
     hmi_files = table["HMI files"].value
+    table["Wavelength"] = [int(wave) for wave in table["Wavelength"]]
     wvls = np.unique([table["Wavelength"].value])
+
     hmi_files = np.unique(hmi_files)
-    nrows, ncols = 4, 3  # define your subplot grid
+    nrows, ncols = 4, 3  # define subplot grid
     for file in range(len(hmi_files)):
         hmi = hmi_files[file]
         mosaic_plot(hmi, name, file, nrows, ncols, wvls, table, path)
@@ -925,7 +921,9 @@ def pad_map(map, targ_width):
             The new, padded submap.
     """
     x_dim = map.dimensions[0].value
+    targ_width = int(targ_width)
     diff = int(targ_width - x_dim)
+    # print(diff, map.dimensions, map.wavelength)
     if map.center.Tx > 0:
         data = np.pad(map.data, ((0, 0), (diff, 0)), constant_values=np.nan)
     else:

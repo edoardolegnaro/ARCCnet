@@ -17,7 +17,7 @@ test_path = Path(__file__).resolve().parent
 
 
 def test_rand():
-    combined = Table.read(f"{test_path}/data/ts_test_data.parq")
+    combined = Table.read(f"{test_path}/data/ts_test_data.ecsv")
     types = ["F1", "F2", "N1", "N2"]
 
     # 1. test with full list of samples
@@ -54,7 +54,7 @@ def test_padding():
 
 
 def test_flare_check():
-    combined = Table.read(f"{test_path}/data/ts_test_data.parq")
+    combined = Table.read(f"{test_path}/data/ts_test_data.ecsv")
     flares = combined[combined["goes_class"] != "N"]
     flare = flares[flares["goes_class"] == "C3.7"]
     flare = flare[flare["noaa_number"] == 12644]
