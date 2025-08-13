@@ -110,12 +110,6 @@ def read_data(hek_path: str, srs_path: str, size: int, duration: int, long_lim: 
             - The date of the run, used for reprojection
             - The coordinate of the noaa active region
     """
-    # table_name = f"{size}_{duration}_{long_lim}_{types}.parq".strip(' ')
-    # if os.path.exists(f"{data_path}/flare_files/{table_name}"):
-    #     print("Run table cached - loading")
-    #     combined = Table.read(table_name)
-    # else:
-    #     print("No run table cached - creating new table")
     table = Table.read(hek_path)
     srs = Table.read(srs_path)
 
@@ -172,7 +166,6 @@ def read_data(hek_path: str, srs_path: str, size: int, duration: int, long_lim: 
         new_names=("noaa_number", "goes_class", "start_time", "end_time", "tb_date", "c_coord", "category", "fl_count"),
     )
     combined = vstack([flares_exp, srs_exp])
-    # combined.write(f"{data_path}/flare_files/{table_name}", format='parquet')
 
     final = rand_select(combined, size, types)
     subset = final["noaa_number", "goes_class", "start_time", "end_time", "tb_date", "c_coord", "category"]
@@ -300,9 +293,6 @@ def drms_pipeline(
 
     hmi_query, hmi_export, ic_query, ic_export = hmi_query_export(start_t, end_t, hmi_keys, sample)
     aia_query, aia_export = aia_query_export(hmi_query, aia_keys, wavelengths)
-    # ic_query.rename(columns={"*recnum*":"FSN"}, inplace=True)
-    # img_query = pd.concat([aia_query, ic_query],ignore_index=True)
-    # img_urls = pd.concat([aia_export.urls, ic_export.urls], ignore_index=True)
 
     hmi_dls, hmi_exs = l1_file_save(hmi_export, hmi_query, path)
     cnt_dls, cnt_exs = l1_file_save(ic_query, ic_export, path)
@@ -338,14 +328,14 @@ def hmi_query_export(time_1, time_2, keys: list, sample: int):
     """
     client = drms.Client()
     duration = round((time_2 - time_1).to_value(u.hour))
-    qstr_m_hmi = f"hmi.M_720s[{time_1.value}/{duration}h@{sample}m]" + "{magnetogram}"
+    qstr_m_hmi = f"hmi.M_720s[{time_1.value}/{duration}h@{sample}m]{{magnetogram}}"
     hmi_query = client.query(ds=qstr_m_hmi, key=keys)
 
     good_result = hmi_query[hmi_query.QUALITY == 0]
     good_num = good_result["*recnum*"].values
     bad_result = hmi_query[hmi_query.QUALITY != 0]
 
-    qstrs_m_hmi = [f"hmi.M_720s[{time}]" + "{magnetogram}" for time in bad_result["T_REC"]]
+    qstrs_m_hmi = [f"hmi.M_720s[{time}]{{magnetogram}}" for time in bad_result["T_REC"]]
     hmi_values = [hmi_rec_find(qstr, keys, 3, 720) for qstr in qstrs_m_hmi]
     patched_num = [*hmi_values]
 
@@ -353,7 +343,7 @@ def hmi_query_export(time_1, time_2, keys: list, sample: int):
     joined_num = [str(num) for num in joined_num]
     hmi_num_str = str(joined_num).strip("[]")
 
-    hmi_qstr = f"hmi.M_720s[! recnum in ({hmi_num_str}) !]" + "{magnetogram}"
+    hmi_qstr = f"hmi.M_720s[! recnum in ({hmi_num_str}) !]{{magnetogram}}"
     hmi_query_full = client.query(ds=hmi_qstr, key=keys)
     hmi_result = client.export(hmi_qstr, method="url", protocol="fits", email=os.environ["JSOC_EMAIL"])
     hmi_result.wait()
@@ -378,13 +368,13 @@ def hmi_continuum_export(hmi_query, keys):
             A tuple containing the query results of the hmi mag and ic_no_limbdark (pandas df) and the export data response (drms export object).
     """
     client = drms.Client()
-    qstrs_ic = [f"hmi.Ic_noLimbDark_720s[{time}]" + "{image}" for time in hmi_query["T_REC"]]
+    qstrs_ic = [f"hmi.Ic_noLimbDark_720s[{time}]{{continuum}}" for time in hmi_query["T_REC"]]
 
     ic_value = [hmi_rec_find(qstr, keys, 3, 12) for qstr in qstrs_ic]
     unpacked_ic = list(itertools.chain.from_iterable(ic_value))
     joined_num = [str(num) for num in unpacked_ic]
     ic_num_str = str(joined_num).strip("[]")
-    ic_comb_qstr = f"hmi.Ic_noLimbDark_720s[! recnum in ({ic_num_str}) !]" + "{image}"
+    ic_comb_qstr = f"hmi.Ic_noLimbDark_720s[! recnum in ({ic_num_str}) !]{{continuum}}"
 
     ic_query_full = client.query(ds=ic_comb_qstr, key=keys)
 
@@ -411,19 +401,16 @@ def aia_query_export(hmi_query, keys, wavelength):
         aia_query_full, aia_result (tuple): A tuple containing the query result and the export data response.
     """
     client = drms.Client()
-    qstrs_euv = [f"aia.lev1_euv_12s[{time}][{wavelength}]" + "{image}" for time in hmi_query["T_REC"]]
-    qstrs_uv = [f"aia.lev1_uv_24s[{time}]{[1600, 1700]}" + "{image}" for time in hmi_query["T_REC"]]
-    # qstrs_vis = [f"aia.lev1_vis_1h[{time}]{[4500]}" + "{image}" for time in hmi_query["T_REC"]]
+    qstrs_euv = [f"aia.lev1_euv_12s[{time}][{wavelength}]{{image}}" for time in hmi_query["T_REC"]]
+    qstrs_uv = [f"aia.lev1_uv_24s[{time}]{[1600, 1700]}{{image}}" for time in hmi_query["T_REC"]]
     euv_value = [aia_rec_find(qstr, keys, 3, 12) for qstr in qstrs_euv]
     uv_value = [aia_rec_find(qstr, keys, 2, 24) for qstr in qstrs_uv]
-    # vis_value = [aia_rec_find(qstr, keys, 1, 60) for qstr in qstrs_vis]
-    # unpacked_aia = list(itertools.chain(euv_value, uv_value, vis_value))
     unpacked_aia = list(itertools.chain(euv_value, uv_value))
     unpacked_aia = [set for set in unpacked_aia if set is not None]
     unpacked_aia = list(itertools.chain.from_iterable(unpacked_aia))
     joined_num = [str(num) for num in unpacked_aia]
     aia_num_str = str(joined_num).strip("[]")
-    aia_comb_qstr = f"aia.lev1[! FSN in ({aia_num_str}) !]" + "{image_lev1}"
+    aia_comb_qstr = f"aia.lev1[! FSN in ({aia_num_str}) !]{{image_lev1}}"
 
     aia_query_full = client.query(ds=aia_comb_qstr, key=keys)
 
@@ -491,7 +478,7 @@ def aia_rec_find(qstr, keys, retries, time_add):
         if wvl == "4500":
             return qry["FSN"].values
         while qry["QUALITY"].values[0] != 0 and retry < retries:
-            qry = client.query(ds=f"{qstr_head}[{time}][{wvl}]" + "{image}", key=keys)
+            qry = client.query(ds=f"{qstr_head}[{time}][{wvl}]{{image}}", key=keys)
             time = change_time(time, time_add)
             retry += 1
         if qry["QUALITY"].values[0] == 0:

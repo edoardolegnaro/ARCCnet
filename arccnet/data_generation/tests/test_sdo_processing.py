@@ -12,7 +12,6 @@ from astropy.time import Time
 from arccnet import config
 from arccnet.data_generation.timeseries.sdo_processing import crop_map, flare_check, pad_map, rand_select
 
-data_path = config["paths"]["data_folder"]
 test_path = Path(__file__).resolve().parent
 
 
