@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import glob
 import shutil
@@ -33,7 +34,6 @@ warnings.simplefilter("ignore", RuntimeWarning)
 reproj_log = logging.getLogger("reproject.common")
 reproj_log.setLevel("WARNING")
 os.environ["JSOC_EMAIL"] = "danielgass192@gmail.com"
-data_path = config["paths"]["data_folder"]
 
 __all__ = [
     "read_data",
@@ -295,14 +295,14 @@ def drms_pipeline(
     aia_query, aia_export = aia_query_export(hmi_query, aia_keys, wavelengths)
 
     hmi_dls, hmi_exs = l1_file_save(hmi_export, hmi_query, path)
-    cnt_dls, cnt_exs = l1_file_save(ic_query, ic_export, path)
+    cnt_dls, cnt_exs = l1_file_save(ic_export, ic_query, path)
     aia_dls, aia_exs = l1_file_save(aia_export, aia_query, path)
     img_exs = list(itertools.chain(aia_exs, cnt_exs))
 
     hmi_maps = sunpy.map.Map(hmi_exs)
     hmi_maps = add_fnames(hmi_maps, hmi_exs)
     img_maps = sunpy.map.Map(img_exs)
-    img_maps = add_fnames(img_maps, aia_exs)
+    img_maps = add_fnames(img_maps, img_exs)
     return img_maps, hmi_maps
 
 
@@ -369,10 +369,8 @@ def hmi_continuum_export(hmi_query, keys):
     """
     client = drms.Client()
     qstrs_ic = [f"hmi.Ic_noLimbDark_720s[{time}]{{continuum}}" for time in hmi_query["T_REC"]]
-
-    ic_value = [hmi_rec_find(qstr, keys, 3, 12) for qstr in qstrs_ic]
-    unpacked_ic = list(itertools.chain.from_iterable(ic_value))
-    joined_num = [str(num) for num in unpacked_ic]
+    ic_value = [hmi_rec_find(qstr, keys, 3, 12, cont=True) for qstr in qstrs_ic]
+    joined_num = [str(num) for num in ic_value]
     ic_num_str = str(joined_num).strip("[]")
     ic_comb_qstr = f"hmi.Ic_noLimbDark_720s[! recnum in ({ic_num_str}) !]{{continuum}}"
 
@@ -444,12 +442,24 @@ def hmi_rec_find(qstr, keys, retries, sample, cont=False):
         series = "hmi.Ic_noLimbDark_720s"
     client = drms.Client()
     count = 0
+    # print(qstr)
     qry = client.query(ds=qstr, key=keys)
-    time = sunpy.time.parse_time(qry["T_REC"].values[0])
+    # print(qry)
+    if qry.empty:
+        time = sunpy.time.parse_time(re.search(r"\[(.*?)\]", qstr).group(1))
+        qry["QUALITY"] = [10000]
+        # print(qry)
+    else:
+        time = sunpy.time.parse_time(qry["T_REC"].values[0])
+    # print(qry["QUALITY"])
     while qry["QUALITY"].values[0] != 0 and count <= retries:
         qry = client.query(ds=f"{series}[{time}]" + seg, key=keys)
+        if qry.empty:
+            time = sunpy.time.parse_time(re.search(r"\[(.*?)\]", qstr).group(1))
+            qry["QUALITY"] = [10000]
         time = change_time(time, sample)
         count += 1
+        qry["*recnum*"] = [0]
     return qry["*recnum*"].values[0]
 
 
@@ -804,8 +814,6 @@ def map_reproject(sdo_packed):
             The path location of the saved submap.
     """
     hmi_origin, sdo_path, ar_num, center = sdo_packed
-    lon = int(center.lon.value)
-    # sdo_map = sunpy.map.Map(sdo_packed.l2_map)
     sdo_map = sunpy.map.Map(sdo_path)
     with propagate_with_solar_surface():
         sdo_rpr = sdo_map.reproject_to(hmi_origin.wcs)
@@ -819,7 +827,7 @@ def map_reproject(sdo_packed):
     sdo_rpr.meta["wavelnth"] = sdo_map.meta["wavelnth"]
     sdo_rpr.meta["date-obs"] = sdo_map.meta["date-obs"]
     if sdo_rpr.dimensions[0].value < int(config["drms"]["patch_width"]):
-        sdo_rpr = pad_map(sdo_rpr, lon, config["drms"]["patch_width"])
+        sdo_rpr = pad_map(sdo_rpr, config["drms"]["patch_width"])
     save_compressed_map(sdo_rpr, fits_path, hdu_type=CompImageHDU, overwrite=True)
 
     return fits_path
@@ -843,11 +851,12 @@ def vid_match(table, name, path):
         output_file : `str`
             A string containing the path of the completed mosaic animation.
     """
-    # Check this carefully
     hmi_files = table["HMI files"].value
+    table["Wavelength"] = [int(wave) for wave in table["Wavelength"]]
     wvls = np.unique([table["Wavelength"].value])
+
     hmi_files = np.unique(hmi_files)
-    nrows, ncols = 4, 3  # define your subplot grid
+    nrows, ncols = 4, 3  # define subplot grid
     for file in range(len(hmi_files)):
         hmi = hmi_files[file]
         mosaic_plot(hmi, name, file, nrows, ncols, wvls, table, path)
@@ -912,7 +921,9 @@ def pad_map(map, targ_width):
             The new, padded submap.
     """
     x_dim = map.dimensions[0].value
+    targ_width = int(targ_width)
     diff = int(targ_width - x_dim)
+    # print(diff, map.dimensions, map.wavelength)
     if map.center.Tx > 0:
         data = np.pad(map.data, ((0, 0), (diff, 0)), constant_values=np.nan)
     else:
