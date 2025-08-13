@@ -328,14 +328,14 @@ def hmi_query_export(time_1, time_2, keys: list, sample: int):
     """
     client = drms.Client()
     duration = round((time_2 - time_1).to_value(u.hour))
-    qstr_m_hmi = f"hmi.M_720s[{time_1.value}/{duration}h@{sample}m]" + "{magnetogram}"
+    qstr_m_hmi = f"hmi.M_720s[{time_1.value}/{duration}h@{sample}m]{{magnetogram}}"
     hmi_query = client.query(ds=qstr_m_hmi, key=keys)
 
     good_result = hmi_query[hmi_query.QUALITY == 0]
     good_num = good_result["*recnum*"].values
     bad_result = hmi_query[hmi_query.QUALITY != 0]
 
-    qstrs_m_hmi = [f"hmi.M_720s[{time}]" + "{magnetogram}" for time in bad_result["T_REC"]]
+    qstrs_m_hmi = [f"hmi.M_720s[{time}]{{magnetogram}}" for time in bad_result["T_REC"]]
     hmi_values = [hmi_rec_find(qstr, keys, 3, 720) for qstr in qstrs_m_hmi]
     patched_num = [*hmi_values]
 
@@ -343,7 +343,7 @@ def hmi_query_export(time_1, time_2, keys: list, sample: int):
     joined_num = [str(num) for num in joined_num]
     hmi_num_str = str(joined_num).strip("[]")
 
-    hmi_qstr = f"hmi.M_720s[! recnum in ({hmi_num_str}) !]" + "{magnetogram}"
+    hmi_qstr = f"hmi.M_720s[! recnum in ({hmi_num_str}) !]{{magnetogram}}"
     hmi_query_full = client.query(ds=hmi_qstr, key=keys)
     hmi_result = client.export(hmi_qstr, method="url", protocol="fits", email=os.environ["JSOC_EMAIL"])
     hmi_result.wait()
@@ -372,7 +372,7 @@ def hmi_continuum_export(hmi_query, keys):
     ic_value = [hmi_rec_find(qstr, keys, 3, 12, cont=True) for qstr in qstrs_ic]
     joined_num = [str(num) for num in ic_value]
     ic_num_str = str(joined_num).strip("[]")
-    ic_comb_qstr = f"hmi.Ic_noLimbDark_720s[! recnum in ({ic_num_str}) !]" + "{continuum}"
+    ic_comb_qstr = f"hmi.Ic_noLimbDark_720s[! recnum in ({ic_num_str}) !]{{continuum}}"
 
     ic_query_full = client.query(ds=ic_comb_qstr, key=keys)
 
@@ -399,8 +399,8 @@ def aia_query_export(hmi_query, keys, wavelength):
         aia_query_full, aia_result (tuple): A tuple containing the query result and the export data response.
     """
     client = drms.Client()
-    qstrs_euv = [f"aia.lev1_euv_12s[{time}][{wavelength}]" + "{image}" for time in hmi_query["T_REC"]]
-    qstrs_uv = [f"aia.lev1_uv_24s[{time}]{[1600, 1700]}" + "{image}" for time in hmi_query["T_REC"]]
+    qstrs_euv = [f"aia.lev1_euv_12s[{time}][{wavelength}]{{image}}" for time in hmi_query["T_REC"]]
+    qstrs_uv = [f"aia.lev1_uv_24s[{time}]{[1600, 1700]}{{image}}" for time in hmi_query["T_REC"]]
     euv_value = [aia_rec_find(qstr, keys, 3, 12) for qstr in qstrs_euv]
     uv_value = [aia_rec_find(qstr, keys, 2, 24) for qstr in qstrs_uv]
     unpacked_aia = list(itertools.chain(euv_value, uv_value))
@@ -408,7 +408,7 @@ def aia_query_export(hmi_query, keys, wavelength):
     unpacked_aia = list(itertools.chain.from_iterable(unpacked_aia))
     joined_num = [str(num) for num in unpacked_aia]
     aia_num_str = str(joined_num).strip("[]")
-    aia_comb_qstr = f"aia.lev1[! FSN in ({aia_num_str}) !]" + "{image_lev1}"
+    aia_comb_qstr = f"aia.lev1[! FSN in ({aia_num_str}) !]{{image_lev1}}"
 
     aia_query_full = client.query(ds=aia_comb_qstr, key=keys)
 
@@ -488,7 +488,7 @@ def aia_rec_find(qstr, keys, retries, time_add):
         if wvl == "4500":
             return qry["FSN"].values
         while qry["QUALITY"].values[0] != 0 and retry < retries:
-            qry = client.query(ds=f"{qstr_head}[{time}][{wvl}]" + "{image}", key=keys)
+            qry = client.query(ds=f"{qstr_head}[{time}][{wvl}]{{image}}", key=keys)
             time = change_time(time, time_add)
             retry += 1
         if qry["QUALITY"].values[0] == 0:
