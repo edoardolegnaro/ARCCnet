@@ -30,9 +30,12 @@ from arccnet.data_generation.mag_processing import pixel_to_bboxcoords
 from arccnet.data_generation.utils.utils import save_compressed_map
 from arccnet.visualisation.data import mosaic_animate, mosaic_plot
 
+data_path = config["paths"]["data_folder"]
+qry_log = "bad_queries"
+
 warnings.simplefilter("ignore", RuntimeWarning)
 reproj_log = logging.getLogger("reproject.common")
-reproj_log.setLevel("WARNING")
+reproj_log.setLevel("ERROR")
 os.environ["JSOC_EMAIL"] = "danielgass192@gmail.com"
 
 __all__ = [
@@ -49,6 +52,32 @@ __all__ = [
     "map_reproject",
     "l4_file_pack",
 ]
+
+
+def bad_qry(qry, data_path, name):
+    r"""
+    Logs bad drms queries to document for future reference.
+
+    Parameters
+    ----------
+        qry: `str`
+            Drms query which returns an empty dataframe.
+        data_path : `str`
+            Path to arccnet data.
+        name: `str`
+            Log filename.
+    """
+    print(f"Bad Query Detected - {qry}")
+    print(data_path)
+    logging.warning(f"Bad Query Detected - {qry}")
+    f_name = f"{data_path}/logs/{name}.txt"
+    if not os.path.exists(f_name):
+        file = open(f"{data_path}/logs/{name}.txt", "x")
+    file = open(f"{data_path}/logs/{name}.txt", "+")
+    entries = [row for row in file]
+    if qry not in entries:
+        file.write(qry)
+    file.close()
 
 
 def rand_select(table, size, types: list):
@@ -156,6 +185,9 @@ def read_data(hek_path: str, srs_path: str, size: int, duration: int, long_lim: 
     srs["category"] = ar_cat
     srs["n_fl_count"] = fl_cat
     srs["ar"] = "N"
+    flares = flares[flares["goes_class"] == "C1.1"]
+    flares = flares[flares["noaa_number"] == 11169]
+    flares = flares[flares["tb_date"] == "2011-03-15"]
 
     srs_exp = srs["number", "ar", "target_time", "srs_end_time", "srs_date", "c_coord", "category", "n_fl_count"]
     flares_exp = flares[
@@ -442,13 +474,14 @@ def hmi_rec_find(qstr, keys, retries, sample, cont=False):
         series = "hmi.Ic_noLimbDark_720s"
     client = drms.Client()
     count = 0
-    # print(qstr)
     qry = client.query(ds=qstr, key=keys)
-    # print(qry)
+    print(qry)
     if qry.empty:
+        print("Bad Query - HMI")
         time = sunpy.time.parse_time(re.search(r"\[(.*?)\]", qstr).group(1))
         qry["QUALITY"] = [10000]
-        # print(qry)
+        bad_qry(qry, data_path, qry_log)
+
     else:
         time = sunpy.time.parse_time(qry["T_REC"].values[0])
     # print(qry["QUALITY"])
@@ -457,9 +490,9 @@ def hmi_rec_find(qstr, keys, retries, sample, cont=False):
         if qry.empty:
             time = sunpy.time.parse_time(re.search(r"\[(.*?)\]", qstr).group(1))
             qry["QUALITY"] = [10000]
+            bad_qry(qry, data_path, qry_log)
         time = change_time(time, sample)
         count += 1
-        qry["*recnum*"] = [0]
     return qry["*recnum*"].values[0]
 
 
@@ -483,6 +516,7 @@ def aia_rec_find(qstr, keys, retries, time_add):
     retry = 0
     qry = client.query(ds=qstr, key=keys)
     qstr_head = qstr.split("[")[0]
+    print(qry)
     if not qry.empty:
         time, wvl = qry["T_REC"].values[0][0:-1], qry["WAVELNTH"].values[0]
         if wvl == "4500":
@@ -493,6 +527,9 @@ def aia_rec_find(qstr, keys, retries, time_add):
             retry += 1
         if qry["QUALITY"].values[0] == 0:
             return qry["FSN"].values
+    else:
+        print("Bad Query - AIA")
+        bad_qry(qry, data_path, qry_log)
 
 
 def l1_file_save(export, query, path):

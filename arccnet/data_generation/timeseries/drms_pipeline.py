@@ -29,9 +29,9 @@ if __name__ == "__main__":
 
     # Logging settings here.
     drms_log = logging.getLogger("drms")
-    drms_log.setLevel("WARNING")
+    drms_log.setLevel("ERROR")
     reproj_log = logging.getLogger("reproject.common")
-    reproj_log.setLevel("WARNING")
+    reproj_log.setLevel("ERROR")
     # May need to find a more robust solution with filters/exceptions for this.
     astropy_log.setLevel("ERROR")
     data_path = config["paths"]["data_folder"]
@@ -42,7 +42,8 @@ if __name__ == "__main__":
         size=1,
         duration=6,
         long_lim=65,
-        types=["F1", "F2", "N1", "N2"],
+        # types=["F1", "F2", "N1", "N2"],
+        types=["F1"],
     )[0]
     cores = int(config["drms"]["cores"])
     with ProcessPoolExecutor(cores) as executor:
