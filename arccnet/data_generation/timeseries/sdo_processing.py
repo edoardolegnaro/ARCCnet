@@ -67,8 +67,6 @@ def bad_qry(qry, data_path, name):
         name: `str`
             Log filename.
     """
-    print(f"Bad Query Detected - {qry}")
-    print(data_path)
     logging.warning(f"Bad Query Detected - {qry}")
     f_name = f"{data_path}/logs/{name}.txt"
     if not os.path.exists(f_name):
