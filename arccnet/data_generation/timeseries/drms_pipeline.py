@@ -42,9 +42,9 @@ if __name__ == "__main__":
         size=1,
         duration=6,
         long_lim=65,
-        # types=["F1", "F2", "N1", "N2"],
-        types=["F1"],
+        types=["F1", "F2", "N1", "N2"],
     )[0]
+    
     cores = int(config["drms"]["cores"])
     with ProcessPoolExecutor(cores) as executor:
         for record in starts:

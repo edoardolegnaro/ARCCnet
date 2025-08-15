@@ -37,6 +37,7 @@ warnings.simplefilter("ignore", RuntimeWarning)
 reproj_log = logging.getLogger("reproject.common")
 reproj_log.setLevel("ERROR")
 os.environ["JSOC_EMAIL"] = "danielgass192@gmail.com"
+data_path = config["paths"]["data_folder"]
 
 __all__ = [
     "read_data",
@@ -76,7 +77,6 @@ def bad_qry(qry, data_path, name):
     if qry not in entries:
         file.write(qry)
     file.close()
-
 
 def rand_select(table, size, types: list):
     r"""
@@ -173,6 +173,7 @@ def read_data(hek_path: str, srs_path: str, size: int, duration: int, long_lim: 
         SkyCoord(lon * u.deg, lat * u.deg, obstime=t_time, observer="earth", frame=frames.HeliographicStonyhurst)
         for lat, lon, t_time in zip(srs["latitude"], srs["longitude"], srs["target_time"])
     ]
+    
     print("Parsing Active Regions")
     ar_cat, fl_cat = [], []
     for ar in srs:
@@ -183,9 +184,6 @@ def read_data(hek_path: str, srs_path: str, size: int, duration: int, long_lim: 
     srs["category"] = ar_cat
     srs["n_fl_count"] = fl_cat
     srs["ar"] = "N"
-    flares = flares[flares["goes_class"] == "C1.1"]
-    flares = flares[flares["noaa_number"] == 11169]
-    flares = flares[flares["tb_date"] == "2011-03-15"]
 
     srs_exp = srs["number", "ar", "target_time", "srs_end_time", "srs_date", "c_coord", "category", "n_fl_count"]
     flares_exp = flares[
@@ -473,7 +471,6 @@ def hmi_rec_find(qstr, keys, retries, sample, cont=False):
     client = drms.Client()
     count = 0
     qry = client.query(ds=qstr, key=keys)
-    print(qry)
     if qry.empty:
         print("Bad Query - HMI")
         time = sunpy.time.parse_time(re.search(r"\[(.*?)\]", qstr).group(1))
@@ -482,7 +479,6 @@ def hmi_rec_find(qstr, keys, retries, sample, cont=False):
 
     else:
         time = sunpy.time.parse_time(qry["T_REC"].values[0])
-    # print(qry["QUALITY"])
     while qry["QUALITY"].values[0] != 0 and count <= retries:
         qry = client.query(ds=f"{series}[{time}]" + seg, key=keys)
         if qry.empty:
@@ -958,7 +954,6 @@ def pad_map(map, targ_width):
     x_dim = map.dimensions[0].value
     targ_width = int(targ_width)
     diff = int(targ_width - x_dim)
-    # print(diff, map.dimensions, map.wavelength)
     if map.center.Tx > 0:
         data = np.pad(map.data, ((0, 0), (diff, 0)), constant_values=np.nan)
     else:
