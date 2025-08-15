@@ -78,6 +78,7 @@ def bad_qry(qry, data_path, name):
         file.write(qry)
     file.close()
 
+
 def rand_select(table, size, types: list):
     r"""
     Randomly selects targets from provided table and list of data subsets.
@@ -173,7 +174,7 @@ def read_data(hek_path: str, srs_path: str, size: int, duration: int, long_lim: 
         SkyCoord(lon * u.deg, lat * u.deg, obstime=t_time, observer="earth", frame=frames.HeliographicStonyhurst)
         for lat, lon, t_time in zip(srs["latitude"], srs["longitude"], srs["target_time"])
     ]
-    
+
     print("Parsing Active Regions")
     ar_cat, fl_cat = [], []
     for ar in srs:
