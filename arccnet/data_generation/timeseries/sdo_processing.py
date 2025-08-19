@@ -55,7 +55,7 @@ __all__ = [
 ]
 
 
-def bad_qry(qry, data_path, name):
+def bad_query(qry, data_path, name):
     r"""
     Logs bad drms queries to document for future reference.
 
@@ -64,7 +64,7 @@ def bad_qry(qry, data_path, name):
         qry: `str`
             Drms query which returns an empty dataframe.
         data_path : `str`
-            Path to arccnet data.
+            Path to arccnet level 04 data.
         name: `str`
             Log filename.
     """
@@ -155,7 +155,7 @@ def read_data(hek_path: str, srs_path: str, size: int, duration: int, long_lim: 
     srs["srs_date"] = srs["target_time"].value
     srs["srs_date"] = [date.split("T")[0] for date in srs["srs_date"]]
     srs["srs_end_time"] = [(Time(time) + duration * u.hour) for time in srs["target_time"]]
-    print("Parsing Flares")
+    logging.info("Parsing Flares")
     flares["start_time"] = [time - (duration + 1) * u.hour for time in flares["start_time"]]
     flares["start_time"].format = "fits"
     flares["tb_date"] = flares["start_time"].value
@@ -175,7 +175,7 @@ def read_data(hek_path: str, srs_path: str, size: int, duration: int, long_lim: 
         for lat, lon, t_time in zip(srs["latitude"], srs["longitude"], srs["target_time"])
     ]
 
-    print("Parsing Active Regions")
+    logging.info("Parsing Active Regions")
     ar_cat, fl_cat = [], []
     for ar in srs:
         erl_time = Time(ar["target_time"]) - (duration + 1) * u.hour
@@ -473,10 +473,10 @@ def hmi_rec_find(qstr, keys, retries, sample, cont=False):
     count = 0
     qry = client.query(ds=qstr, key=keys)
     if qry.empty:
-        print("Bad Query - HMI")
         time = sunpy.time.parse_time(re.search(r"\[(.*?)\]", qstr).group(1))
         qry["QUALITY"] = [10000]
-        bad_qry(qry, data_path, qry_log)
+        logging.warning("Bad Query - HMI")
+        bad_query(qry, data_path, qry_log)
 
     else:
         time = sunpy.time.parse_time(qry["T_REC"].values[0])
@@ -485,7 +485,8 @@ def hmi_rec_find(qstr, keys, retries, sample, cont=False):
         if qry.empty:
             time = sunpy.time.parse_time(re.search(r"\[(.*?)\]", qstr).group(1))
             qry["QUALITY"] = [10000]
-            bad_qry(qry, data_path, qry_log)
+            logging.warning("Bad Query - HMI")
+            bad_query(qry, data_path, qry_log)
         time = change_time(time, sample)
         count += 1
     return qry["*recnum*"].values[0]
@@ -511,7 +512,6 @@ def aia_rec_find(qstr, keys, retries, time_add):
     retry = 0
     qry = client.query(ds=qstr, key=keys)
     qstr_head = qstr.split("[")[0]
-    print(qry)
     if not qry.empty:
         time, wvl = qry["T_REC"].values[0][0:-1], qry["WAVELNTH"].values[0]
         if wvl == "4500":
@@ -523,8 +523,8 @@ def aia_rec_find(qstr, keys, retries, time_add):
         if qry["QUALITY"].values[0] == 0:
             return qry["FSN"].values
     else:
-        print("Bad Query - AIA")
-        bad_qry(qry, data_path, qry_log)
+        logging.warning("Bad Query - AIA")
+        bad_query(qry, data_path, qry_log)
 
 
 def l1_file_save(export, query, path):

@@ -55,7 +55,9 @@ if __name__ == "__main__":
             patch_height = int(config["drms"]["patch_height"]) * u.pix
             patch_width = int(config["drms"]["patch_width"]) * u.pix
             try:
-                print(record["noaa_number"], record["goes_class"], record["start_time"], record["category"])
+                logging.info(
+                    f"{record['noaa_number']} {record['goes_class']} {record['start_time']} {record['category']}"
+                )
                 aia_maps, hmi_maps = drms_pipeline(
                     start_t=start,
                     end_t=end,
@@ -65,6 +67,9 @@ if __name__ == "__main__":
                     wavelengths=config["drms"]["wavelengths"],
                     sample=config["drms"]["sample"],
                 )
+                if len(aia_maps != 60):
+                    logging.warning("Bad Run detected - missing frames.")
+                    continue
 
                 hmi_proc = list(
                     tqdm(
