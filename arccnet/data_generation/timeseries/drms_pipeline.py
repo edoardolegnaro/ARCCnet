@@ -29,9 +29,9 @@ if __name__ == "__main__":
 
     # Logging settings here.
     drms_log = logging.getLogger("drms")
-    drms_log.setLevel("WARNING")
+    drms_log.setLevel("ERROR")
     reproj_log = logging.getLogger("reproject.common")
-    reproj_log.setLevel("WARNING")
+    reproj_log.setLevel("ERROR")
     # May need to find a more robust solution with filters/exceptions for this.
     astropy_log.setLevel("ERROR")
     data_path = config["paths"]["data_folder"]
@@ -43,7 +43,8 @@ if __name__ == "__main__":
         duration=6,
         long_lim=65,
         types=["F1", "F2", "N1", "N2"],
-    )
+    )[0]
+
     cores = int(config["drms"]["cores"])
     with ProcessPoolExecutor(cores) as executor:
         for record in starts:
@@ -54,7 +55,9 @@ if __name__ == "__main__":
             patch_height = int(config["drms"]["patch_height"]) * u.pix
             patch_width = int(config["drms"]["patch_width"]) * u.pix
             try:
-                print(record["noaa_number"], record["goes_class"], record["start_time"], record["category"])
+                logging.info(
+                    f"{record['noaa_number']} {record['goes_class']} {record['start_time']} {record['category']}"
+                )
                 aia_maps, hmi_maps = drms_pipeline(
                     start_t=start,
                     end_t=end,
@@ -64,6 +67,9 @@ if __name__ == "__main__":
                     wavelengths=config["drms"]["wavelengths"],
                     sample=config["drms"]["sample"],
                 )
+                if len(aia_maps != 60):
+                    logging.warning("Bad Run detected - missing frames.")
+                    continue
 
                 hmi_proc = list(
                     tqdm(
