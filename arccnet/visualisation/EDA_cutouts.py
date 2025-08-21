@@ -19,8 +19,14 @@
 # %autoreload 2
 
 import os
+from datetime import datetime
+from collections import defaultdict
 
+import matplotlib.dates as mdates
+import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
+import seaborn as sns
 
 from arccnet import load_config
 from arccnet.models import dataset_utils as ut_d
@@ -29,7 +35,6 @@ from arccnet.visualisation import utils as ut_v
 pd.set_option("display.max_columns", None)
 pd.set_option("display.max_colwidth", None)
 config = load_config()
-
 
 # %%
 data_folder = os.getenv("ARCAFF_DATA_FOLDER", "/ARCAFF/data")
@@ -44,6 +49,9 @@ ut_v.make_classes_histogram(df["label"], figsz=(18, 6), text_fontsize=11, title=
 df
 
 # %%
+mdi_color = "royalblue"
+hmi_color = "tomato"
+
 df_MDI = df[df["path_image_cutout_hmi"] == ""].copy()
 df_HMI = df[df["path_image_cutout_mdi"] == ""].copy()
 
@@ -148,4 +156,227 @@ print(f"MDI: {mdi_clean:,}/{mdi_orig:,} ({mdi_clean / mdi_orig * 100:.1f}% retai
 print(f"Total: {total_clean:,}/{total_orig:,} ({total_clean / total_orig * 100:.1f}% retained)")
 print("-" * 40)
 
+# %% [markdown]
+# # Location of ARs on the Sun
+
+# %%
+AR_IA_lbs = ["Alpha", "Beta", "IA", "Beta-Gamma-Delta", "Beta-Gamma", "Beta-Delta", "Gamma-Delta", "Gamma"]
+AR_IA_df = df_clean[df_clean["label"].isin(AR_IA_lbs)]
+
+# %%
+ut_v.make_classes_histogram(AR_IA_df["label"], figsz=(12, 7), text_fontsize=11)
+
+
+# %%
+def get_coordinates(df, coord_type):
+    """Extract longitude or latitude coordinates"""
+    hmi_col = f"{coord_type}_hmi"
+    mdi_col = f"{coord_type}_mdi"
+    return np.deg2rad(np.where(df["path_image_cutout_hmi"] != "", df[hmi_col], df[mdi_col]))
+
+
+def plot_histogram(ax, data, degree_ticks, title, color="#4C72B0"):
+    """Plot histogram with degree labels."""
+    rad_ticks = np.deg2rad(degree_ticks)
+    ax.hist(data, bins=rad_ticks, color=color, edgecolor="black")
+    ax.set_xticks(rad_ticks)
+    ax.set_xticklabels([f"{deg}°" for deg in degree_ticks])
+    ax.set_xlabel(f"{title} (degrees)")
+    ax.set_ylabel("Frequency")
+
+
+# Get coordinates
+lonV = get_coordinates(AR_IA_df, "longitude")
+latV = get_coordinates(AR_IA_df, "latitude")
+degree_ticks = np.arange(-90, 91, 15)
+
+# Plot histograms
+with sns.axes_style("darkgrid"):
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 6))
+    plot_histogram(ax1, lonV, degree_ticks, "Longitude")
+    plot_histogram(ax2, latV, degree_ticks, "Latitude")
+    plt.tight_layout()
+    plt.show()
+
+
+# %%
+def create_solar_grid(ax, num_meridians=12, num_parallels=12, num_points=300):
+    """Add meridian and parallel grid lines to solar disc plot."""
+    phis = np.linspace(0, 2 * np.pi, num_meridians, endpoint=False)
+    lats = np.linspace(-np.pi / 2, np.pi / 2, num_parallels)
+    theta = np.linspace(-np.pi / 2, np.pi / 2, num_points)
+
+    # Meridians
+    for phi in phis:
+        y, z = np.cos(theta) * np.sin(phi), np.sin(theta)
+        ax.plot(y, z, "k-", linewidth=0.2)
+
+    # Parallels
+    for lat in lats:
+        y = np.cos(lat) * np.sin(theta)
+        z = np.full(num_points, np.sin(lat))
+        ax.plot(y, z, "k-", linewidth=0.2)
+
+
+def filter_by_longitude(df, lonV, latV, long_limit_deg=65):
+    """Filter data by longitude and return front/rear coordinates."""
+    condition = np.abs(lonV) > np.deg2rad(long_limit_deg)
+
+    # Calculate y, z coordinates
+    yV = np.cos(latV) * np.sin(lonV)
+    zV = np.sin(latV)
+
+    return {
+        "front": {"y": yV[~condition], "z": zV[~condition], "count": np.sum(~condition)},
+        "rear": {"y": yV[condition], "z": zV[condition], "count": np.sum(condition)},
+        "filtered_df": df[~condition],
+        "rear_df": df[condition],
+    }
+
+
+# Filter and plot
+results = filter_by_longitude(AR_IA_df, lonV, latV)
+
+# Create solar disc visualization
+fig, ax = plt.subplots(figsize=(10, 10))
+ax.add_artist(plt.Circle((0, 0), 1, edgecolor="gray", facecolor="none"))
+create_solar_grid(ax)
+
+# Plot data points
+ax.scatter(results["rear"]["y"], results["rear"]["z"], s=1, alpha=0.2, color=hmi_color, label="Rear")
+ax.scatter(results["front"]["y"], results["front"]["z"], s=1, alpha=0.2, color=mdi_color, label="Front")
+
+# Configure plot
+ax.set(xlim=(-1.1, 1.1), ylim=(-1.1, 1.1), aspect="equal")
+ax.axis("off")
+ax.legend(fontsize=12)
+plt.show()
+
+# Print statistics
+front_count, rear_count = results["front"]["count"], results["rear"]["count"]
+total_count = front_count + rear_count
+print(f"Rear ARs: {rear_count:,}")
+print(f"Front ARs: {front_count:,}")
+print(f"Percentage of rear ARs: {100 * rear_count / total_count:.2f}%")
+
+ut_v.make_classes_histogram(results["filtered_df"]["label"], title="Front ARs", y_off=10, figsz=(11, 5))
+ut_v.make_classes_histogram(results["rear_df"]["label"], title="Rear ARs", y_off=10, figsz=(11, 5))
+plt.show()
+
+# %% [markdown]
+# # Time Distribution
+# %%
+mdi_df = AR_IA_df[AR_IA_df["path_image_cutout_mdi"] != ""]
+hmi_df = AR_IA_df[AR_IA_df["path_image_cutout_hmi"] != ""]
+
+# Get time series data
+mdi_dates, hmi_dates = mdi_df["dates"].values, hmi_df["dates"].values
+mdi_counts, hmi_counts = mdi_df["dates"].value_counts().sort_index(), hmi_df["dates"].value_counts().sort_index()
+
+# Setup plot
+tick_dates = [datetime(year, 1, 1) for year in range(1996, 2025, 2)]
+
+with plt.style.context("seaborn-v0_8-darkgrid"):
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(16, 9), sharex=True, gridspec_kw={"height_ratios": [4, 1]})
+
+    # Top panel: Bar chart
+    ax1.bar(mdi_counts.index, mdi_counts.values, width=0.8, color=mdi_color, alpha=0.9, label="MDI")
+    ax1.bar(hmi_counts.index, hmi_counts.values, width=0.8, color=hmi_color, alpha=0.9, label="HMI")
+    ax1.set(ylabel="n° of ARs per day", ylim=[0, 20], yticks=np.arange(0, 20 + 2, 2))
+    ax1.tick_params(axis="y", labelsize=14)
+    ax1.legend(loc="upper left", fontsize=14)
+    ax1.grid(True, linestyle="--", alpha=0.5)
+
+    # Bottom panel: Timeline
+    for dates, color, y_range in zip([mdi_dates, hmi_dates], [mdi_color, hmi_color], [(0.2, 0.8), (1.2, 1.8)]):
+        ax2.vlines(dates, *y_range, color=color, alpha=0.9, linewidth=0.5)
+
+    ax2.set(ylim=[0, 2], yticks=[])
+    ax2.grid(True, linestyle="--", alpha=0.75)
+
+    # X-axis formatting
+    ax2.xaxis_date()
+    ax2.xaxis.set_major_locator(mdates.YearLocator(2))
+    ax2.xaxis.set_major_formatter(mdates.DateFormatter("%Y"))
+    ax2.set_xticks(tick_dates)
+    plt.setp(ax2.get_xticklabels(), rotation=45, fontsize=14)
+    ax2.set_xlabel("Time", fontsize=16)
+
+    plt.tight_layout()
+    plt.show()
+
+# %% [markdown]
+# # McIntosh Classification
+AR_df = df[df["magnetic_class"] != ""].copy()
+
+ut_v.make_classes_histogram(
+    AR_df["mcintosh_class"],
+    horizontal=True,
+    figsz=(10, 18),
+    y_off=20,
+    x_rotation=0,
+    ylabel="Number of Active Regions",
+    title="McIntosh Class Distribution",
+    ylim=5900,
+)
+plt.show()
+
+# %%
+
+# McIntosh classification components
+AR_df = df[df["magnetic_class"] != ""].copy()
+for comp in ["Z_component", "p_component", "c_component"]:
+    AR_df[comp] = AR_df["mcintosh_class"].str[{"Z_component": 0, "p_component": 1, "c_component": 2}[comp]]
+
+# Plot parameters and histograms
+params = [
+    ("Z_component", (10, 6), "Z McIntosh Component"),
+    ("p_component", (9, 6), "p McIntosh Component"),
+    ("c_component", (6, 6), "c McIntosh Component"),
+]
+
+for component, figsz, title in params:
+    ut_v.make_classes_histogram(AR_df[component], y_off=50, figsz=figsz, title=title)
+# %%
+mappings = {
+    # Merge D, E, F into LG (LargeGroup)
+    "Z_component": {"A": "A", "B": "B", "C": "C", "D": "LG", "E": "LG", "F": "LG", "H": "H"},
+    # Merge s and h into sym & a and k into asym
+    "p_component": {"x": "x", "r": "r", "s": "sym", "h": "sym", "a": "asym", "k": "asym"},
+    # Merge i and c into frag
+    "c_component": {"x": "x", "o": "o", "i": "frag", "c": "frag"},
+}
+
+# Apply mappings and plot
+for comp, mapping in mappings.items():
+    AR_df[f"{comp}_grouped"] = AR_df[comp].map(mapping)
+    ut_v.make_classes_histogram(
+        AR_df[f"{comp}_grouped"],
+        y_off=50,
+        figsz={"Z_component": (8, 6), "p_component": (6, 6), "c_component": (5, 6)}[comp],
+        title=f"{comp.split('_')[0].upper()} McIntosh Component (Grouped)",
+    )
+
+
+# %%
+def group_and_sort_classes(class_list):
+    # Group classes by their initial letter
+    grouped_classes = defaultdict(list)
+    for cls in sorted(class_list):  # Sort the entire list alphabetically first
+        grouped_classes[cls[0]].append(cls)
+
+    # Format the output
+    for letter, classes in grouped_classes.items():
+        print(f"{letter}: {', '.join(classes)}")
+
+
+print("------ McIntosh Classes ------")
+group_and_sort_classes(list(AR_df["mcintosh_class"].unique()))
+print(f"\nn° of classes: {len(AR_df['mcintosh_class'].unique())}")
+print("\n------ Grouped McIntosh Classes ------")
+grouped_classes = list(
+    (AR_df["Z_component_grouped"] + AR_df["p_component_grouped"] + AR_df["c_component_grouped"]).unique()
+)
+group_and_sort_classes(grouped_classes)
+print(f"\nn° of classes: {len(grouped_classes)}")
 # %%
