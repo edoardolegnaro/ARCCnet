@@ -356,6 +356,7 @@ for comp, mapping in mappings.items():
         figsz={"Z_component": (8, 6), "p_component": (6, 6), "c_component": (5, 6)}[comp],
         title=f"{comp.split('_')[0].upper()} McIntosh Component (Grouped)",
     )
+    plt.show()
 
 
 # %%
