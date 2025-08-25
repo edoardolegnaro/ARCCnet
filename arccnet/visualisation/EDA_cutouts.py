@@ -19,6 +19,7 @@
 # %autoreload 2
 
 import os
+from pathlib import Path
 from datetime import datetime
 from collections import defaultdict
 
@@ -27,6 +28,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
+
+from astropy.io import fits
 
 from arccnet import load_config
 from arccnet.models import dataset_utils as ut_d
@@ -40,12 +43,12 @@ config = load_config()
 data_folder = os.getenv("ARCAFF_DATA_FOLDER", "/ARCAFF/data")
 dataset_folder = "arccnet-v20250805/04_final"
 df_file_name = "data/cutout_classification/region_classification.parq"
+dataset_title = "arccnet v20250805"
 
 # %%
 df, _ = ut_d.make_dataframe(data_folder, dataset_folder, df_file_name)
-ut_v.make_classes_histogram(df["label"], figsz=(18, 6), text_fontsize=11, title="arccnet v20250805")
-
-# %%
+ut_v.make_classes_histogram(df["label"], figsz=(18, 6), text_fontsize=11, title=dataset_title)
+plt.show()
 df
 
 # %%
@@ -138,6 +141,7 @@ quality_hmi_df
 # ## Data Filtering
 
 # %%
+# Remove bad quality data
 hmi_good_flags = ["", "0x00000000", "0x00000400"]
 mdi_good_flags = ["", "00000000", "00000200"]
 
@@ -156,6 +160,31 @@ print(f"MDI: {mdi_clean:,}/{mdi_orig:,} ({mdi_clean / mdi_orig * 100:.1f}% retai
 print(f"Total: {total_clean:,}/{total_orig:,} ({total_clean / total_orig * 100:.1f}% retained)")
 print("-" * 40)
 
+# %%
+# Path Analysis
+# Count rows where both paths are empty
+both_empty = (df_clean["path_image_cutout_hmi"] == "") & (df_clean["path_image_cutout_mdi"] == "")
+both_empty_count = both_empty.sum()
+
+# Count rows where at least one path exists
+hmi_exists = df_clean["path_image_cutout_hmi"] != ""
+mdi_exists = df_clean["path_image_cutout_mdi"] != ""
+at_least_one_exists = (hmi_exists | mdi_exists).sum()
+
+print("PATH ANALYSIS:")
+print("-" * 40)
+print(f"Total rows in df_clean: {len(df_clean):,}")
+print(f"Both paths empty: {both_empty_count:,} ({both_empty_count / len(df_clean) * 100:.1f}%)")
+print(f"At least one path exists: {at_least_one_exists:,}")
+print(f"Both paths exist: {(hmi_exists & mdi_exists).sum():,}")
+
+# Remove rows where both paths are empty
+df_clean = df_clean[~both_empty].copy()
+
+# %%
+# Reset index after filtering to ensure continuous indexing
+df_clean = df_clean.reset_index(drop=True)
+
 # %% [markdown]
 # # Location of ARs on the Sun
 
@@ -164,7 +193,8 @@ AR_IA_lbs = ["Alpha", "Beta", "IA", "Beta-Gamma-Delta", "Beta-Gamma", "Beta-Delt
 AR_IA_df = df_clean[df_clean["label"].isin(AR_IA_lbs)]
 
 # %%
-ut_v.make_classes_histogram(AR_IA_df["label"], figsz=(12, 7), text_fontsize=11)
+ut_v.make_classes_histogram(AR_IA_df["label"], figsz=(12, 7), text_fontsize=11, title=f"{dataset_title} ARs", y_off=100)
+plt.show()
 
 
 # %%
@@ -307,6 +337,8 @@ with plt.style.context("seaborn-v0_8-darkgrid"):
 
 # %% [markdown]
 # # McIntosh Classification
+
+# %%
 AR_df = df[df["magnetic_class"] != ""].copy()
 
 ut_v.make_classes_histogram(
@@ -380,4 +412,92 @@ grouped_classes = list(
 )
 group_and_sort_classes(grouped_classes)
 print(f"\nn° of classes: {len(grouped_classes)}")
+# %% [markdown]
+# # Pixel Values
+
+
 # %%
+def load_and_analyze_fits_pair(idx, df_clean, data_folder, dataset_folder):
+    """Load magnetogram and continuum FITS files and compute statistics."""
+    # Check if index is valid
+    if idx >= len(df_clean):
+        raise ValueError(f"Index {idx} is out of range. df_clean has {len(df_clean)} rows (0-{len(df_clean) - 1})")
+
+    row = df_clean.iloc[idx]
+    path = row["path_image_cutout_hmi"] if row["path_image_cutout_mdi"] == "" else row["path_image_cutout_mdi"]
+    fits_magn_filename = os.path.basename(path)
+    fits_magn_path = Path(data_folder) / dataset_folder / "data/cutout_classification/fits" / fits_magn_filename
+    fits_cont_path = Path(str(fits_magn_path).replace("_mag_", "_cont_"))
+
+    # Check if files exist
+    if not fits_magn_path.exists():
+        raise FileNotFoundError(f"Magnetogram file not found: {fits_magn_path}")
+    if not fits_cont_path.exists():
+        raise FileNotFoundError(f"Continuum file not found: {fits_cont_path}")
+
+    # Load data
+    with fits.open(fits_magn_path) as hdul:
+        mag_data = hdul[0].data
+    with fits.open(fits_cont_path) as hdul:
+        cont_data = hdul[0].data
+
+    # Check if data is not empty
+    if mag_data is None or mag_data.size == 0:
+        raise ValueError(f"Magnetogram data is empty: {fits_magn_filename}")
+    if cont_data is None or cont_data.size == 0:
+        raise ValueError(f"Continuum data is empty: {fits_cont_path.name}")
+
+    # Compute statistics
+    def compute_stats(data):
+        return {
+            "mean": np.nanmean(data),
+            "median": np.nanmedian(data),
+            "std": np.nanstd(data),
+            "min": np.nanmin(data),
+            "max": np.nanmax(data),
+            "shape": data.shape,
+        }
+
+    return {
+        "row": row,
+        "mag_data": mag_data,
+        "cont_data": cont_data,
+        "mag_stats": compute_stats(mag_data),
+        "cont_stats": compute_stats(cont_data),
+        "mag_filename": fits_magn_filename,
+        "cont_filename": fits_cont_path.name,
+    }
+
+
+idx = 1195
+
+data = load_and_analyze_fits_pair(idx, df_clean, data_folder, dataset_folder)
+
+# Create subplot and display
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+fig.suptitle(f"{data['row']['label']} - {data['row']['mcintosh_class']} - {data['row']['dates']}", fontsize=12, y=0.95)
+
+# Display both images with colorbars
+for ax, img_data, title, stats in zip(
+    [ax1, ax2],
+    [data["mag_data"], data["cont_data"]],
+    ["Magnetogram", "Continuum"],
+    [data["mag_stats"], data["cont_stats"]],
+):
+    im = ax.imshow(img_data, cmap="gray")
+    ax.set_title(f"{title}\nMean: {stats['mean']:.2f}, Std: {stats['std']:.2f}")
+    ax.axis("off")
+    plt.colorbar(im, ax=ax, shrink=0.8)
+
+plt.tight_layout()
+plt.show()
+
+# Print statistics
+for name, stats in [("MAGNETOGRAM", data["mag_stats"]), ("CONTINUUM", data["cont_stats"])]:
+    print(f"{name} STATISTICS:")
+    print("-" * 30)
+    for key, value in stats.items():
+        print(f"{key.capitalize()}: {value}" if key == "shape" else f"{key.capitalize()}: {value:.4f}")
+    print()
+
+print(f"Files:\nMagnetogram: {data['mag_filename']}\nContinuum: {data['cont_filename']}")
