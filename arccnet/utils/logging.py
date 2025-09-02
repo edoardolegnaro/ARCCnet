@@ -1,6 +1,6 @@
 import os
 import logging
-from datetime import datetime
+from datetime import UTC, datetime  # Add UTC import
 
 from arccnet import config
 
@@ -13,7 +13,7 @@ formatter = logging.Formatter(
 )  # can use `%(pathname)s` to get the full path
 
 os.makedirs(config["paths"]["data_dir_logs"], exist_ok=True)
-data_logfile = f"{config['paths']['data_dir_logs']}/{datetime.utcnow().strftime('%Y_%m_%d_%H%M%S')}.log"
+data_logfile = f"{config['paths']['data_dir_logs']}/{datetime.now(UTC).strftime('%Y_%m_%d_%H%M%S')}.log"
 
 
 def get_logger(name, level=logging.INFO):
