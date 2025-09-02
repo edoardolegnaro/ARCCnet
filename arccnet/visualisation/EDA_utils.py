@@ -1,14 +1,9 @@
 """
 Utility functions for Exploratory Data Analysis (EDA) of ARCCnet cutout data.
-
-This module contains functions extracted from EDA_cutouts.py for analyzing
-magnetogram and continuum image data, quality flags, coordinates, and other
-properties of Active Region cutouts.
 """
 
 import os
 from pathlib import Path
-from collections import defaultdict
 
 import numpy as np
 
@@ -55,14 +50,7 @@ def decode_flags(flag_hex, flag_dict):
 
 def analyze_quality_flags(df, instrument_name):
     """
-    Analyze and summarize quality flags for a specific instrument.
-
-    Parameters
-    ----------
-    df : pandas.DataFrame
-        DataFrame containing quality flag data.
-    instrument_name : str
-        Instrument name: "SOHO/MDI" or "SDO/HMI".
+    Analyze and summarize quality flags for "SOHO/MDI" or "SDO/HMI".
 
     Returns
     -------
@@ -127,60 +115,6 @@ def create_solar_grid(ax, num_meridians=12, num_parallels=12, num_points=300):
         y = np.cos(lat) * np.sin(theta)
         z = np.full(num_points, np.sin(lat))
         ax.plot(y, z, "k-", linewidth=0.2)
-
-
-def filter_by_longitude(df, lonV, latV, long_limit_deg=65):
-    """
-    Filter data by longitude and return front/rear coordinates.
-
-    Parameters
-    ----------
-    df : pandas.DataFrame
-        Input dataframe to filter.
-    lonV : array-like
-        Longitude values in radians.
-    latV : array-like
-        Latitude values in radians.
-    long_limit_deg : float, optional
-        Longitude limit in degrees for front/rear separation. Default 65.
-
-    Returns
-    -------
-    dict
-        Dictionary with 'front', 'rear', 'filtered_df', and 'rear_df' keys
-        containing coordinates and filtered dataframes.
-    """
-    condition = np.abs(lonV) > np.deg2rad(long_limit_deg)
-
-    # Calculate y, z coordinates
-    yV = np.cos(latV) * np.sin(lonV)
-    zV = np.sin(latV)
-
-    return {
-        "front": {"y": yV[~condition], "z": zV[~condition], "count": np.sum(~condition)},
-        "rear": {"y": yV[condition], "z": zV[condition], "count": np.sum(condition)},
-        "filtered_df": df[~condition],
-        "rear_df": df[condition],
-    }
-
-
-def group_and_sort_classes(class_list):
-    """
-    Group classes by their initial letter and display them.
-
-    Parameters
-    ----------
-    class_list : list
-        List of class names to group and display.
-    """
-    # Group classes by their initial letter
-    grouped_classes = defaultdict(list)
-    for cls in sorted(class_list):  # Sort the entire list alphabetically first
-        grouped_classes[cls[0]].append(cls)
-
-    # Format the output
-    for letter, classes in grouped_classes.items():
-        print(f"{letter}: {', '.join(classes)}")
 
 
 def analyze_nan_pattern(data, longitude):
@@ -287,17 +221,6 @@ def load_and_analyze_fits_pair(idx, df_clean, data_folder, dataset_folder):
     """
     Load magnetogram and continuum FITS files and compute statistics.
 
-    Parameters
-    ----------
-    idx : int
-        Row index in the dataframe.
-    df_clean : pandas.DataFrame
-        Cleaned dataframe with file paths.
-    data_folder : str
-        Base data directory path.
-    dataset_folder : str
-        Dataset subdirectory name.
-
     Returns
     -------
     dict
@@ -348,17 +271,6 @@ def load_and_analyze_fits_pair(idx, df_clean, data_folder, dataset_folder):
 def process_row(idx, df_clean, data_folder, dataset_folder):
     """
     Process a single row to extract statistics from FITS files.
-
-    Parameters
-    ----------
-    idx : int
-        Row index to process.
-    df_clean : pandas.DataFrame
-        Cleaned dataframe.
-    data_folder : str
-        Base data directory.
-    dataset_folder : str
-        Dataset subdirectory.
 
     Returns
     -------

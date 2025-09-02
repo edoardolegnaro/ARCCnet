@@ -20,6 +20,7 @@
 
 import os
 from datetime import datetime
+from collections import defaultdict
 
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
@@ -34,8 +35,6 @@ from arccnet.visualisation import utils as ut_v
 from arccnet.visualisation.EDA_utils import (
     analyze_quality_flags,
     create_solar_grid,
-    filter_by_longitude,
-    group_and_sort_classes,
     load_and_analyze_fits_pair,
     process_row,
 )
@@ -188,6 +187,24 @@ with sns.axes_style("darkgrid"):
 
 
 # Filter and plot
+def filter_by_longitude(df, lonV, latV, long_limit_deg=65):
+    """
+    Filter data by longitude and return front/rear coordinates.
+    """
+    condition = np.abs(lonV) > np.deg2rad(long_limit_deg)
+
+    # Calculate y, z coordinates
+    yV = np.cos(latV) * np.sin(lonV)
+    zV = np.sin(latV)
+
+    return {
+        "front": {"y": yV[~condition], "z": zV[~condition], "count": np.sum(~condition)},
+        "rear": {"y": yV[condition], "z": zV[condition], "count": np.sum(condition)},
+        "filtered_df": df[~condition],
+        "rear_df": df[condition],
+    }
+
+
 results = filter_by_longitude(AR_IA_df, lonV, latV)
 
 # Create solar disc visualization
@@ -313,7 +330,22 @@ for comp, mapping in mappings.items():
     )
     plt.show()
 
+
 # %%
+def group_and_sort_classes(class_list):
+    """
+    Group classes by their initial letter and display them.
+    """
+    # Group classes by their initial letter
+    grouped_classes = defaultdict(list)
+    for cls in sorted(class_list):  # Sort the entire list alphabetically first
+        grouped_classes[cls[0]].append(cls)
+
+    # Format the output
+    for letter, classes in grouped_classes.items():
+        print(f"{letter}: {', '.join(classes)}")
+
+
 print("------ McIntosh Classes ------")
 group_and_sort_classes(list(AR_df["mcintosh_class"].unique()))
 print(f"\nn° of classes: {len(AR_df['mcintosh_class'].unique())}")
@@ -332,7 +364,7 @@ print(f"\nn° of classes: {len(grouped_classes)}")
 
 
 # %%
-idx = 41478
+idx = 26530
 
 data = load_and_analyze_fits_pair(idx, AR_IA_df, data_folder, dataset_folder)
 
@@ -355,15 +387,14 @@ for ax, img_data, title, stats in zip(
 plt.tight_layout()
 plt.show()
 
-# Print statistics
-for name, stats in [("MAGNETOGRAM", data["mag_stats"]), ("CONTINUUM", data["cont_stats"])]:
-    print(f"{name} STATISTICS:")
-    print("-" * 30)
-    for key, value in stats.items():
-        print(f"{key.capitalize()}: {value}" if key == "shape" else f"{key.capitalize()}: {value:.4f}")
-    print()
-
-print(f"Files:\nMagnetogram: {data['mag_filename']}\nContinuum: {data['cont_filename']}")
+print(f"Label: {data['row']['label']} - {data['row']['mcintosh_class']}")
+print(f"Date: {data['row']['dates']}")
+print(f"{'Statistic':<12} {'Magnetogram':<12} {'Continuum':<12}")
+print("-" * 36)
+print(f"{'Mean':<12} {data['mag_stats']['mean']:<12.2f} {data['cont_stats']['mean']:<12.2f}")
+print(f"{'Std Dev':<12} {data['mag_stats']['std']:<12.2f} {data['cont_stats']['std']:<12.2f}")
+print(f"{'Min':<12} {data['mag_stats']['min']:<12.2f} {data['cont_stats']['min']:<12.2f}")
+print(f"{'Max':<12} {data['mag_stats']['max']:<12.2f} {data['cont_stats']['max']:<12.2f}")
 
 # %% [markdown]
 # ### All images statistics
@@ -412,22 +443,34 @@ stats_config = [
     ("cont_max", "Continuum Max", "tomato"),
 ]
 
+# Create histograms
 fig, axes = plt.subplots(2, 4, figsize=(20, 8))
-
 for i, (col, title, color) in enumerate(stats_config):
     ax = axes.flat[i]
     ax.hist(stats_df[col], bins=50, color=color, alpha=0.7, edgecolor="black", linewidth=0.5, log=True)
-    ax.set_title(title, fontsize=12, pad=10)
-    ax.set_xlabel("Value", fontsize=10)
-    if i % 5 == 0:  # First column gets y-label
-        ax.set_ylabel("Frequency", fontsize=10)
+    ax.set_title(title, fontsize=16, pad=12)
+    ax.set_xlabel("Value", fontsize=14)
+    if i % 4 == 0:  # First column gets y-label
+        ax.set_ylabel("Frequency", fontsize=14)
     ax.grid(True, alpha=0.3)
-    ax.tick_params(labelsize=9)
-
-    # Set specific axis range for magnetogram mean
-    if col == "mag_mean":
-        ax.set_xlim(-500, 500)
+    ax.tick_params(labelsize=12)
 
 plt.tight_layout()
 plt.show()
+
+# %%
+# Create boxplots by class
+colors = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#e377c2", "#7f7f7f"]
+all_labels = stats_df["label"].unique()
+
+for col, title, _ in stats_config:
+    plt.figure(figsize=(14, 8))
+    sns.boxplot(x="label", y=col, hue="label", data=stats_df, palette=colors[: len(all_labels)], legend=False)
+    plt.title(f"{title} by Active Region Class", fontsize=18)
+    plt.xticks(rotation=45, ha="right", fontsize=14)
+    plt.xlabel("")  # Remove x-axis label
+    plt.ylabel("Value", fontsize=16)
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.show()
 # %%
