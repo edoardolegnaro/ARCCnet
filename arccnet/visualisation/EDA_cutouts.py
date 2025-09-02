@@ -51,7 +51,7 @@ df_file_name = "data/cutout_classification/region_classification.parq"
 dataset_title = "arccnet v20250805"
 
 # %%
-df, _, filtered_df = ut_d.make_dataframe(data_folder, dataset_folder, df_file_name)
+df, _, filtered_ql_df = ut_d.make_dataframe(data_folder, dataset_folder, df_file_name)
 ut_v.make_classes_histogram(df["label"], figsz=(18, 6), text_fontsize=11, title=dataset_title)
 plt.show()
 df
@@ -313,11 +313,7 @@ for comp, mapping in mappings.items():
     )
     plt.show()
 
-
 # %%
-# %%
-
-
 print("------ McIntosh Classes ------")
 group_and_sort_classes(list(AR_df["mcintosh_class"].unique()))
 print(f"\nn° of classes: {len(AR_df['mcintosh_class'].unique())}")
@@ -332,11 +328,11 @@ print(f"\nn° of classes: {len(grouped_classes)}")
 
 
 # %% [markdown]
-# ## Single Image
+# ### Single Image
 
 
 # %%
-idx = 144
+idx = 41478
 
 data = load_and_analyze_fits_pair(idx, AR_IA_df, data_folder, dataset_folder)
 
@@ -370,7 +366,7 @@ for name, stats in [("MAGNETOGRAM", data["mag_stats"]), ("CONTINUUM", data["cont
 print(f"Files:\nMagnetogram: {data['mag_filename']}\nContinuum: {data['cont_filename']}")
 
 # %% [markdown]
-# ## All images statistics
+# ### All images statistics
 
 
 # %%
@@ -399,7 +395,7 @@ stats_df.describe()
 
 # %%
 # Find the indices of the 10 highest mag_mean values
-top10_indices = stats_df["mag_mean"].nlargest(10).index
+top10_indices = stats_df["mag_max"].nlargest(10).index
 # Get the corresponding rows
 top10_rows = stats_df.loc[top10_indices]
 top10_rows
