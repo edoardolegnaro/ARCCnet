@@ -15,39 +15,21 @@ config = load_config()
 
 def make_dataframe(data_folder, dataset_folder, file_name):
     """
-    Process the ARCCNet cutout dataset.
+    Load and process the ARCCNet cutout dataset.
 
-    Parameters
-    ----------
-    data_folder : str, optional
-        The base directory where the dataset folder is located.
-    dataset_folder : str, optional
-        The folder containing the dataset. Default is 'arccnet-cutout-dataset-v20240715'.
-    file_name : str, optional
-        The name of the parquet file to read. Default is 'cutout-mcintosh-catalog-v20240715.parq'.
+    - Reads a parquet file and converts Julian dates to datetime.
+    - Removes rows with problematic quicklook magnetograms (by filename).
+    - Adds 'label' (from magnetic_class or region_type) and 'date_only' columns.
+    - Returns the full DataFrame, a filtered DataFrame with only AR/IA regions, and the removed problematic rows.
 
     Returns
     -------
     df : pandas.DataFrame
-        The processed DataFrame containing all regions with additional date and label columns.
+        The processed DataFrame.
     AR_df : pandas.DataFrame
-        A DataFrame filtered to include only active regions (AR) and plages (IA).
-
-    Notes
-    -----
-    - The function reads a parquet file from the specified folder, processes Julian dates, and converts them to
-      datetime objects.
-    - It filters out problematic magnetograms from the dataset by excluding specific records based on quicklook images.
-    - The magnetic regions are labeled either by their magnetic class or region type, and an additional column
-      for date is added.
-    - A subset of the data containing only active regions (AR) and intermediate regions (IA) is returned.
-
-    Examples
-    --------
-    df, AR_df = make_dataframe(
-         data_folder='../../data/',
-         dataset_folder='arccnet-cutout-dataset-v20240715',
-         file_name='cutout-mcintosh-catalog-v20240715.parq')
+        DataFrame with only active regions (AR) and intermediate regions (IA).
+    filtered_df : pandas.DataFrame
+        DataFrame of removed problematic quicklook rows.
     """
     # Read the parquet file
     df = pd.read_parquet(os.path.join(data_folder, dataset_folder, file_name))
@@ -59,14 +41,10 @@ def make_dataframe(data_folder, dataset_folder, file_name):
     df["dates"] = dates
 
     # Remove problematic magnetograms from the dataset
-    problematic_quicklooks = config.get("magnetograms", "problematic_quicklooks").split(",")
-
-    filtered_df = []
-    for ql in problematic_quicklooks:
-        row = df["quicklook_path_mdi"] == "quicklook/" + ql
-        filtered_df.append(df[row])
-    filtered_df = pd.concat(filtered_df)
-    df = df.drop(filtered_df.index).reset_index(drop=True)
+    problematic_quicklooks = [ql.strip() for ql in config.get("magnetograms", "problematic_quicklooks").split(",")]
+    mask = df["quicklook_path_mdi"].apply(lambda x: os.path.basename(x) in problematic_quicklooks)
+    filtered_df = df[mask]
+    df = df[~mask].reset_index(drop=True)
 
     # Label the data
     df["label"] = np.where(df["magnetic_class"] == "", df["region_type"], df["magnetic_class"])
@@ -75,7 +53,7 @@ def make_dataframe(data_folder, dataset_folder, file_name):
     # Filter AR and IA regions
     AR_df = pd.concat([df[df["region_type"] == "AR"], df[df["region_type"] == "IA"]])
 
-    return df, AR_df
+    return df, AR_df, filtered_df
 
 
 def undersample_group_filter(df, label_mapping, long_limit_deg=60, undersample=True, buffer_percentage=0.1):
