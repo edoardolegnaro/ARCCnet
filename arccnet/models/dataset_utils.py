@@ -1,4 +1,5 @@
 import os
+import logging
 
 import numpy as np
 import pandas as pd
@@ -54,6 +55,94 @@ def make_dataframe(data_folder, dataset_folder, file_name):
     AR_df = pd.concat([df[df["region_type"] == "AR"], df[df["region_type"] == "IA"]])
 
     return df, AR_df, filtered_df
+
+
+def cleanup_df(df, log_level=logging.INFO):
+    """
+    Clean dataframe by removing bad quality data and rows with missing paths.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        The dataframe to clean.
+    log_level : int, optional
+        Logging level for output messages. Use logging.DEBUG, logging.INFO, etc.
+        Set to None to disable logging. Defaults to logging.INFO.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Cleaned dataframe with quality filtering and missing path removal applied.
+    """
+    logger = logging.getLogger(__name__)
+
+    # Define quality flags
+    hmi_good_flags = {"", "0x00000000", "0x00000400"}
+    mdi_good_flags = {"", "00000000", "00000200"}
+
+    # Filter by quality flags
+    df_clean = df[df["QUALITY_hmi"].isin(hmi_good_flags) & df["QUALITY_mdi"].isin(mdi_good_flags)].copy()
+
+    if log_level is not None:
+        _log_filtering_stats(df, df_clean, logger, log_level)
+
+    # Remove rows where both paths are missing
+    def is_missing(series):
+        return series.isna() | (series == "") | (series == "None")
+
+    both_missing = is_missing(df_clean["path_image_cutout_hmi"]) & is_missing(df_clean["path_image_cutout_mdi"])
+
+    if log_level is not None:
+        _log_path_analysis(df_clean, both_missing, logger, log_level)
+
+    return df_clean[~both_missing].reset_index(drop=True)
+
+
+def _log_filtering_stats(df_orig, df_clean, logger, log_level):
+    """Log data filtering statistics."""
+    df_HMI = df_orig[df_orig["path_image_cutout_mdi"] == ""]
+    df_MDI = df_orig[df_orig["path_image_cutout_hmi"] == ""]
+
+    hmi_good_flags = {"", "0x00000000", "0x00000400"}
+    mdi_good_flags = {"", "00000000", "00000200"}
+
+    df_HMI_clean = df_HMI[df_HMI["QUALITY_hmi"].isin(hmi_good_flags)]
+    df_MDI_clean = df_MDI[df_MDI["QUALITY_mdi"].isin(mdi_good_flags)]
+
+    logger.log(log_level, "DATA FILTERING Stats")
+    logger.log(log_level, "-" * 40)
+
+    for name, orig, clean in [
+        ("HMI", len(df_HMI), len(df_HMI_clean)),
+        ("MDI", len(df_MDI), len(df_MDI_clean)),
+        ("Total", len(df_orig), len(df_clean)),
+    ]:
+        pct = clean / orig * 100 if orig > 0 else 0
+        logger.log(log_level, f"{name}: {clean:,}/{orig:,} ({pct:.1f}% retained)")
+
+    logger.log(log_level, "-" * 40)
+
+
+def _log_path_analysis(df_clean, both_missing, logger, log_level):
+    """Log path analysis statistics."""
+    stats = {
+        "total": len(df_clean),
+        "hmi_none": (df_clean["path_image_cutout_hmi"] == "None").sum(),
+        "hmi_empty": (df_clean["path_image_cutout_hmi"] == "").sum(),
+        "mdi_none": (df_clean["path_image_cutout_mdi"] == "None").sum(),
+        "mdi_empty": (df_clean["path_image_cutout_mdi"] == "").sum(),
+        "both_missing": both_missing.sum(),
+    }
+
+    logger.log(log_level, "PATH ANALYSIS:")
+    logger.log(log_level, "-" * 40)
+    logger.log(log_level, f"Total rows in df_clean: {stats['total']:,}")
+    logger.log(log_level, f"HMI paths - None: {stats['hmi_none']:,}, Empty: {stats['hmi_empty']:,}")
+    logger.log(log_level, f"MDI paths - None: {stats['mdi_none']:,}, Empty: {stats['mdi_empty']:,}")
+    logger.log(
+        log_level,
+        f"Both paths missing: {stats['both_missing']:,} ({stats['both_missing'] / stats['total'] * 100:.1f}%)",
+    )
 
 
 def undersample_group_filter(df, label_mapping, long_limit_deg=60, undersample=True, buffer_percentage=0.1):
@@ -246,3 +335,50 @@ def assign_fold_sets(df, fold_df):
         df.loc[val_set.index, f"Fold {fold}"] = "val"
         df.loc[test_set.index, f"Fold {fold}"] = "test"
     return df
+
+
+def filter_by_location(df, lon_limit_deg=65, lat_limit_deg=None, limb_r_max=None):
+    """
+    Return masks and filtered DataFrames using |lon|, optional |lat| and optional inner-disc radius.
+    Chooses HMI coords when an HMI path exists, else MDI.
+    """
+
+    # Build an HMI-available mask from known path columns
+    def nonempty_mask(s):
+        return (~s.isna()) & (s != "") & (s != "None")
+
+    hmi_candidates = ["path_image_cutout_hmi", "processed_path_image_hmi", "quicklook_path_hmi"]
+    hmi_mask = np.zeros(len(df), dtype=bool)
+    for col in hmi_candidates:
+        if col in df.columns:
+            hmi_mask |= nonempty_mask(df[col]).to_numpy()
+
+    lon_deg = np.where(hmi_mask, df["longitude_hmi"].to_numpy(), df["longitude_mdi"].to_numpy())
+    lat_deg = np.where(hmi_mask, df["latitude_hmi"].to_numpy(), df["latitude_mdi"].to_numpy())
+
+    # Vector masks (avoid Python bools)
+    lon_ok = (np.abs(lon_deg) <= lon_limit_deg) if lon_limit_deg is not None else np.ones(len(df), dtype=bool)
+    lat_ok = (np.abs(lat_deg) <= lat_limit_deg) if lat_limit_deg is not None else np.ones(len(df), dtype=bool)
+
+    # Optional limb exclusion via projected radius r = sqrt(y^2 + z^2)
+    if limb_r_max is not None:
+        lon = np.deg2rad(lon_deg)
+        lat = np.deg2rad(lat_deg)
+        y = np.cos(lat) * np.sin(lon)
+        z = np.sin(lat)
+        r = np.sqrt(y**2 + z**2)
+        limb_ok = r <= limb_r_max
+    else:
+        limb_ok = np.ones(len(df), dtype=bool)
+
+    front_mask = lon_ok & lat_ok & limb_ok
+    rear_mask = (
+        (np.logical_not(lon_ok) & lat_ok & limb_ok) if lon_limit_deg is not None else np.zeros(len(df), dtype=bool)
+    )
+
+    return {
+        "mask_front": front_mask,
+        "mask_rear": rear_mask,
+        "df_front": df[front_mask].copy(),
+        "df_rear": df[rear_mask].copy(),
+    }
