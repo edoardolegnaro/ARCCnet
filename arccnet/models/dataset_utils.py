@@ -147,80 +147,159 @@ def _log_path_analysis(df_clean, both_missing, logger, log_level):
 
 def undersample_group_filter(df, label_mapping, long_limit_deg=60, undersample=True, buffer_percentage=0.1):
     """
-    Filter data based on a specified longitude limit, assign 'front' or 'rear' locations, and group labels
-    according to a provided mapping. Optionally undersample the majority class.
+    Filter data based on longitude limit, group labels according to mapping, and optionally undersample.
+
+    This function performs a multi-step data processing pipeline:
+    1. Assigns front/rear location based on longitude limits
+    2. Maps original labels to grouped labels using the provided mapping
+    3. Filters out rows with unmapped labels (None values)
+    4. Optionally undersamples the majority class for balanced training
+    5. Keeps only front-hemisphere samples for final output
 
     Parameters
     ----------
     df : pandas.DataFrame
-        The dataframe containing the data to be undersampled, grouped, and filtered.
+        Input dataframe containing solar region data with 'label', 'longitude_hmi',
+        'longitude_mdi' columns.
     label_mapping : dict
-        A dictionary mapping original labels to grouped labels.
+        Dictionary mapping original labels to grouped labels. Unmapped labels
+        (mapped to None) will be filtered out.
     long_limit_deg : int, optional
-        The longitude limit for filtering to determine 'front' or 'rear' location. Defaults to 60 degrees.
+        Longitude limit in degrees for front/rear classification. Regions with
+        |longitude| <= limit are considered 'front' (default: 60).
     undersample : bool, optional
-        Flag to enable or disable undersampling of the majority class. Defaults to True.
+        Whether to undersample the majority class to balance dataset (default: True).
     buffer_percentage : float, optional
-        The percentage buffer added to the second-largest class size when undersampling the majority class.
-        Defaults to 0.1 (10%).
+        Buffer percentage added to second-largest class size when undersampling
+        majority class (default: 0.1 = 10%).
 
     Returns
     -------
-    pandas.DataFrame
-        The modified original dataframe with 'location', 'grouped_labels', and 'encoded_labels' columns added.
-    pandas.DataFrame
-        The undersampled and grouped dataframe, with rows from the 'rear' location filtered out.
+    df_original : pandas.DataFrame
+        Original dataframe with added columns: 'location', 'grouped_labels',
+        'encoded_labels'.
+    df_processed : pandas.DataFrame
+        Processed dataframe with label mapping applied, optional undersampling,
+        and only front-hemisphere samples retained.
 
-    Notes
-    -----
-    - This function assigns 'front' or 'rear' location based on a longitude limit.
-    - Labels are grouped according to the `label_mapping` provided.
-    - If `undersample` is True, the majority class is reduced to the size of the second-largest class,
-      plus a specified buffer percentage.
-    - The function returns two dataframes: the modified original dataframe and an undersampled version where
-      the 'rear' locations are filtered out.
-
-    Examples
-    --------
-    label_mapping = {'A': 'group1', 'B': 'group1', 'C': 'group2'}
-    df, undersampled_df = undersample_group_filter(
-         df=my_dataframe,
-         label_mapping=label_mapping,
-         long_limit_deg=60,
-         undersample=True,
-        buffer_percentage=0.1
-        )
+    Raises
+    ------
+    ValueError
+        If input DataFrame is empty or no data remains after label mapping.
     """
-    lonV = np.deg2rad(np.where(df["processed_path_image_hmi"] != "", df["longitude_hmi"], df["longitude_mdi"]))
-    condition = (lonV < -np.deg2rad(long_limit_deg)) | (lonV > np.deg2rad(long_limit_deg))
-    df_filtered = df[~condition]
-    df_rear = df[condition]
-    df.loc[df_filtered.index, "location"] = "front"
-    df.loc[df_rear.index, "location"] = "rear"
+    logger = logging.getLogger(__name__)
 
-    # Apply label mapping to the dataframe
+    if df.empty:
+        raise ValueError("Input DataFrame is empty")
+
+    logger.debug(f"Input: {len(df):,} rows")
+
+    # Work with copy and add location info
+    df = df.copy()
+
+    # Debug: Show original label distribution
+    original_labels = df["label"].value_counts()
+    logger.debug(f"Original label distribution:\n{original_labels}")
+
+    location_results = filter_by_location(df, lon_limit_deg=long_limit_deg)
+    df["location"] = "rear"
+    df.loc[location_results["mask_front"], "location"] = "front"
+
+    front_count = (df["location"] == "front").sum()
+    rear_count = len(df) - front_count
+    logger.debug(
+        f"Location assignment: {front_count:,} front ({front_count / len(df) * 100:.1f}%), {rear_count:,} rear ({rear_count / len(df) * 100:.1f}%)"
+    )
+
+    # Debug: Show front hemisphere label distribution
+    front_labels = df[df["location"] == "front"]["label"].value_counts()
+    logger.debug(f"Front hemisphere label distribution:\n{front_labels}")
+
+    # Apply label mapping and filter unmapped labels
     df["grouped_labels"] = df["label"].map(label_mapping)
+    initial_count = len(df)
+
+    # Debug: Show mapping results
+    mapped_count = df["grouped_labels"].notna().sum()
+    unmapped_count = df["grouped_labels"].isna().sum()
+    logger.debug(
+        f"Label mapping results: {mapped_count:,} mapped ({mapped_count / initial_count * 100:.1f}%), {unmapped_count:,} unmapped ({unmapped_count / initial_count * 100:.1f}%)"
+    )
+
+    # Show which labels were unmapped
+    unmapped_labels = df[df["grouped_labels"].isna()]["label"].value_counts()
+    if len(unmapped_labels) > 0:
+        logger.debug(f"Unmapped labels being filtered out:\n{unmapped_labels}")
+
+    df = df.dropna(subset=["grouped_labels"]).reset_index(drop=True)
+
+    if len(df) == 0:
+        raise ValueError("No data remaining after applying label mapping")
+
+    # Debug: Show grouped label distribution after mapping
+    grouped_labels = df["grouped_labels"].value_counts()
+    logger.debug(f"After label mapping - grouped label distribution:\n{grouped_labels}")
+
+    # Encode labels
     df["encoded_labels"] = df["grouped_labels"].map(labels.LABEL_TO_INDEX)
 
+    # Debug: Check for unmapped encoded labels
+    unmapped_encoded = df["encoded_labels"].isna().sum()
+    if unmapped_encoded > 0:
+        logger.warning(f"Found {unmapped_encoded} rows with unmapped encoded labels")
+        unmapped_grouped = df[df["encoded_labels"].isna()]["grouped_labels"].value_counts()
+        logger.warning(f"Unmapped grouped labels:\n{unmapped_grouped}")
+
+    # Undersample if requested
     if undersample:
         class_counts = df["grouped_labels"].value_counts()
-        majority_class = class_counts.idxmax()
-        second_largest_class_count = class_counts.iloc[1]
-        n_samples = int(second_largest_class_count * (1 + buffer_percentage))
+        logger.debug(f"Before undersampling - class distribution:\n{class_counts}")
 
-        # Perform undersampling on the majority class
-        df_majority = df[df["grouped_labels"] == majority_class]
-        df_majority_undersampled = resample(df_majority, replace=False, n_samples=n_samples, random_state=42)
+        if len(class_counts) >= 2:
+            majority_class = class_counts.idxmax()
+            n_samples = min(int(class_counts.iloc[1] * (1 + buffer_percentage)), class_counts.iloc[0])
 
-        df_list = [df[df["grouped_labels"] == label] for label in class_counts.index if label != majority_class]
-        df_list.append(df_majority_undersampled)
+            logger.debug("Undersampling strategy:")
+            logger.debug(f"  Majority class: {majority_class} ({class_counts.iloc[0]:,} samples)")
+            logger.debug(f"  Second largest class: {class_counts.index[1]} ({class_counts.iloc[1]:,} samples)")
+            logger.debug(f"  Target size for majority: {n_samples:,} (with {buffer_percentage * 100:.1f}% buffer)")
 
-        df_du = pd.concat(df_list)
+            df_majority_resampled = resample(
+                df[df["grouped_labels"] == majority_class], replace=False, n_samples=n_samples, random_state=42
+            )
+            df_others = [df[df["grouped_labels"] == label] for label in class_counts.index if label != majority_class]
+            df_du = pd.concat([*df_others, df_majority_resampled], ignore_index=True)
+
+            logger.debug("After undersampling:")
+            after_undersample = df_du["grouped_labels"].value_counts()
+            for label in after_undersample.index:
+                count = after_undersample[label]
+                pct = count / len(df_du) * 100
+                logger.debug(f"  {label}: {count:,} ({pct:.1f}%)")
+        else:
+            logger.warning("Less than 2 classes available, skipping undersampling")
+            df_du = df.copy()
     else:
+        logger.debug("Undersampling disabled")
         df_du = df.copy()
 
-    # Filter out rows with 'rear' location
-    df_du = df_du[df_du["location"] != "rear"]
+    # Keep only front samples
+    before_front_filter = len(df_du)
+    df_du = df_du[df_du["location"] == "front"].reset_index(drop=True)
+    after_front_filter = len(df_du)
+
+    logger.debug(
+        f"Front hemisphere filtering: {before_front_filter:,} → {after_front_filter:,} ({after_front_filter / before_front_filter * 100:.1f}% retained)"
+    )
+
+    # Final summary
+    final_counts = df_du["grouped_labels"].value_counts()
+    logger.debug(f"Final output: {len(df_du):,} rows")
+    logger.debug("Final class distribution:")
+    for label in final_counts.index:
+        count = final_counts[label]
+        pct = count / len(df_du) * 100
+        logger.debug(f"  {label}: {count:,} ({pct:.1f}%)")
 
     return df, df_du
 
