@@ -6,7 +6,7 @@ classes = "a-b-bg"  # Options: "qs-ia-ar", "ia-ar", "qs-ia", "qs-ia-a-b-bg", "a-
 label_mapping = LABEL_MAPPING_DICT[classes]
 
 # dataset cross validation setup
-N_FOLDS = 5
+N_FOLDS = 8
 RANDOM_STATE = 42
 
 # dataset creation parameters

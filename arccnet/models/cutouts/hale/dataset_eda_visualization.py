@@ -28,12 +28,11 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 
 # %%
 # Define constants for column names and other magic strings
-N_SPLITS = 5
-RANDOM_STATE = 42
-LABEL_MAPPING_NAME = config.label_mapping
+N_SPLITS = config.N_FOLDS
+RANDOM_STATE = config.RANDOM_STATE
 
 PROCESSED_DATA_PATH = (
-    Path(config.DATA_FOLDER) / f"processed_dataset_{LABEL_MAPPING_NAME}_{N_SPLITS}-splits_rs-{RANDOM_STATE}.parquet"
+    Path(config.DATA_FOLDER) / f"processed_dataset_{config.classes}_{N_SPLITS}-splits_rs-{RANDOM_STATE}.parquet"
 )
 
 LABEL_COL = "grouped_labels"
@@ -52,7 +51,6 @@ def load_or_prepare_data(path: Path) -> pd.DataFrame:
             n_splits=N_SPLITS,
             random_state=RANDOM_STATE,
             label_mapping=config.label_mapping,
-            label_mapping_name=LABEL_MAPPING_NAME,
         )
     else:
         logging.info("Loading previously prepared dataset...")
