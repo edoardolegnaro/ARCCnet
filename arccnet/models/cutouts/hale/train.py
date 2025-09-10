@@ -16,31 +16,22 @@
 
 # %%
 import logging
+from pathlib import Path
+
+import pandas as pd
 
 import arccnet.models.cutouts.hale.config as config
-from arccnet.models import dataset_utils as ut_d
+from arccnet.models.cutouts.hale.data_preparation import prepare_dataset
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 # %%
-# Load and process dataset in streamlined pipeline
-df, AR_df, _ = ut_d.make_dataframe(config.DATA_FOLDER, config.DATASET_FOLDER, config.DF_FILE_NAME)
-logging.info(f"Original DataFrame shape: {df.shape}")
+# Prepare dataset
+PROCESSED_DATA_PATH = Path(config.DATA_FOLDER) / "processed_dataset_with_folds.parquet"
 
-# Clean data
-df_clean = ut_d.cleanup_df(df)
-logging.info(f"After cleanup: {df_clean.shape} ({len(df_clean) / len(df) * 100:.1f}% retained)")
-
-# %%
-df_original, df_processed = ut_d.undersample_group_filter(
-    df_clean, label_mapping=config.label_mapping, long_limit_deg=65, undersample=False
-)
-
-logging.info(f"Label mapping applied: {len(df_original):,} → {len(df_processed):,}")
-class_dist = df_processed["grouped_labels"].value_counts()
-class_pct = df_processed["grouped_labels"].value_counts(normalize=True) * 100
-logging.info("Final class distribution:")
-for label in class_dist.index:
-    logging.info(f"  {label}: {class_dist[label]:,} ({class_pct[label]:.1f}%)")
-
-# %%
+if not PROCESSED_DATA_PATH.exists():
+    logging.info("Preparing dataset for the first time...")
+    df_processed = prepare_dataset(save_path=str(PROCESSED_DATA_PATH))
+else:
+    logging.info("Loading previously prepared dataset...")
+    df_processed = pd.read_parquet(str(PROCESSED_DATA_PATH))

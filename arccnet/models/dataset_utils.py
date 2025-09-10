@@ -32,29 +32,41 @@ def make_dataframe(data_folder, dataset_folder, file_name):
     filtered_df : pandas.DataFrame
         DataFrame of removed problematic quicklook rows.
     """
-    # Read the parquet file
-    df = pd.read_parquet(os.path.join(data_folder, dataset_folder, file_name))
+    df = _load_and_process_data(data_folder, dataset_folder, file_name)
+    df, filtered_df = _remove_problematic_quicklooks(df)
+    df, AR_df = _add_labels_and_filter_regions(df)
+    return df, AR_df, filtered_df
 
-    # Convert Julian dates to datetime objects
+
+def _load_and_process_data(data_folder, dataset_folder, file_name):
+    """Load data and convert dates."""
+    df = pd.read_parquet(os.path.join(data_folder, dataset_folder, file_name))
+    return _convert_jd_to_datetime(df)
+
+
+def _convert_jd_to_datetime(df):
+    """Convert Julian dates to datetime objects."""
     df["time"] = df["target_time.jd1"] + df["target_time.jd2"]
     times = Time(df["time"], format="jd")
-    dates = pd.to_datetime(times.iso)  # Convert to datetime objects
-    df["dates"] = dates
+    df["dates"] = pd.to_datetime(times.iso)
+    return df
 
-    # Remove problematic magnetograms from the dataset
+
+def _remove_problematic_quicklooks(df):
+    """Remove problematic magnetograms from the dataset."""
     problematic_quicklooks = [ql.strip() for ql in config.get("magnetograms", "problematic_quicklooks").split(",")]
     mask = df["quicklook_path_mdi"].apply(lambda x: os.path.basename(x) in problematic_quicklooks)
     filtered_df = df[mask]
     df = df[~mask].reset_index(drop=True)
+    return df, filtered_df
 
-    # Label the data
+
+def _add_labels_and_filter_regions(df):
+    """Label the data and filter for AR and IA regions."""
     df["label"] = np.where(df["magnetic_class"] == "", df["region_type"], df["magnetic_class"])
     df["date_only"] = df["dates"].dt.date
-
-    # Filter AR and IA regions
     AR_df = pd.concat([df[df["region_type"] == "AR"], df[df["region_type"] == "IA"]])
-
-    return df, AR_df, filtered_df
+    return df, AR_df
 
 
 def cleanup_df(df, log_level=logging.INFO):
@@ -194,14 +206,30 @@ def undersample_group_filter(df, label_mapping, long_limit_deg=60, undersample=T
 
     logger.debug(f"Input: {len(df):,} rows")
 
-    # Work with copy and add location info
     df = df.copy()
+    df = _assign_location(df, long_limit_deg, logger)
+    df = _apply_label_mapping(df, label_mapping, logger)
 
-    # Debug: Show original label distribution
+    if len(df) == 0:
+        raise ValueError("No data remaining after applying label mapping")
+
+    df["encoded_labels"] = df["grouped_labels"].map(labels.LABEL_TO_INDEX)
+    _log_unmapped_encoded(df, logger)
+
+    df_processed = _perform_undersampling(df, undersample, buffer_percentage, logger) if undersample else df.copy()
+    df_processed = _filter_front_hemisphere(df_processed, logger)
+
+    _log_final_summary(df_processed, logger)
+
+    return df, df_processed
+
+
+def _assign_location(df, lon_limit_deg, logger):
+    """Assigns front/rear location based on longitude limits."""
     original_labels = df["label"].value_counts()
     logger.debug(f"Original label distribution:\n{original_labels}")
 
-    location_results = filter_by_location(df, lon_limit_deg=long_limit_deg)
+    location_results = filter_by_location(df, lon_limit_deg=lon_limit_deg)
     df["location"] = "rear"
     df.loc[location_results["mask_front"], "location"] = "front"
 
@@ -211,209 +239,160 @@ def undersample_group_filter(df, label_mapping, long_limit_deg=60, undersample=T
         f"Location assignment: {front_count:,} front ({front_count / len(df) * 100:.1f}%), {rear_count:,} rear ({rear_count / len(df) * 100:.1f}%)"
     )
 
-    # Debug: Show front hemisphere label distribution
     front_labels = df[df["location"] == "front"]["label"].value_counts()
     logger.debug(f"Front hemisphere label distribution:\n{front_labels}")
+    return df
 
-    # Apply label mapping and filter unmapped labels
+
+def _apply_label_mapping(df, label_mapping, logger):
+    """Apply label mapping and filter unmapped labels."""
     df["grouped_labels"] = df["label"].map(label_mapping)
     initial_count = len(df)
 
-    # Debug: Show mapping results
     mapped_count = df["grouped_labels"].notna().sum()
     unmapped_count = df["grouped_labels"].isna().sum()
     logger.debug(
         f"Label mapping results: {mapped_count:,} mapped ({mapped_count / initial_count * 100:.1f}%), {unmapped_count:,} unmapped ({unmapped_count / initial_count * 100:.1f}%)"
     )
 
-    # Show which labels were unmapped
     unmapped_labels = df[df["grouped_labels"].isna()]["label"].value_counts()
     if len(unmapped_labels) > 0:
         logger.debug(f"Unmapped labels being filtered out:\n{unmapped_labels}")
 
     df = df.dropna(subset=["grouped_labels"]).reset_index(drop=True)
-
-    if len(df) == 0:
-        raise ValueError("No data remaining after applying label mapping")
-
-    # Debug: Show grouped label distribution after mapping
     grouped_labels = df["grouped_labels"].value_counts()
     logger.debug(f"After label mapping - grouped label distribution:\n{grouped_labels}")
+    return df
 
-    # Encode labels
-    df["encoded_labels"] = df["grouped_labels"].map(labels.LABEL_TO_INDEX)
 
-    # Debug: Check for unmapped encoded labels
+def _log_unmapped_encoded(df, logger):
+    """Check for unmapped encoded labels."""
     unmapped_encoded = df["encoded_labels"].isna().sum()
     if unmapped_encoded > 0:
         logger.warning(f"Found {unmapped_encoded} rows with unmapped encoded labels")
         unmapped_grouped = df[df["encoded_labels"].isna()]["grouped_labels"].value_counts()
         logger.warning(f"Unmapped grouped labels:\n{unmapped_grouped}")
 
-    # Undersample if requested
-    if undersample:
-        class_counts = df["grouped_labels"].value_counts()
-        logger.debug(f"Before undersampling - class distribution:\n{class_counts}")
 
-        if len(class_counts) >= 2:
-            majority_class = class_counts.idxmax()
-            n_samples = min(int(class_counts.iloc[1] * (1 + buffer_percentage)), class_counts.iloc[0])
-
-            logger.debug("Undersampling strategy:")
-            logger.debug(f"  Majority class: {majority_class} ({class_counts.iloc[0]:,} samples)")
-            logger.debug(f"  Second largest class: {class_counts.index[1]} ({class_counts.iloc[1]:,} samples)")
-            logger.debug(f"  Target size for majority: {n_samples:,} (with {buffer_percentage * 100:.1f}% buffer)")
-
-            df_majority_resampled = resample(
-                df[df["grouped_labels"] == majority_class], replace=False, n_samples=n_samples, random_state=42
-            )
-            df_others = [df[df["grouped_labels"] == label] for label in class_counts.index if label != majority_class]
-            df_du = pd.concat([*df_others, df_majority_resampled], ignore_index=True)
-
-            logger.debug("After undersampling:")
-            after_undersample = df_du["grouped_labels"].value_counts()
-            for label in after_undersample.index:
-                count = after_undersample[label]
-                pct = count / len(df_du) * 100
-                logger.debug(f"  {label}: {count:,} ({pct:.1f}%)")
-        else:
-            logger.warning("Less than 2 classes available, skipping undersampling")
-            df_du = df.copy()
-    else:
+def _perform_undersampling(df, undersample, buffer_percentage, logger):
+    """Undersample the majority class."""
+    if not undersample:
         logger.debug("Undersampling disabled")
-        df_du = df.copy()
+        return df.copy()
 
-    # Keep only front samples
-    before_front_filter = len(df_du)
-    df_du = df_du[df_du["location"] == "front"].reset_index(drop=True)
-    after_front_filter = len(df_du)
+    class_counts = df["grouped_labels"].value_counts()
+    logger.debug(f"Before undersampling - class distribution:\n{class_counts}")
 
-    logger.debug(
-        f"Front hemisphere filtering: {before_front_filter:,} → {after_front_filter:,} ({after_front_filter / before_front_filter * 100:.1f}% retained)"
+    if len(class_counts) < 2:
+        logger.warning("Less than 2 classes available, skipping undersampling")
+        return df.copy()
+
+    majority_class = class_counts.idxmax()
+    n_samples = min(int(class_counts.iloc[1] * (1 + buffer_percentage)), class_counts.iloc[0])
+
+    logger.debug("Undersampling strategy:")
+    logger.debug(f"  Majority class: {majority_class} ({class_counts.iloc[0]:,} samples)")
+    logger.debug(f"  Second largest class: {class_counts.index[1]} ({class_counts.iloc[1]:,} samples)")
+    logger.debug(f"  Target size for majority: {n_samples:,} (with {buffer_percentage * 100:.1f}% buffer)")
+
+    df_majority_resampled = resample(
+        df[df["grouped_labels"] == majority_class], replace=False, n_samples=n_samples, random_state=42
     )
+    df_others = [df[df["grouped_labels"] == label] for label in class_counts.index if label != majority_class]
+    df_du = pd.concat([*df_others, df_majority_resampled], ignore_index=True)
 
-    # Final summary
-    final_counts = df_du["grouped_labels"].value_counts()
-    logger.debug(f"Final output: {len(df_du):,} rows")
+    logger.debug("After undersampling:")
+    after_undersample = df_du["grouped_labels"].value_counts()
+    for label in after_undersample.index:
+        count = after_undersample[label]
+        pct = count / len(df_du) * 100
+        logger.debug(f"  {label}: {count:,} ({pct:.1f}%)")
+    return df_du
+
+
+def _filter_front_hemisphere(df, logger):
+    """Keep only front samples."""
+    before_front_filter = len(df)
+    df_filtered = df[df["location"] == "front"].reset_index(drop=True)
+    after_front_filter = len(df_filtered)
+
+    if before_front_filter > 0:
+        logger.debug(
+            f"Front hemisphere filtering: {before_front_filter:,} -> {after_front_filter:,} ({after_front_filter / before_front_filter * 100:.1f}% retained)"
+        )
+    return df_filtered
+
+
+def _log_final_summary(df, logger):
+    """Log final summary."""
+    final_counts = df["grouped_labels"].value_counts()
+    logger.debug(f"Final output: {len(df):,} rows")
     logger.debug("Final class distribution:")
     for label in final_counts.index:
         count = final_counts[label]
-        pct = count / len(df_du) * 100
+        pct = count / len(df) * 100 if len(df) > 0 else 0
         logger.debug(f"  {label}: {count:,} ({pct:.1f}%)")
 
-    return df, df_du
 
-
-def split_data(df_du, label_col, group_col, random_state=42):
+def split_data(df, label_col, group_col, n_splits=5, random_state=42):
     """
-    Split the data into training, validation, and test sets using stratified group k-fold cross-validation.
+    Split the data into training, validation, and test sets for cross-validation
+    using Stratified Group K-Fold approach.
 
-    Parameters
-    ----------
-    df_du : pandas.DataFrame
-        The dataframe to be split. It must contain the columns specified by `label_col` and `group_col`.
-    label_col : str
-        The name of the column to be used for stratification, ensuring balanced class distribution across folds.
-    group_col : str
-        The name of the column to be used for grouping, ensuring that all instances of a group are in the same fold.
-    random_state : int, optional
-        The random seed for reproducibility of the splits. Defaults to 42.
-
-    Returns
-    -------
-    list of tuples
-        A list of tuples, each containing the following for each fold:
-        - fold : int
-            The fold number (1 to n_splits).
-        - train_df : pandas.DataFrame
-            The training set for the fold.
-        - val_df : pandas.DataFrame
-            The validation set for the fold.
-        - test_df : pandas.DataFrame
-            The test set for the fold.
-
-    Notes
-    -----
-    - The function uses `StratifiedGroupKFold` to perform k-fold cross-validation with both stratification and
-      group-wise splits.
-    - `label_col` is used to ensure balanced class distributions across folds, while `group_col` ensures that
-      all instances of a group remain in the same fold.
-    - An inner 10-fold split is performed on the training set to create the test set.
-
-    Examples
-    --------
-    fold_splits = split_data(
-       df_du=my_dataframe,
-         label_col='grouped_labels',
-         group_col='number',
-        random_state=42
-     )
-    """
-    fold_df = []
-    inner_fold_choice = [0, 1, 2, 3, 4]
-    sgkf = StratifiedGroupKFold(n_splits=5, random_state=random_state, shuffle=True)
-    X = df_du
-
-    for fold, (train_idx, val_idx) in enumerate(sgkf.split(df_du, df_du[label_col], df_du[group_col]), 1):
-        temp_df = X.iloc[train_idx]
-        val_df = X.iloc[val_idx]
-        inner_sgkf = StratifiedGroupKFold(n_splits=10)
-        inner_splits = list(inner_sgkf.split(temp_df, temp_df[label_col], temp_df[group_col]))
-        inner_train_idx, inner_test_idx = inner_splits[inner_fold_choice[fold - 1]]
-        train_df = temp_df.iloc[inner_train_idx]
-        test_df = temp_df.iloc[inner_test_idx]
-
-        fold_df.append((fold, train_df, val_df, test_df))
-
-    for fold, train_df, val_df, test_df in fold_df:
-        X.loc[train_df.index, f"Fold {fold}"] = "train"
-        X.loc[val_df.index, f"Fold {fold}"] = "val"
-        X.loc[test_df.index, f"Fold {fold}"] = "test"
-
-    return fold_df
-
-
-def assign_fold_sets(df, fold_df):
-    """
-    Assign training, validation, and test sets to the dataframe based on fold information.
+    This implementation ensures:
+    1.  Each group appears in the test set exactly once across all folds.
+    2.  Each group appears in the validation set exactly once across all folds.
+    3.  There is no overlap between train, validation, and test sets within any given fold.
 
     Parameters
     ----------
     df : pandas.DataFrame
-        The dataframe to be annotated with set information.
-    fold_df : list of tuples
-        A list containing tuples for each fold. Each tuple consists of:
-        - fold : int
-            The fold number.
-        - train_df : pandas.DataFrame
-            The training set for the fold.
-        - val_df : pandas.DataFrame
-            The validation set for the fold.
-        - test_df : pandas.DataFrame
-            The test set for the fold.
+        The dataframe to be split.
+    label_col : str
+        The column to be used for stratification.
+    group_col : str
+        The column to group by, ensuring groups are not split across sets.
+    n_splits : int, optional
+        The number of folds for cross-validation. Defaults to 5.
+    random_state : int, optional
+        The random seed for reproducibility. Defaults to 42.
 
     Returns
     -------
-    pandas.DataFrame
-        The original dataframe with an additional 'set' column, which indicates whether a row belongs
-        to the training, validation, or test set for each fold.
-
-    Notes
-    -----
-    - The function iterates through each fold, adding a 'set' column to the dataframe that assigns rows to
-    either the 'train', 'val', or 'test' sets based on the information in `fold_df`.
-
-    Examples
-    --------
-    df = assign_fold_sets(
-        df=df,
-        fold_df=fold_splits)
+    list of tuples
+        A list where each tuple contains (fold_number, train_df, val_df, test_df).
     """
-    for fold, train_set, val_set, test_set in fold_df:
-        df.loc[train_set.index, f"Fold {fold}"] = "train"
-        df.loc[val_set.index, f"Fold {fold}"] = "val"
-        df.loc[test_set.index, f"Fold {fold}"] = "test"
-    return df
+    sgkf = StratifiedGroupKFold(n_splits=n_splits, random_state=random_state, shuffle=True)
+    X = df
+    y = df[label_col]
+    groups = df[group_col]
+
+    # Generate indices for all folds at once
+    fold_indices = list(sgkf.split(X, y, groups))
+
+    fold_dataframes = []
+    for i in range(n_splits):
+        # Assign test, validation, and training folds
+        test_idx = fold_indices[i][1]
+        val_idx = fold_indices[(i + 1) % n_splits][1]  # Use the next fold for validation
+
+        # All other folds are used for training
+        train_folds_indices = [j for j in range(n_splits) if j != i and j != (i + 1) % n_splits]
+        train_idx = np.concatenate([fold_indices[j][1] for j in train_folds_indices])
+
+        # Create the dataframes
+        train_df = X.iloc[train_idx]
+        val_df = X.iloc[val_idx]
+        test_df = X.iloc[test_idx]
+
+        fold_dataframes.append((i + 1, train_df, val_df, test_df))
+
+        # Annotate the original DataFrame
+        X.loc[train_df.index, f"Fold {i + 1}"] = "train"
+        X.loc[val_df.index, f"Fold {i + 1}"] = "val"
+        X.loc[test_df.index, f"Fold {i + 1}"] = "test"
+
+    return fold_dataframes
 
 
 def filter_by_location(df, lon_limit_deg=65, lat_limit_deg=None, limb_r_max=None):
