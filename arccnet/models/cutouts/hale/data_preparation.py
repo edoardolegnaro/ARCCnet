@@ -23,15 +23,15 @@ def load_and_clean_dataset() -> tuple[pd.DataFrame, pd.DataFrame]:
 
 
 def apply_label_mapping_and_filter(
-    df_clean: pd.DataFrame, label_mapping: dict[str, Any], label_mapping_name: str
+    df_clean: pd.DataFrame, label_mapping: dict[str, Any]
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Apply label mapping and filtering."""
 
     df_original, df_processed = ut_d.undersample_group_filter(
-        df_clean, label_mapping=label_mapping, long_limit_deg=65, undersample=False
+        df_clean, label_mapping=label_mapping, long_limit_deg=config.LONG_LIMIT_DEG, undersample=config.UNDERSAMPLE
     )
 
-    logging.info(f"Label mapping '{label_mapping_name}': {label_mapping}")
+    logging.info(f"Label mapping: {label_mapping}")
     logging.info(f"Label mapping applied: {len(df_original):,} → {len(df_processed):,}")
 
     # Log class distribution
@@ -44,7 +44,9 @@ def apply_label_mapping_and_filter(
     return df_original, df_processed
 
 
-def create_and_validate_cv_folds(df_processed: pd.DataFrame, n_splits: int = 5, random_state: int = 42) -> pd.DataFrame:
+def create_and_validate_cv_folds(
+    df_processed: pd.DataFrame, n_splits: int = config.N_FOLDS, random_state: int = config.RANDOM_STATE
+) -> pd.DataFrame:
     """Create cross-validation folds and validate AR number separation."""
     logging.info("Creating cross-validation folds...")
 
@@ -101,10 +103,9 @@ def _validate_fold_separation(df_processed: pd.DataFrame) -> None:
 
 def prepare_dataset(
     save_path: str = None,
-    n_splits: int = 5,
-    random_state: int = 42,
+    n_splits: int = config.N_FOLDS,
+    random_state: int = config.RANDOM_STATE,
     label_mapping: dict[str, Any] = None,
-    label_mapping_name: str = "default",
 ) -> pd.DataFrame:
     """Complete dataset preparation pipeline."""
     # Load and clean data
@@ -116,9 +117,7 @@ def prepare_dataset(
         logging.info("Using default label mapping from config")
 
     # Apply label mapping and filtering
-    df_original, df_processed = apply_label_mapping_and_filter(
-        df_clean, label_mapping=label_mapping, label_mapping_name=label_mapping_name
-    )
+    df_original, df_processed = apply_label_mapping_and_filter(df_clean, label_mapping=label_mapping)
 
     # Create cross-validation folds
     df_with_folds = create_and_validate_cv_folds(df_processed, n_splits=n_splits, random_state=random_state)
@@ -134,13 +133,9 @@ def prepare_dataset(
 def main():
     """Main function to run the data preparation pipeline."""
     parser = argparse.ArgumentParser(description="Prepare dataset for ARCCNet model training.")
-    parser.add_argument("--n_splits", type=int, default=5, help="Number of splits for cross-validation.")
-    parser.add_argument("--random_state", type=int, default=42, help="Random state for reproducibility.")
+    parser.add_argument("--n_splits", type=int, default=config.N_FOLDS, help="Number of splits for cross-validation.")
     parser.add_argument(
-        "--label_mapping_name",
-        type=str,
-        default="hale",
-        help="Name of the label mapping to use (e.g., 'hale').",
+        "--random_state", type=int, default=config.RANDOM_STATE, help="Random state for reproducibility."
     )
     parser.add_argument(
         "--save_path",
@@ -156,15 +151,11 @@ def main():
     if save_path is None:
         save_path = (
             Path(config.DATA_FOLDER)
-            / f"processed_dataset_{args.label_mapping_name}_{args.n_splits}-splits_rs-{args.random_state}.parquet"
+            / f"processed_dataset_{config.classes}_{args.n_splits}-splits_rs-{args.random_state}.parquet"
         )
 
     prepare_dataset(
-        save_path=save_path,
-        n_splits=args.n_splits,
-        random_state=args.random_state,
-        label_mapping=config.label_mapping,
-        label_mapping_name=args.label_mapping_name,
+        save_path=save_path, n_splits=args.n_splits, random_state=args.random_state, label_mapping=config.label_mapping
     )
 
 
