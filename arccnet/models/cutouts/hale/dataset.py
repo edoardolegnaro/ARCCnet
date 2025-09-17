@@ -2,7 +2,7 @@
 Dataset utilities for Hale classification using existing ARCCNet utilities.
 """
 
-import os
+import logging
 
 import numpy as np
 import pandas as pd
@@ -12,154 +12,96 @@ from torch.utils.data import Dataset
 from astropy.io import fits
 
 from arccnet.visualisation import utils as ut_v
-from . import config
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+
+def get_fold_data(df: pd.DataFrame, fold_num: int) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Get train/val/test splits for a specific fold."""
+    train_df = df[df[f"fold_{fold_num}"] == "train"].copy()
+    val_df = df[df[f"fold_{fold_num}"] == "val"].copy()
+    test_df = df[df[f"fold_{fold_num}"] == "test"].copy()
+    return train_df, val_df, test_df
 
 
 class HaleDataset(Dataset):
-    """
-    Simple dataset for Hale classification that supports magnetogram, continuum, or both data types.
-
-    Args:
-        data_folder: Root data directory
-        dataset_folder: Dataset subdirectory
-        df: DataFrame with image paths and labels
-        transform: Optional transforms to apply to images
-        data_type: Type of data to load - "magnetogram", "continuum", or "both"
-    """
+    """Dataset for Hale classification."""
 
     def __init__(
         self,
-        data_folder: str,
-        dataset_folder: str,
         df: pd.DataFrame,
-        transform=None,
-        data_type: str = None,
-        target_height: int = 128,
-        target_width: int = 128,
-        divisor: float = 800.0,
+        data_type: str = "magnetogram",
+        divisor: float = 1000.0,
+        target_height: int = 200,
+        target_width: int = 200,
     ):
-        self.data_folder = data_folder
-        self.dataset_folder = dataset_folder
-        self.df = df.reset_index(drop=True)
-        self.transform = transform
-        self.data_type = data_type or config.DATA_TYPE
+        self.df = df.copy()
+        self.data_type = data_type
+        self.divisor = divisor
         self.target_height = target_height
         self.target_width = target_width
-        self.divisor = divisor
 
-        # Validate data_type
-        if self.data_type not in ["magnetogram", "continuum", "both"]:
-            raise ValueError(f"data_type must be 'magnetogram', 'continuum', or 'both', got '{self.data_type}'")
-
-        # Create label mapping from encoded_labels to model indices [0, 1, 2, ...]
-        unique_labels = sorted(df["encoded_labels"].unique())
+        # Create label mapping from unique labels to contiguous indices
+        unique_labels = sorted(self.df["grouped_labels_encoded"].unique())
         self.label_mapping = {label: idx for idx, label in enumerate(unique_labels)}
-        print(f"Dataset label mapping: {self.label_mapping}")
+        logger.info(f"Dataset label mapping: {self.label_mapping}")
+
+        # Apply label mapping to create model-compatible labels
+        self.df["model_label"] = self.df["grouped_labels_encoded"].map(self.label_mapping)
 
     def __len__(self):
         return len(self.df)
 
-    def _load_fits_image(self, fits_path: str) -> np.ndarray:
-        """Load and preprocess FITS image following McIntosh pattern."""
+    def _convert_old_path_to_new(self, old_path: str) -> str:
+        """Convert old absolute paths to new relative paths."""
+        if old_path.startswith("/mnt/ARCAFF/v0.3.0/04_final/"):
+            # Convert to new path structure
+            relative_part = old_path.replace("/mnt/ARCAFF/v0.3.0/04_final/", "")
+            new_path = f"/ARCAFF/data/arccnet-v20250805/04_final/{relative_part}"
+            return new_path
+        return old_path
+
+    def _load_image(self, row: pd.Series) -> torch.Tensor:
+        """Load and preprocess image following McIntosh dataset pattern."""
+        # Get the appropriate path
+        path_key = "path_image_cutout_hmi" if row["path_image_cutout_hmi"] != "" else "path_image_cutout_mdi"
+        fits_file_path = self._convert_old_path_to_new(row[path_key])
+
         try:
-            with fits.open(fits_path, memmap=True) as hdul:
-                # Try different HDU extensions
-                if len(hdul) > 1 and hdul[1].data is not None:
-                    image_data = np.array(hdul[1].data, dtype=np.float32)
-                else:
-                    image_data = np.array(hdul[0].data, dtype=np.float32)
+            with fits.open(fits_file_path, memmap=True) as img_fits:
+                image_data = img_fits[0].data.astype(np.float32)
         except Exception as e:
-            raise RuntimeError(f"Failed to load FITS file {fits_path}: {e}")
+            raise RuntimeError(f"Failed to load FITS file {fits_file_path}: {e}")
 
         # Handle NaN values
         image_data = np.nan_to_num(image_data, nan=0.0)
 
-        # Apply hardtanh transformation (same as McIntosh)
+        # Apply transformations following McIntosh pattern
         image_data = ut_v.hardtanh_transform_npy(image_data, divisor=self.divisor, min_val=-1.0, max_val=1.0)
-
-        # Pad and resize to target dimensions (same as McIntosh)
         image_data = ut_v.pad_resize_normalize(
             image_data, target_height=self.target_height, target_width=self.target_width
         )
 
-        return image_data
-
-    def _get_image_path(self, row, data_type: str) -> str:
-        """Get image path following EDA pattern."""
-        if data_type == "magnetogram":
-            # Prioritize HMI over MDI for magnetograms, following EDA pattern
-            if pd.notna(row.get("path_image_cutout_hmi")) and row["path_image_cutout_hmi"] not in ["", "None"]:
-                path = row["path_image_cutout_hmi"]
-            elif pd.notna(row.get("path_image_cutout_mdi")) and row["path_image_cutout_mdi"] not in ["", "None"]:
-                path = row["path_image_cutout_mdi"]
-            else:
-                raise ValueError(f"No valid {data_type} path found")
-
-            # Convert absolute paths to relative paths (strip the old absolute prefix)
-            if path.startswith("/mnt/ARCAFF/v0.3.0/04_final/"):
-                # Remove the old absolute prefix and keep only the relative part
-                path = path.replace("/mnt/ARCAFF/v0.3.0/04_final/", "")
-
-            return path
-
-        elif data_type == "continuum":
-            # For continuum, we would use similar columns but they may not exist
-            # For now, raise an error as continuum paths need to be verified
-            raise ValueError("Continuum data type not yet implemented - need to check available columns")
-
-        raise ValueError(f"No valid {data_type} path found")
+        return torch.from_numpy(image_data).unsqueeze(0)  # Add channel dimension
 
     def __getitem__(self, idx):
         row = self.df.iloc[idx]
 
-        if self.data_type == "both":
-            # For now, "both" is not implemented since continuum paths need verification
-            raise NotImplementedError("'both' data type not yet implemented - continuum paths need verification")
-
+        # Load image data
+        if self.data_type == "magnetogram":
+            image_data = self._load_image(row)
+        elif self.data_type == "continuum":
+            # TODO: Implement continuum loading when available
+            raise NotImplementedError("Continuum data loading not implemented yet")
+        elif self.data_type == "both":
+            # TODO: Implement combined loading when available
+            raise NotImplementedError("Combined data loading not implemented yet")
         else:
-            # Load single data type
-            img_path = self._get_image_path(row, self.data_type)
+            raise ValueError(f"Unsupported data_type: {self.data_type}")
 
-            # Convert to full path - img_path should now be relative
-            fits_path = os.path.join(self.data_folder, self.dataset_folder, img_path)
+        # Get label (already mapped to contiguous indices)
+        label = torch.tensor(row["model_label"], dtype=torch.long)
 
-            image_data = self._load_fits_image(fits_path)
-
-            # Convert to tensor and add channel dimension - data is already preprocessed
-            image_tensor = torch.from_numpy(image_data).unsqueeze(0).contiguous()  # (1, H, W)
-
-        # Apply transforms if provided (but data is already normalized)
-        if self.transform:
-            image_tensor = self.transform(image_tensor)
-
-        # Ensure tensor is contiguous and properly typed
-        image_tensor = image_tensor.contiguous().float()
-
-        # Get label and map to model-compatible index [0, 1, 2]
-        original_label = row["encoded_labels"]
-        label = self.label_mapping[original_label]
-
-        return image_tensor, label
-
-
-def get_fold_data(df: pd.DataFrame, fold_num: int):
-    """
-    Get train/val/test data for a specific fold using existing fold columns.
-
-    Args:
-        df: DataFrame with fold columns (created by dataset_utils.split_data)
-        fold_num: Fold number (1-N)
-
-    Returns:
-        train_df, val_df, test_df
-    """
-    fold_col = f"Fold {fold_num}"
-    if fold_col not in df.columns:
-        available_folds = [col for col in df.columns if col.startswith("Fold ")]
-        raise ValueError(f"Fold column '{fold_col}' not found. Available: {available_folds}")
-
-    train_df = df[df[fold_col] == "train"].copy()
-    val_df = df[df[fold_col] == "val"].copy()
-    test_df = df[df[fold_col] == "test"].copy()
-
-    return train_df, val_df, test_df
+        return image_data, label

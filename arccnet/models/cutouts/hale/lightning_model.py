@@ -101,6 +101,8 @@ class HaleLightningModel(pl.LightningModule):
         self.log("train_acc", acc, prog_bar=True)
         self.log("train_f1", f1)
 
+        return loss
+
     def on_train_epoch_end(self):
         """Log training epoch summary."""
         train_acc = self.train_accuracy.compute()

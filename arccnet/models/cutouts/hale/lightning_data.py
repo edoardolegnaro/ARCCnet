@@ -4,89 +4,46 @@ PyTorch Lightning DataModule for Hale classification.
 
 import pandas as pd
 import pytorch_lightning as pl
-import torchvision.transforms as transforms
 from torch.utils.data import DataLoader
 
-import arccnet.models.cutouts.hale.config as config
+from . import config
 from .dataset import HaleDataset, get_fold_data
 
 
 class HaleDataModule(pl.LightningDataModule):
-    """
-    Lightning DataModule for Hale classification.
-    """
+    """Lightning DataModule for Hale classification."""
 
-    def __init__(
-        self,
-        df: pd.DataFrame,
-        fold_num: int = 1,
-        data_folder: str = config.DATA_FOLDER,
-        dataset_folder: str = config.DATASET_FOLDER,
-        batch_size: int = config.BATCH_SIZE,
-        num_workers: int = config.NUM_WORKERS,
-        data_type: str = None,
-    ):
+    def __init__(self, df: pd.DataFrame = None, fold_num: int = 1, batch_size: int = None, num_workers: int = None):
         super().__init__()
-        self.df = df
+        self.df = df  # Cache the DataFrame to avoid repeated loading
         self.fold_num = fold_num
-        self.data_folder = data_folder
-        self.dataset_folder = dataset_folder
-        self.batch_size = batch_size
-        self.num_workers = num_workers
-        self.data_type = data_type or config.DATA_TYPE
+        self.batch_size = batch_size or config.BATCH_SIZE
+        self.num_workers = num_workers or config.NUM_WORKERS
 
-        # Since images are already preprocessed to fixed size with hardtanh normalization,
-        # we only need minimal transforms (or none at all)
-        self.train_transforms = transforms.Compose(
-            [
-                # Data is already normalized with hardtanh to [-1, 1] range
-                # No need for additional normalization or resizing
-            ]
-        )
+        # Initialize datasets to None
+        self.train_dataset = None
+        self.val_dataset = None
+        self.test_dataset = None
+        self.label_mapping = None
 
-        self.val_test_transforms = transforms.Compose(
-            [
-                # Data is already normalized with hardtanh to [-1, 1] range
-                # No need for additional normalization or resizing
-            ]
-        )
-
-    def setup(self, stage: str | None = None):
-        """Split data into train/val/test based on fold."""
-        train_df, val_df, test_df = get_fold_data(self.df, self.fold_num)
-
+    def setup(self, stage: str = None):
+        """Set up datasets for different stages."""
         if stage == "fit" or stage is None:
-            self.train_dataset = HaleDataset(
-                self.data_folder,
-                self.dataset_folder,
-                train_df,
-                transform=self.train_transforms,
-                data_type=self.data_type,
-            )
+            # Split data only once
+            train_df, val_df, test_df = get_fold_data(self.df, self.fold_num)
 
-            self.val_dataset = HaleDataset(
-                self.data_folder,
-                self.dataset_folder,
-                val_df,
-                transform=self.val_test_transforms,
-                data_type=self.data_type,
-            )
+            # Create datasets
+            self.train_dataset = HaleDataset(train_df, data_type=config.DATA_TYPE)
+            self.val_dataset = HaleDataset(val_df, data_type=config.DATA_TYPE)
+            self.test_dataset = HaleDataset(test_df, data_type=config.DATA_TYPE)
 
-            # Set label mapping from the dataset for compatibility
+            # Store label mapping from train dataset
             self.label_mapping = self.train_dataset.label_mapping
 
-        if stage == "test" or stage is None:
-            self.test_dataset = HaleDataset(
-                self.data_folder,
-                self.dataset_folder,
-                test_df,
-                transform=self.val_test_transforms,
-                data_type=self.data_type,
-            )
-
-            # Ensure label_mapping is available for test stage
-            if not hasattr(self, "label_mapping"):
-                self.label_mapping = self.test_dataset.label_mapping
+        if stage == "test":
+            if self.test_dataset is None:
+                _, _, test_df = get_fold_data(self.df, self.fold_num)
+                self.test_dataset = HaleDataset(test_df, data_type=config.DATA_TYPE)
 
     def train_dataloader(self):
         return DataLoader(
