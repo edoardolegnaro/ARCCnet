@@ -7,10 +7,11 @@ import pytorch_lightning as pl
 import torch
 import torch.nn as nn
 import torchvision.models as models
-from sklearn.utils.class_weight import compute_class_weight
+from sklearn.metrics import classification_report, confusion_matrix
 from torchmetrics import Accuracy, F1Score
 
-from . import config
+import arccnet.models.cutouts.hale.config as config
+from arccnet.models.train_utils import replace_activations
 
 
 class HaleLightningModel(pl.LightningModule):
@@ -50,6 +51,9 @@ class HaleLightningModel(pl.LightningModule):
         else:
             raise ValueError(f"Unsupported model: {model_name}")
 
+        # Replace ReLU with LeakyReLU activations
+        replace_activations(self.backbone, nn.ReLU, nn.LeakyReLU, negative_slope=config.LEAKY_RELU_NEGATIVE_SLOPE)
+
         # Modify first conv layer for our input channels
         original_conv1 = self.backbone.conv1
         self.backbone.conv1 = nn.Conv2d(
@@ -68,8 +72,10 @@ class HaleLightningModel(pl.LightningModule):
             # For 2 channels, use first 2 channels of RGB weights
             self.backbone.conv1.weight.data = original_conv1.weight.data[:, :2, :, :]
 
-        # Modify final layer for our number of classes
-        self.backbone.fc = nn.Linear(self.backbone.fc.in_features, num_classes)
+        # Modify final layer for our number of classes with dropout
+        self.backbone.fc = nn.Sequential(
+            nn.Dropout(config.DROPOUT_RATE), nn.Linear(self.backbone.fc.in_features, num_classes)
+        )
 
         # Loss function with optional class weights
         self.criterion = nn.CrossEntropyLoss(weight=class_weights)
@@ -82,6 +88,10 @@ class HaleLightningModel(pl.LightningModule):
         self.train_f1 = F1Score(task="multiclass", num_classes=num_classes, average="macro")
         self.val_f1 = F1Score(task="multiclass", num_classes=num_classes, average="macro")
         self.test_f1 = F1Score(task="multiclass", num_classes=num_classes, average="macro")
+
+        # Store for confusion matrix and classification report
+        self.test_predictions = []
+        self.test_targets = []
 
     def forward(self, x):
         return self.backbone(x)
@@ -142,6 +152,10 @@ class HaleLightningModel(pl.LightningModule):
         acc = self.test_accuracy(preds, labels)
         f1 = self.test_f1(preds, labels)
 
+        # Store predictions and targets for confusion matrix and classification report
+        self.test_predictions.extend(preds.cpu().numpy())
+        self.test_targets.extend(labels.cpu().numpy())
+
         # Log metrics
         self.log("test_loss", loss)
         self.log("test_acc", acc)
@@ -149,37 +163,58 @@ class HaleLightningModel(pl.LightningModule):
 
         return {"test_loss": loss, "preds": preds, "targets": labels}
 
+    def get_confusion_matrix_and_classification_report(self, class_names=None):
+        """
+        Compute confusion matrix and classification report from collected test predictions.
+
+        Args:
+            class_names: List of class names for the classification report
+
+        Returns:
+            tuple: (confusion_matrix, classification_report_dict)
+        """
+        if not self.test_predictions or not self.test_targets:
+            return None, None
+
+        # Convert to numpy arrays
+        y_true = np.array(self.test_targets)
+        y_pred = np.array(self.test_predictions)
+
+        # Compute confusion matrix
+        cm = confusion_matrix(y_true, y_pred)
+
+        # Compute classification report
+        if class_names is None:
+            class_names = [f"Class_{i}" for i in range(self.num_classes)]
+
+        # Get classification report as dictionary for better logging
+        class_report = classification_report(
+            y_true, y_pred, target_names=class_names, output_dict=True, zero_division=0
+        )
+
+        return cm, class_report
+
+    def reset_test_collections(self):
+        """Reset the test predictions and targets collections."""
+        self.test_predictions = []
+        self.test_targets = []
+
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.5, patience=5)
+        optimizer = torch.optim.Adam(
+            self.parameters(),
+            lr=self.learning_rate,
+            weight_decay=config.WEIGHT_DECAY,  # Add L2 regularization
+        )
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer,
+            mode=config.LR_SCHEDULER_MODE,
+            factor=config.LR_SCHEDULER_FACTOR,
+            patience=config.LR_SCHEDULER_PATIENCE,
+        )
         return {
             "optimizer": optimizer,
             "lr_scheduler": {
                 "scheduler": scheduler,
-                "monitor": "val_loss",
+                "monitor": config.LR_SCHEDULER_MONITOR,
             },
         }
-
-
-def compute_class_weights(labels: np.ndarray, num_classes: int) -> torch.Tensor:
-    """
-    Compute class weights for imbalanced datasets with proper label handling.
-
-    Args:
-        labels: Array of original encoded label indices (e.g., [2, 3, 4])
-        num_classes: Number of unique classes (should be 3 for Hale)
-
-    Returns:
-        Class weights as torch tensor for model classes [0, 1, 2]
-    """
-    # Map original labels to contiguous indices [0, 1, 2, ...]
-    unique_labels = np.unique(labels)
-    label_to_idx = {label: idx for idx, label in enumerate(sorted(unique_labels))}
-
-    # Convert original labels to contiguous indices
-    mapped_labels = np.array([label_to_idx[label] for label in labels])
-
-    # Compute balanced class weights for the mapped labels
-    class_weights = compute_class_weight("balanced", classes=np.arange(len(unique_labels)), y=mapped_labels)
-
-    return torch.FloatTensor(class_weights)

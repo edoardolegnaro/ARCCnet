@@ -1,0 +1,369 @@
+"""
+Hale Trainer class for encapsulating training logic.
+
+This module contains the HaleTrainer class that handles the training workflow
+for a single fold, making the code more organized and reusable.
+"""
+
+import logging
+import warnings
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import pytorch_lightning as pl
+import torch
+from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
+from pytorch_lightning.callbacks.progress import RichProgressBar
+from sklearn.utils.class_weight import compute_class_weight
+
+import arccnet.models.cutouts.hale.config as config
+from arccnet.models.cutouts.hale.data_preparation import prepare_dataset
+from arccnet.models.cutouts.hale.evaluation import (
+    find_misclassified_samples,
+    generate_roc_curves,
+    log_confusion_matrix_and_classification_report,
+    log_misclassified_samples,
+    log_roc_curves,
+)
+from arccnet.models.cutouts.hale.lightning_data import HaleDataModule
+from arccnet.models.cutouts.hale.lightning_model import HaleLightningModel
+from arccnet.models.cutouts.hale.logging_utils import (
+    log_dataset_statistics,
+    log_final_metrics,
+    log_hyperparameters_to_comet,
+    log_test_results,
+    log_training_info,
+    setup_loggers,
+)
+
+
+class HaleTrainer:
+    """
+    Trainer class for Hale classification models.
+
+    Encapsulates the training workflow for a single fold, including data preparation,
+    model creation, training, testing, and evaluation.
+    """
+
+    def __init__(self, class_names: list[str] | None = None):
+        """
+        Initialize the HaleTrainer.
+
+        Args:
+            class_names: List of class names (defaults to Alpha, Beta, Beta-Gamma)
+        """
+        self.class_names = class_names or ["Alpha", "Beta", "Beta-Gamma"]
+        self._setup_warnings()
+        self._setup_precision()
+
+    def _setup_warnings(self) -> None:
+        """Suppress common warnings."""
+        warnings.filterwarnings("ignore", category=UserWarning, message=".*hipBLASLt.*")
+        warnings.filterwarnings(
+            "ignore", category=UserWarning, message=".*Precision.*not supported by the model summary.*"
+        )
+        warnings.filterwarnings("ignore", category=UserWarning, message=".*does not have many workers.*")
+
+    def _setup_precision(self) -> None:
+        """Set up mixed precision training based on CUDA version."""
+        torch.set_float32_matmul_precision("medium")
+        cuda_version = torch.version.cuda
+        if cuda_version and float(cuda_version) < 11.8:
+            self.precision = "16-mixed"  # Use legacy mixed precision for older CUDA
+        else:
+            self.precision = "16-mixed"  # Use modern mixed precision for newer CUDA
+
+        logging.info(f"Using precision: {self.precision}")
+
+    def prepare_dataset_once(self) -> pd.DataFrame:
+        """
+        Prepare and encode the dataset once.
+
+        Returns:
+            Processed DataFrame with encoded labels
+        """
+        processed_data_path = (
+            Path(config.DATA_FOLDER)
+            / f"processed_dataset_{config.classes}_{config.N_FOLDS}-splits_rs-{config.RANDOM_STATE}.parquet"
+        )
+
+        if not processed_data_path.exists():
+            logging.info("Preparing dataset for the first time...")
+            df_processed = prepare_dataset(save_path=str(processed_data_path))
+        else:
+            logging.info(f"Loading previously prepared dataset: {processed_data_path.name}")
+            df_processed = pd.read_parquet(str(processed_data_path))
+
+        logging.info(f"Dataset shape: {df_processed.shape}")
+        logging.info(f"Label distribution:\n{df_processed['grouped_labels'].value_counts()}")
+
+        return self._encode_labels(df_processed)
+
+    def _encode_labels(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Encode labels consistently."""
+        from sklearn.preprocessing import LabelEncoder
+
+        logging.info("Creating consistent label encoding from 'grouped_labels'...")
+        label_encoder = LabelEncoder()
+        df["model_labels"] = label_encoder.fit_transform(df["grouped_labels"])
+
+        # Create label mapping for reference
+        label_mapping = {
+            str(class_name): int(encoded_val)
+            for class_name, encoded_val in zip(label_encoder.classes_, label_encoder.transform(label_encoder.classes_))
+        }
+        logging.info(f"Label mapping: {label_mapping}")
+
+        # Convert to regular Python ints for cleaner logging
+        model_labels_counts = df["model_labels"].value_counts().sort_index()
+        model_labels_dist = {int(k): int(v) for k, v in model_labels_counts.items()}
+        logging.info(f"Model labels distribution: {model_labels_dist}")
+
+        # Verify we have the expected number of classes
+        expected_classes = config.NUM_CLASSES
+        actual_classes = len(label_encoder.classes_)
+        if actual_classes != expected_classes:
+            logging.warning(
+                f"Expected {expected_classes} classes but found {actual_classes}: {list(label_encoder.classes_)}"
+            )
+        else:
+            logging.info(f"Found expected {actual_classes} classes: {list(label_encoder.classes_)}")
+
+        return df
+
+    def train_single_fold(self, df: pd.DataFrame, fold_num: int = 1, parent_loggers: list | None = None) -> tuple:
+        """
+        Train model on a single fold.
+
+        Args:
+            df: Dataset DataFrame
+            fold_num: Fold number to train
+            parent_loggers: List of parent loggers to use instead of creating new ones
+
+        Returns:
+            Tuple of (trainer, model, test_results)
+        """
+        logging.info(f"Training on fold {fold_num}")
+
+        # Create data module and setup
+        data_module = self._create_data_module(df, fold_num)
+
+        # Create model with class weights
+        model = self._create_model(data_module)
+
+        # Setup loggers
+        loggers = self._setup_loggers(fold_num, parent_loggers)
+
+        # Create trainer
+        trainer = self._create_trainer(loggers)
+
+        # Log training info
+        self._log_training_info(trainer)
+
+        # Train and test
+        trainer.fit(model, data_module)
+        test_results = trainer.test(model, data_module, ckpt_path="best")
+
+        # Comprehensive evaluation
+        self._evaluate_model(model, data_module, loggers, fold_num, test_results, trainer)
+
+        return trainer, model, test_results
+
+    def _create_data_module(self, df: pd.DataFrame, fold_num: int) -> HaleDataModule:
+        """Create and setup data module."""
+        data_module = HaleDataModule(df=df, fold_num=fold_num)
+        data_module.setup("fit")
+
+        # Log dataset statistics
+        train_class_dist = data_module.train_dataset.df["grouped_labels"].value_counts().sort_index()
+        class_distribution = {}
+
+        for grouped_label, count in train_class_dist.items():
+            model_label = data_module.train_dataset.df[data_module.train_dataset.df["grouped_labels"] == grouped_label][
+                "model_labels"
+            ].iloc[0]
+            class_distribution[f"{grouped_label} (model_label={int(model_label)})"] = count
+
+        log_dataset_statistics(
+            train_size=len(data_module.train_dataset.df),
+            val_size=len(data_module.val_dataset.df),
+            test_size=len(data_module.test_dataset.df),
+            total_size=len(df),
+            class_distribution=class_distribution,
+        )
+
+        return data_module
+
+    def _create_model(self, data_module: HaleDataModule) -> HaleLightningModel:
+        """Create model with class weights."""
+        # Compute class weights
+        train_labels = data_module.get_train_labels()
+        unique_labels = np.unique(train_labels)
+        class_weights = compute_class_weight("balanced", classes=unique_labels, y=train_labels)
+        class_weights = torch.FloatTensor(class_weights)
+
+        logging.info(f"Class weights: {class_weights}")
+
+        # Create model
+        model = HaleLightningModel(
+            num_classes=config.NUM_CLASSES,
+            learning_rate=config.LEARNING_RATE,
+            model_name=config.MODEL_NAME,
+            class_weights=class_weights,
+        )
+
+        # Log model info
+        num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        logging.info(f"Model: {config.MODEL_NAME} with {config.NUM_CLASSES} classes")
+        logging.info(f"Total trainable parameters: {num_params:,}")
+
+        return model
+
+    def _setup_loggers(self, fold_num: int, parent_loggers: list | None) -> list:
+        """Setup loggers for training."""
+        if parent_loggers is not None:
+            logging.info(f"Using parent loggers for fold {fold_num}")
+            return parent_loggers
+        else:
+            experiment_name = f"hale_fold_{fold_num}"
+            loggers = setup_loggers(experiment_name)
+
+            # Log hyperparameters to Comet if present
+            for logger in loggers:
+                if hasattr(logger, "experiment") and hasattr(logger.experiment, "log_parameters"):
+                    log_hyperparameters_to_comet(logger, fold_num)
+
+            return loggers
+
+    def _create_trainer(self, loggers: list) -> pl.Trainer:
+        """Create PyTorch Lightning trainer."""
+        # Setup callbacks
+        checkpoint_callback = ModelCheckpoint(
+            monitor=config.CHECKPOINT_MONITOR,
+            mode="max",
+            save_top_k=1,
+            filename="hale-{epoch:02d}-{val_acc:.3f}",
+        )
+
+        early_stop_callback = EarlyStopping(
+            monitor=config.EARLY_STOPPING_MONITOR,
+            patience=config.EARLY_STOPPING_PATIENCE,
+            mode=config.EARLY_STOPPING_MODE,
+            verbose=True,
+        )
+
+        progress_bar = RichProgressBar(leave=True)
+
+        # Create trainer
+        trainer = pl.Trainer(
+            max_epochs=config.MAX_EPOCHS,
+            accelerator=config.ACCELERATOR,
+            devices=config.DEVICES,
+            precision=self.precision,
+            logger=loggers,
+            callbacks=[checkpoint_callback, early_stop_callback, progress_bar],
+            log_every_n_steps=config.LOG_EVERY_N_STEPS,
+            enable_progress_bar=True,
+            enable_model_summary=getattr(config, "ENABLE_MODEL_SUMMARY", True),
+            deterministic=False,
+        )
+
+        return trainer
+
+    def _log_training_info(self, trainer: pl.Trainer) -> None:
+        """Log training configuration information."""
+        device_info = str(trainer.device_ids) if hasattr(trainer, "device_ids") else "auto"
+
+        log_training_info(
+            max_epochs=config.MAX_EPOCHS,
+            learning_rate=config.LEARNING_RATE,
+            batch_size=config.BATCH_SIZE,
+            data_type=config.DATA_TYPE,
+            precision=self.precision,
+            device_info=device_info,
+        )
+
+        # Additional device info
+        logging.info(f"CUDA available: {torch.cuda.is_available()}")
+        if torch.cuda.is_available():
+            logging.info(f"CUDA version: {torch.version.cuda}")
+            logging.info(f"GPU device: {torch.cuda.get_device_name()}")
+
+    def _evaluate_model(
+        self,
+        model: HaleLightningModel,
+        data_module: HaleDataModule,
+        loggers: list,
+        fold_num: int,
+        test_results: list[dict],
+        trainer: pl.Trainer,
+    ) -> None:
+        """Perform comprehensive model evaluation."""
+        if not test_results:
+            logging.warning("No test results available for evaluation")
+            return
+
+        test_metrics = test_results[0]
+
+        # Log test results
+        log_test_results(test_metrics, trainer.checkpoint_callback.best_model_path)
+
+        # Log confusion matrix and classification report
+        log_confusion_matrix_and_classification_report(model, loggers, fold_num, self.class_names)
+
+        # Generate and log ROC curves
+        self._generate_and_log_roc_curves(model, loggers, fold_num)
+
+        # Find and log misclassified samples
+        self._find_and_log_misclassified_samples(model, data_module, loggers, fold_num)
+
+        # Log final metrics
+        log_final_metrics(loggers, test_metrics, trainer.checkpoint_callback.best_model_path, fold_num)
+
+        # Reset model's test collections for next fold
+        model.reset_test_collections()
+
+    def _generate_and_log_roc_curves(self, model: HaleLightningModel, loggers: list, fold_num: int) -> None:
+        """Generate and log ROC curves."""
+        try:
+            y_true = model.test_targets
+            y_pred_proba = torch.softmax(model.test_predictions, dim=1)
+
+            if len(y_true) > 0:
+                # Convert to numpy for sklearn functions
+                y_true_np = y_true.cpu().numpy()
+                y_pred_proba_np = y_pred_proba.cpu().numpy()
+
+                # Generate ROC curves
+                roc_image, roc_data = generate_roc_curves(y_true_np, y_pred_proba_np, self.class_names, fold_num)
+
+                # Log ROC curves to experiment trackers
+                log_roc_curves(roc_image, roc_data, loggers, fold_num)
+
+                logging.info(f"Generated and logged ROC curves for fold {fold_num}")
+
+                # Log AUC scores for each class
+                for class_name, data in roc_data.items():
+                    logging.info(f"Fold {fold_num} - {class_name} AUC: {data['auc']:.4f}")
+            else:
+                logging.warning(f"No test predictions available for ROC curves in fold {fold_num}")
+
+        except Exception as e:
+            logging.warning(f"Could not generate ROC curves for fold {fold_num}: {e}")
+
+    def _find_and_log_misclassified_samples(
+        self, model: HaleLightningModel, data_module: HaleDataModule, loggers: list, fold_num: int
+    ) -> None:
+        """Find and log misclassified samples."""
+        try:
+            misclassified_samples = find_misclassified_samples(model, data_module, fold_num, num_samples=10)
+
+            if misclassified_samples:
+                log_misclassified_samples(misclassified_samples, loggers, fold_num, self.class_names)
+                logging.info(f"Found and logged {len(misclassified_samples)} misclassified samples for fold {fold_num}")
+            else:
+                logging.info(f"No misclassified samples found for fold {fold_num}")
+
+        except Exception as e:
+            logging.warning(f"Could not process misclassified samples for fold {fold_num}: {e}")

@@ -46,7 +46,11 @@ dependencies = [
 models = [
     "torch~=2.6",
     "timm",
-    "comet_ml"
+    "comet_ml",
+    "tensorboard",
+    "pytorch-lightning",
+    "matplotlib",
+    "seaborn"
 ]
 tests = [
     "pytest",

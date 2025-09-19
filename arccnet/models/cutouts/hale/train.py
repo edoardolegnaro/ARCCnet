@@ -1,188 +1,157 @@
-# ---
-# jupyter:
-#   jupytext:
-#     cell_metadata_filter: -all
-#     custom_cell_magics: kql
-#     text_representation:
-#       extension: .py
-#       format_name: percent
-#       format_version: '1.3'
-#       jupytext_version: 1.11.2
-#   kernelspec:
-#     display_name: py_3.11
-#     language: python
-#     name: python3
-# ---
+"""
+Main training script for Hale classification models.
 
-# %%
+This script provides a clean, modular interface for training Hale models
+either on a single fold or with cross-validation across all folds.
+
+The script has been refactored to use modular components:
+- HaleTrainer: Handles single-fold training workflow
+- CrossValidationManager: Manages cross-validation experiments
+- Evaluation modules: Handle model evaluation and metrics
+- Logging utilities: Manage experiment logging
+
+Usage:
+    python train.py  # Train according to config.TRAIN_ALL_FOLDS setting
+"""
+
 import logging
-from pathlib import Path
-
-import pandas as pd
-import pytorch_lightning as pl
-import torch
-from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
-from pytorch_lightning.loggers import CSVLogger
+import warnings
 
 import arccnet.models.cutouts.hale.config as config
-from arccnet.models.cutouts.hale.data_preparation import prepare_dataset
-from arccnet.models.cutouts.hale.lightning_data import HaleDataModule
-from arccnet.models.cutouts.hale.lightning_model import HaleLightningModel, compute_class_weights
+from arccnet.models.cutouts.hale.cross_validation import CrossValidationManager
+from arccnet.models.cutouts.hale.trainer import HaleTrainer
 
-# Set tensor precision for better performance on modern GPUs
-torch.set_float32_matmul_precision("medium")
-
-# Try to import RichProgressBar, fallback to TQDMProgressBar
-try:
-    from pytorch_lightning.callbacks import RichProgressBar
-
-    RICH_AVAILABLE = True
-except ImportError:
-    from pytorch_lightning.callbacks import TQDMProgressBar
-
-    RICH_AVAILABLE = False
-
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-
-# %%
-# Prepare dataset
-PROCESSED_DATA_PATH = (
-    Path(config.DATA_FOLDER)
-    / f"processed_dataset_{config.classes}_{config.N_FOLDS}-splits_rs-{config.RANDOM_STATE}.parquet"
-)
-
-if not PROCESSED_DATA_PATH.exists():
-    logging.info("Preparing dataset for the first time...")
-    df_processed = prepare_dataset(save_path=str(PROCESSED_DATA_PATH))
-else:
-    logging.info(f"Loading previously prepared dataset: {PROCESSED_DATA_PATH.name}")
-    df_processed = pd.read_parquet(str(PROCESSED_DATA_PATH))
-
-logging.info(f"Dataset shape: {df_processed.shape}")
-logging.info(f"Label distribution:\n{df_processed['grouped_labels'].value_counts()}")
+# Suppress common warnings at the module level
+warnings.filterwarnings("ignore", category=UserWarning, message=".*hipBLASLt.*")
+warnings.filterwarnings("ignore", category=UserWarning, message=".*Precision.*not supported by the model summary.*")
+warnings.filterwarnings("ignore", category=UserWarning, message=".*does not have many workers.*")
 
 
-# %%
-def train_single_fold(df: pd.DataFrame, fold_num: int = 1):
-    """Train model on a single fold."""
+def setup_logging() -> None:
+    """Set up basic logging configuration."""
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-    logging.info(f"Training on fold {fold_num}")
 
-    # Create data module
-    data_module = HaleDataModule(df=df, fold_num=fold_num)
+def prepare_and_encode_dataset():
+    """
+    Prepare and encode the dataset once.
 
-    # Setup data to compute class weights
-    data_module.setup("fit")
-    train_labels = data_module.get_train_labels()
-    class_weights = compute_class_weights(train_labels, config.NUM_CLASSES)
+    Returns:
+        pd.DataFrame: Processed dataset with encoded labels
+    """
+    trainer = HaleTrainer()
+    return trainer.prepare_dataset_once()
 
-    logging.info(f"Train samples: {len(data_module.train_dataset.df)}")
-    logging.info(f"Val samples: {len(data_module.val_dataset.df)}")
-    logging.info(f"Class weights: {class_weights}")
-    logging.info(
-        f"Batch size: {config.BATCH_SIZE}, Estimated steps per epoch: {len(data_module.train_dataset.df) // config.BATCH_SIZE}"
-    )
 
-    # Create model
-    model = HaleLightningModel(
-        num_classes=config.NUM_CLASSES,
-        learning_rate=config.LEARNING_RATE,
-        model_name=config.MODEL_NAME,
-        class_weights=class_weights,
-    )
+def train_single_fold_mode(df) -> None:
+    """
+    Train on a single fold for quick testing.
 
-    logging.info(f"Model: {config.MODEL_NAME} with {config.NUM_CLASSES} classes")
+    Args:
+        df: Processed dataset DataFrame
+    """
+    logging.info("Starting training on fold 1 (single fold mode)...")
 
-    # Setup callbacks
-    checkpoint_callback = ModelCheckpoint(
-        monitor="val_acc",
-        mode="max",
-        save_top_k=1,
-        filename=f"hale-fold{fold_num}-{{epoch:02d}}-{{val_acc:.3f}}",
-    )
+    trainer = HaleTrainer()
+    trainer_obj, model, test_results = trainer.train_single_fold(df, fold_num=1)
 
-    early_stop_callback = EarlyStopping(
-        monitor="val_loss",
-        patience=10,
-        mode="min",
-        verbose=True,
-    )
+    logging.info("Single fold training completed!")
 
-    # Progress bar callback for better visualization
-    if RICH_AVAILABLE:
-        progress_bar = RichProgressBar(leave=True)
-        logging.info("Using RichProgressBar for enhanced progress display")
-    else:
-        progress_bar = TQDMProgressBar(refresh_rate=10)
-        logging.info("Using TQDMProgressBar for progress display")
+    # Log final results
+    if test_results:
+        test_metrics = test_results[0]
+        logging.info("=" * 50)
+        logging.info("SINGLE FOLD TRAINING COMPLETED")
+        logging.info("=" * 50)
+        logging.info(f"Final Test Accuracy: {test_metrics.get('test_acc', 'N/A'):.4f}")
+        logging.info(f"Final Test F1: {test_metrics.get('test_f1', 'N/A'):.4f}")
+        logging.info(f"Final Test Loss: {test_metrics.get('test_loss', 'N/A'):.4f}")
+        logging.info(f"Best checkpoint: {trainer_obj.checkpoint_callback.best_model_path}")
+        logging.info("=" * 50)
 
-    # Setup logger (using CSV to avoid TensorBoard/NumPy compatibility issues)
-    logger = CSVLogger(
-        save_dir="logs",
-        name=f"hale_fold_{fold_num}",
-    )
 
-    # Create trainer with explicit progress bar settings
-    trainer = pl.Trainer(
-        max_epochs=config.MAX_EPOCHS,
-        accelerator=config.ACCELERATOR,
-        devices=config.DEVICES,
-        logger=logger,
-        callbacks=[checkpoint_callback, early_stop_callback, progress_bar],
-        log_every_n_steps=10,
-        enable_progress_bar=True,
-        enable_model_summary=True,
-        deterministic=False,  # Set to True for reproducibility but may slow training
-    )
+def train_cross_validation_mode(df) -> None:
+    """
+    Train on all folds for comprehensive cross-validation.
 
-    # Train model
-    logging.info("Starting training...")
+    Args:
+        df: Processed dataset DataFrame
+    """
+    logging.info("Starting cross-validation training on all folds...")
+
+    cv_manager = CrossValidationManager()
+    results, summary = cv_manager.run_cross_validation(df)
+
+    logging.info("Cross-validation training completed!")
+
+    # Log final summary
+    if summary and "metrics_summary" in summary:
+        metrics = summary["metrics_summary"]
+        logging.info("=" * 50)
+        logging.info("CROSS-VALIDATION COMPLETED")
+        logging.info("=" * 50)
+
+        if "test_accuracy" in metrics:
+            acc_mean = metrics["test_accuracy"].get("mean", 0)
+            acc_std = metrics["test_accuracy"].get("std", 0)
+            logging.info(f"Mean Test Accuracy: {acc_mean:.4f} ± {acc_std:.4f}")
+
+        if "test_f1" in metrics:
+            f1_mean = metrics["test_f1"].get("mean", 0)
+            f1_std = metrics["test_f1"].get("std", 0)
+            logging.info(f"Mean Test F1: {f1_mean:.4f} ± {f1_std:.4f}")
+
+        if "test_loss" in metrics:
+            loss_mean = metrics["test_loss"].get("mean", 0)
+            loss_std = metrics["test_loss"].get("std", 0)
+            logging.info(f"Mean Test Loss: {loss_mean:.4f} ± {loss_std:.4f}")
+
+        exp_info = summary.get("experiment_info", {})
+        total_time = exp_info.get("total_training_time", 0)
+        logging.info(f"Total Training Time: {total_time:.1f}s")
+        logging.info("=" * 50)
+
+
+def main() -> None:
+    """
+    Main execution function.
+
+    Prepares the dataset and runs training according to configuration.
+    """
+    # Set up logging
+    setup_logging()
+
+    # Log configuration info
+    logging.info("=" * 60)
+    logging.info("HALE CLASSIFICATION TRAINING")
+    logging.info("=" * 60)
+    logging.info(f"Model: {config.MODEL_NAME}")
+    logging.info(f"Classes: {config.classes}")
+    logging.info(f"Number of folds: {config.N_FOLDS}")
+    logging.info(f"Batch size: {config.BATCH_SIZE}")
+    logging.info(f"Learning rate: {config.LEARNING_RATE}")
     logging.info(f"Max epochs: {config.MAX_EPOCHS}")
-    logging.info(f"Device: {trainer.device_ids if hasattr(trainer, 'device_ids') else 'auto'}")
+    logging.info(f"Train all folds: {config.TRAIN_ALL_FOLDS}")
+    logging.info("=" * 60)
 
-    trainer.fit(model, data_module)
+    try:
+        # Prepare dataset once at runtime
+        logging.info("Preparing dataset...")
+        df_processed = prepare_and_encode_dataset()
+        logging.info(f"Dataset prepared successfully. Shape: {df_processed.shape}")
 
-    # Test model
-    logging.info("Starting testing...")
-    trainer.test(model, data_module, ckpt_path="best")
+        # Run training based on configuration
+        if config.TRAIN_ALL_FOLDS:
+            train_cross_validation_mode(df_processed)
+        else:
+            train_single_fold_mode(df_processed)
 
-    return trainer, model
+    except Exception as e:
+        logging.error(f"Training failed with error: {e}")
+        raise
 
-
-# %%
-def train_all_folds(df: pd.DataFrame):
-    """Train model on all folds for cross-validation."""
-
-    results = {}
-
-    for fold_num in range(1, config.N_FOLDS + 1):
-        logging.info(f"\n{'=' * 50}")
-        logging.info(f"TRAINING FOLD {fold_num}/{config.N_FOLDS}")
-        logging.info(f"{'=' * 50}")
-
-        try:
-            trainer, model = train_single_fold(df, fold_num)
-            results[fold_num] = {
-                "trainer": trainer,
-                "model": model,
-                "best_checkpoint": trainer.checkpoint_callback.best_model_path,
-            }
-            logging.info(f"Fold {fold_num} completed successfully")
-
-        except Exception as e:
-            logging.error(f"Fold {fold_num} failed with error: {e}")
-            results[fold_num] = {"error": str(e)}
-
-    return results
+    logging.info("Training script completed successfully!")
 
 
-# %%
-# Train on a single fold first for testing
 if __name__ == "__main__":
-    # For quick testing, train on fold 1 only
-    logging.info("Starting training on fold 1...")
-    trainer, model = train_single_fold(df_processed, fold_num=1)
-
-    # Uncomment below to train on all folds
-    # logging.info("Starting cross-validation training...")
-    # results = train_all_folds(df_processed)
+    main()

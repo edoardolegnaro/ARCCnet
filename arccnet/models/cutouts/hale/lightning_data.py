@@ -6,8 +6,8 @@ import pandas as pd
 import pytorch_lightning as pl
 from torch.utils.data import DataLoader
 
-from . import config
-from .dataset import HaleDataset, get_fold_data
+import arccnet.models.cutouts.hale.config as config
+from arccnet.models.cutouts.hale.dataset import HaleDataset, get_fold_data
 
 
 class HaleDataModule(pl.LightningDataModule):
@@ -29,21 +29,18 @@ class HaleDataModule(pl.LightningDataModule):
     def setup(self, stage: str = None):
         """Set up datasets for different stages."""
         if stage == "fit" or stage is None:
-            # Split data only once
+            # Split data
             train_df, val_df, test_df = get_fold_data(self.df, self.fold_num)
 
-            # Create datasets
-            self.train_dataset = HaleDataset(train_df, data_type=config.DATA_TYPE)
-            self.val_dataset = HaleDataset(val_df, data_type=config.DATA_TYPE)
-            self.test_dataset = HaleDataset(test_df, data_type=config.DATA_TYPE)
-
-            # Store label mapping from train dataset
-            self.label_mapping = self.train_dataset.label_mapping
+            # Create datasets with augmentation only for training
+            self.train_dataset = HaleDataset(train_df, data_type=config.DATA_TYPE, is_training=True)
+            self.val_dataset = HaleDataset(val_df, data_type=config.DATA_TYPE, is_training=False)
+            self.test_dataset = HaleDataset(test_df, data_type=config.DATA_TYPE, is_training=False)
 
         if stage == "test":
             if self.test_dataset is None:
                 _, _, test_df = get_fold_data(self.df, self.fold_num)
-                self.test_dataset = HaleDataset(test_df, data_type=config.DATA_TYPE)
+                self.test_dataset = HaleDataset(test_df, data_type=config.DATA_TYPE, is_training=False)
 
     def train_dataloader(self):
         return DataLoader(
@@ -51,10 +48,10 @@ class HaleDataModule(pl.LightningDataModule):
             batch_size=self.batch_size,
             shuffle=True,
             num_workers=self.num_workers,
-            pin_memory=True,
-            persistent_workers=True if self.num_workers > 0 else False,
-            prefetch_factor=2 if self.num_workers > 0 else None,
-            multiprocessing_context="spawn" if self.num_workers > 0 else None,
+            pin_memory=config.DATALOADER_PIN_MEMORY,
+            persistent_workers=config.DATALOADER_PERSISTENT_WORKERS if self.num_workers > 0 else False,
+            prefetch_factor=config.DATALOADER_PREFETCH_FACTOR if self.num_workers > 0 else None,
+            multiprocessing_context=config.DATALOADER_MULTIPROCESSING_CONTEXT if self.num_workers > 0 else None,
         )
 
     def val_dataloader(self):
@@ -63,10 +60,10 @@ class HaleDataModule(pl.LightningDataModule):
             batch_size=self.batch_size,
             shuffle=False,
             num_workers=self.num_workers,
-            pin_memory=True,
-            persistent_workers=True if self.num_workers > 0 else False,
-            prefetch_factor=2 if self.num_workers > 0 else None,
-            multiprocessing_context="spawn" if self.num_workers > 0 else None,
+            pin_memory=config.DATALOADER_PIN_MEMORY,
+            persistent_workers=config.DATALOADER_PERSISTENT_WORKERS if self.num_workers > 0 else False,
+            prefetch_factor=config.DATALOADER_PREFETCH_FACTOR if self.num_workers > 0 else None,
+            multiprocessing_context=config.DATALOADER_MULTIPROCESSING_CONTEXT if self.num_workers > 0 else None,
         )
 
     def test_dataloader(self):
@@ -75,12 +72,12 @@ class HaleDataModule(pl.LightningDataModule):
             batch_size=self.batch_size,
             shuffle=False,
             num_workers=self.num_workers,
-            pin_memory=True,
-            persistent_workers=True if self.num_workers > 0 else False,
-            prefetch_factor=2 if self.num_workers > 0 else None,
-            multiprocessing_context="spawn" if self.num_workers > 0 else None,
+            pin_memory=config.DATALOADER_PIN_MEMORY,
+            persistent_workers=config.DATALOADER_PERSISTENT_WORKERS if self.num_workers > 0 else False,
+            prefetch_factor=config.DATALOADER_PREFETCH_FACTOR if self.num_workers > 0 else None,
+            multiprocessing_context=config.DATALOADER_MULTIPROCESSING_CONTEXT if self.num_workers > 0 else None,
         )
 
     def get_train_labels(self):
-        """Get the original encoded labels from training dataset for class weight computation."""
-        return self.train_dataset.df["encoded_labels"].values
+        """Get the model labels from training dataset for class weight computation."""
+        return self.train_dataset.df["model_labels"].values

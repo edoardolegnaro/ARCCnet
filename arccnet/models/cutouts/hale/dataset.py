@@ -8,21 +8,47 @@ import numpy as np
 import pandas as pd
 import torch
 from torch.utils.data import Dataset
+from torchvision import transforms
+from torchvision.transforms import v2
 
 from astropy.io import fits
 
-from arccnet.visualisation import utils as ut_v
+import arccnet.models.cutouts.hale.config as config
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+def get_transforms(is_training: bool = False):
+    """Create torchvision transform pipeline."""
+
+    # Augmentation transforms (only during training) - using v2 transforms like old config
+    if is_training and config.USE_AUGMENTATION:
+        augmentation_transforms = v2.Compose(
+            [
+                v2.RandomVerticalFlip(),
+                v2.RandomHorizontalFlip(),
+                v2.RandomPerspective(distortion_scale=config.PERSPECTIVE_DISTORTION_SCALE, p=config.PERSPECTIVE_PROB),
+                v2.RandomAffine(
+                    degrees=config.ROTATION_DEGREES,
+                    translate=config.AFFINE_TRANSLATE,
+                    scale=config.AFFINE_SCALE,
+                    shear=config.AFFINE_SHEAR,
+                ),
+            ]
+        )
+        return augmentation_transforms
+
+    # For validation/test, return None (no transforms)
+    return None
+
+
 def get_fold_data(df: pd.DataFrame, fold_num: int) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Get train/val/test splits for a specific fold."""
-    train_df = df[df[f"fold_{fold_num}"] == "train"].copy()
-    val_df = df[df[f"fold_{fold_num}"] == "val"].copy()
-    test_df = df[df[f"fold_{fold_num}"] == "test"].copy()
+    train_df = df[df[f"Fold {fold_num}"] == "train"].copy()
+    val_df = df[df[f"Fold {fold_num}"] == "val"].copy()
+    test_df = df[df[f"Fold {fold_num}"] == "test"].copy()
     return train_df, val_df, test_df
 
 
@@ -33,23 +59,42 @@ class HaleDataset(Dataset):
         self,
         df: pd.DataFrame,
         data_type: str = "magnetogram",
-        divisor: float = 1000.0,
-        target_height: int = 200,
-        target_width: int = 200,
+        divisor: float = None,
+        target_height: int = None,
+        target_width: int = None,
+        is_training: bool = False,
     ):
         self.df = df.copy()
         self.data_type = data_type
-        self.divisor = divisor
-        self.target_height = target_height
-        self.target_width = target_width
+        self.divisor = divisor or config.IMAGE_DIVISOR
+        self.target_height = target_height or config.IMAGE_TARGET_HEIGHT
+        self.target_width = target_width or config.IMAGE_TARGET_WIDTH
+        self.is_training = is_training
 
-        # Create label mapping from unique labels to contiguous indices
-        unique_labels = sorted(self.df["grouped_labels_encoded"].unique())
-        self.label_mapping = {label: idx for idx, label in enumerate(unique_labels)}
-        logger.info(f"Dataset label mapping: {self.label_mapping}")
+        # Initialize transforms using torchvision
+        self.transform = get_transforms(is_training=is_training)
 
-        # Apply label mapping to create model-compatible labels
-        self.df["model_label"] = self.df["grouped_labels_encoded"].map(self.label_mapping)
+        # Verify that model_labels column exists
+        if "model_labels" not in self.df.columns:
+            raise ValueError("DataFrame must contain 'model_labels' column with contiguous indices starting from 0")
+
+        # Verify labels are contiguous starting from 0
+        unique_labels = sorted(self.df["model_labels"].unique())
+        expected_labels = list(range(len(unique_labels)))
+        if unique_labels != expected_labels:
+            raise ValueError(
+                f"model_labels must be contiguous starting from 0. Got: {unique_labels}, Expected: {expected_labels}"
+            )
+
+        # Only log once to avoid spam from multiple dataset instances
+        if not hasattr(HaleDataset, "_logged_labels"):
+            # Convert to regular Python ints for cleaner logging
+            clean_labels = [int(label) for label in unique_labels]
+            label_to_grouped = {int(k): v for k, v in self.df.groupby("model_labels")["grouped_labels"].first().items()}
+
+            logger.info(f"Dataset using model_labels: {clean_labels}")
+            logger.info(f"Original grouped_labels mapping: {label_to_grouped}")
+            HaleDataset._logged_labels = True
 
     def __len__(self):
         return len(self.df)
@@ -64,7 +109,7 @@ class HaleDataset(Dataset):
         return old_path
 
     def _load_image(self, row: pd.Series) -> torch.Tensor:
-        """Load and preprocess image following McIntosh dataset pattern."""
+        """Load and preprocess image using more standard approaches."""
         # Get the appropriate path
         path_key = "path_image_cutout_hmi" if row["path_image_cutout_hmi"] != "" else "path_image_cutout_mdi"
         fits_file_path = self._convert_old_path_to_new(row[path_key])
@@ -78,13 +123,19 @@ class HaleDataset(Dataset):
         # Handle NaN values
         image_data = np.nan_to_num(image_data, nan=0.0)
 
-        # Apply transformations following McIntosh pattern
-        image_data = ut_v.hardtanh_transform_npy(image_data, divisor=self.divisor, min_val=-1.0, max_val=1.0)
-        image_data = ut_v.pad_resize_normalize(
-            image_data, target_height=self.target_height, target_width=self.target_width
+        # Convert to tensor for easier processing
+        image_tensor = torch.from_numpy(image_data).unsqueeze(0)  # Add channel dimension
+
+        # Apply normalization (equivalent to hardtanh_transform_npy but using torch)
+        image_tensor = image_tensor / self.divisor
+        image_tensor = torch.clamp(image_tensor, config.HARDTANH_MIN_VAL, config.HARDTANH_MAX_VAL)
+
+        # Resize using torchvision's functional interface (maintains aspect ratio better)
+        image_tensor = transforms.functional.resize(
+            image_tensor, size=[self.target_height, self.target_width], antialias=True
         )
 
-        return torch.from_numpy(image_data).unsqueeze(0)  # Add channel dimension
+        return image_tensor
 
     def __getitem__(self, idx):
         row = self.df.iloc[idx]
@@ -101,7 +152,11 @@ class HaleDataset(Dataset):
         else:
             raise ValueError(f"Unsupported data_type: {self.data_type}")
 
-        # Get label (already mapped to contiguous indices)
-        label = torch.tensor(row["model_label"], dtype=torch.long)
+        # Apply transforms (augmentations only during training)
+        if self.transform is not None:
+            image_data = self.transform(image_data)
+
+        # Get label (using model_labels which are contiguous starting from 0)
+        label = torch.tensor(row["model_labels"], dtype=torch.long)
 
         return image_data, label
