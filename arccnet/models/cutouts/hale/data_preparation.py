@@ -23,26 +23,154 @@ import argparse
 from typing import Any
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
+from tqdm import tqdm
 
 import arccnet.models.cutouts.hale.config as config
 from arccnet.models import dataset_utils as ut_d
 
+# ==============================================================================
+# CONFIGURABLE PARAMETERS
+# ==============================================================================
 
-def load_and_clean_dataset() -> tuple[pd.DataFrame, pd.DataFrame]:
+# NaN filtering parameters
+DEFAULT_NAN_THRESHOLD = 0.2  # Maximum allowed fraction of NaN values (20%)
+SHOW_PROGRESS = True  # Show progress bar during NaN filtering
+
+# Column names for cutout paths (prioritized in order)
+CUTOUT_PATH_COLUMNS = [
+    "path_image_cutout_hmi",  # Primary: HMI cutout paths
+    "path_image_cutout_mdi",  # Secondary: MDI cutout paths
+]
+
+# File format configuration
+FILE_FORMAT = "fits"  # Options: "fits", "numpy", "hdf5"
+FITS_HDU_INDEX = 0  # FITS HDU index for data (usually 0 or 1)
+
+# Logging configuration
+ENABLE_NAN_FILTERING_LOG = True
+LOG_DETAILED_STATS = True
+
+
+def filter_by_nan_threshold(
+    df: pd.DataFrame,
+    nan_threshold: float = DEFAULT_NAN_THRESHOLD,
+    data_folder: Path = None,
+    show_progress: bool = SHOW_PROGRESS,
+) -> pd.DataFrame:
     """
-    Load raw solar magnetogram dataset and apply basic cleaning operations.
+    Filter out magnetogram cutouts with excessive NaN values.
 
-    Loads the raw dataset from configured paths and applies standard cleaning
-    procedures to remove invalid/corrupted entries and standardize data format.
+    Args:
+        df: DataFrame with cutout references
+        nan_threshold: Maximum allowed fraction of NaN values (0-1)
+        data_folder: Base folder for cutout files (defaults to config.DATA_FOLDER)
+        show_progress: Show progress bar during filtering
+
+    Returns:
+        pd.DataFrame: Filtered dataframe with low-NaN cutouts only
+    """
+    if data_folder is None:
+        data_folder = Path(config.DATA_FOLDER)
+
+    if not ENABLE_NAN_FILTERING_LOG:
+        return df
+
+    logging.info(f"Filtering cutouts with NaN threshold: {nan_threshold * 100:.1f}%")
+
+    valid_indices = []
+    nan_stats = []
+
+    iterator = tqdm(df.iterrows(), total=len(df), desc="Filtering NaN cutouts") if show_progress else df.iterrows()
+
+    for idx, row in iterator:
+        try:
+            cutout = _load_cutout(row, data_folder)
+            if cutout is not None:
+                nan_fraction = np.isnan(cutout).sum() / cutout.size
+                nan_stats.append(nan_fraction)
+                if nan_fraction <= nan_threshold:
+                    valid_indices.append(idx)
+            else:
+                # Skip if no valid cutout found
+                nan_stats.append(1.0)
+        except Exception as e:
+            logging.warning(f"Error loading cutout at index {idx}: {e}")
+            nan_stats.append(1.0)
+
+    df_filtered = df.loc[valid_indices].copy()
+
+    if LOG_DETAILED_STATS and len(nan_stats) > 0:
+        nan_stats = np.array(nan_stats)
+        logging.info("NaN filtering results:")
+        logging.info(f"  Original: {len(df):,} cutouts")
+        logging.info(f"  Filtered: {len(df_filtered):,} cutouts ({len(df_filtered) / len(df) * 100:.1f}% retained)")
+        logging.info(f"  Removed:  {len(df) - len(df_filtered):,} cutouts")
+        logging.info(f"  Mean NaN fraction: {nan_stats.mean() * 100:.2f}%")
+        logging.info(f"  Max NaN fraction:  {nan_stats.max() * 100:.2f}%")
+
+    return df_filtered
+
+
+def _load_cutout(row, data_folder):
+    """
+    Load a single magnetogram cutout from available path columns.
+
+    Tries cutout path columns in priority order and loads based on file format.
+
+    Args:
+        row: DataFrame row containing path information
+        data_folder: Base folder for cutout files
+
+    Returns:
+        numpy.ndarray or None: Loaded cutout data or None if no valid path found
+    """
+    # Find the first available path
+    file_path = None
+    for path_col in CUTOUT_PATH_COLUMNS:
+        if path_col in row and row[path_col] and row[path_col] not in ["", "None"]:
+            file_path = Path(data_folder) / row[path_col]
+            if file_path.exists():
+                break
+
+    if file_path is None or not file_path.exists():
+        return None
+
+    # Load based on file format
+    try:
+        if FILE_FORMAT.lower() == "fits":
+            from astropy.io import fits
+
+            with fits.open(file_path) as hdul:
+                cutout = hdul[FITS_HDU_INDEX].data
+        elif FILE_FORMAT.lower() == "numpy":
+            cutout = np.load(file_path)
+        elif FILE_FORMAT.lower() == "hdf5":
+            import h5py
+
+            with h5py.File(file_path, "r") as f:
+                # Assume data is in the first dataset - adjust as needed
+                cutout = f[list(f.keys())[0]][:]
+        else:
+            raise ValueError(f"Unsupported file format: {FILE_FORMAT}")
+
+        return cutout
+
+    except Exception as e:
+        logging.warning(f"Failed to load cutout from {file_path}: {e}")
+        return None
+
+
+def load_and_clean_dataset(nan_threshold: float = DEFAULT_NAN_THRESHOLD) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Load raw solar magnetogram dataset and apply cleaning + NaN filtering.
+
+    Args:
+        nan_threshold: Maximum allowed NaN fraction (default from config)
 
     Returns:
         tuple[pd.DataFrame, pd.DataFrame]: Raw dataset and cleaned dataset
-            - First element: Original unprocessed dataframe
-            - Second element: Cleaned dataframe with invalid entries removed
-
-    Note:
-        Uses configuration from config module for data paths and cleaning parameters.
     """
     logging.info("Loading and cleaning dataset...")
 
@@ -51,6 +179,10 @@ def load_and_clean_dataset() -> tuple[pd.DataFrame, pd.DataFrame]:
 
     df_clean = ut_d.cleanup_df(df)
     logging.info(f"After cleanup: {df_clean.shape} ({len(df_clean) / len(df) * 100:.1f}% retained)")
+
+    # Add NaN filtering step
+    if ENABLE_NAN_FILTERING_LOG:
+        df_clean = filter_by_nan_threshold(df_clean, nan_threshold=nan_threshold, data_folder=Path(config.DATA_FOLDER))
 
     return df, df_clean
 
@@ -198,50 +330,29 @@ def prepare_dataset(
     n_splits: int = config.N_FOLDS,
     random_state: int = config.RANDOM_STATE,
     label_mapping: dict[str, Any] = None,
+    nan_threshold: float = DEFAULT_NAN_THRESHOLD,
 ) -> pd.DataFrame:
     """
-    Complete end-to-end dataset preparation pipeline for ARCCNet training.
-
-    Orchestrates the full data preparation process: loading, cleaning, label mapping,
-    filtering, and cross-validation fold creation. Optionally saves the final dataset.
-
+    Complete end-to-end dataset preparation pipeline with NaN filtering.
     Args:
-        save_path: Path to save processed dataset (default: None, no saving)
-        n_splits: Number of cross-validation folds (default from config)
-        random_state: Random seed for reproducibility (default from config)
-        label_mapping: Custom label mapping dict (default: use config mapping)
-
+        save_path: Path to save processed dataset
+        n_splits: Number of cross-validation folds
+        random_state: Random seed for reproducibility
+        label_mapping: Custom label mapping dict
+        nan_threshold: Maximum allowed NaN fraction (0-1)
     Returns:
-        pd.DataFrame: Fully processed dataset with fold assignments ready for training
-
-    Pipeline Steps:
-        1. Load raw dataset and apply cleaning
-        2. Apply label mapping and filtering/undersampling
-        3. Create CV folds with AR number separation validation
-        4. Optionally save processed dataset
-
-    Example:
-        df = prepare_dataset(save_path='processed_data.parquet', n_splits=5)
+        pd.DataFrame: Fully processed dataset with fold assignments
     """
-    # Step 1: Load and clean raw data
-    df_raw, df_clean = load_and_clean_dataset()
-
-    # Step 2: Use default label mapping if none provided
+    # Step 1: Load, clean, and filter NaNs
+    df_raw, df_clean = load_and_clean_dataset(nan_threshold=nan_threshold)
+    # Rest of the pipeline remains the same...
     if label_mapping is None:
         label_mapping = config.label_mapping
-        logging.info("Using default label mapping from config")
-
-    # Step 3: Apply label mapping and filtering/undersampling
     df_original, df_processed = apply_label_mapping_and_filter(df_clean, label_mapping=label_mapping)
-
-    # Step 4: Create cross-validation folds with AR separation validation
     df_with_folds = create_and_validate_cv_folds(df_processed, n_splits=n_splits, random_state=random_state)
-
-    # Step 5: Save processed dataset if path provided
     if save_path:
         df_with_folds.to_parquet(save_path, index=False)
         logging.info(f"Processed dataset saved to: {save_path}")
-
     return df_with_folds
 
 
