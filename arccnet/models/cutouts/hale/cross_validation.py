@@ -41,6 +41,24 @@ class CrossValidationManager:
         self.trainer = HaleTrainer(class_names=self.class_names)
         setup_basic_logging()
 
+    @staticmethod
+    def _compute_stats(values: list[float]) -> dict[str, float]:
+        """Compute statistics for a list of values."""
+        arr = np.array(values)
+        return {
+            "mean": float(np.mean(arr)),
+            "std": float(np.std(arr)),
+            "min": float(np.min(arr)),
+            "max": float(np.max(arr)),
+            "values": values,
+        }
+
+    @staticmethod
+    def _format_metric_line(name: str, mean: float, min_val: float, max_val: float) -> str:
+        """Format metric line for logging."""
+        range_half = (max_val - min_val) / 2
+        return f"{name:15}: {mean:.4f} ± {range_half:.4f} (range: {min_val:.4f}-{max_val:.4f})"
+
     def run_cross_validation(self, df: pd.DataFrame) -> tuple[dict, dict]:
         """
         Run cross-validation training across all folds.
@@ -77,18 +95,14 @@ class CrossValidationManager:
 
                 if fold_result["status"] == "success":
                     fold_metrics.append(self._extract_fold_metrics(fold_result))
-
                     if fold_result.get("confusion_matrix"):
                         fold_confusion_matrices.append(np.array(fold_result["confusion_matrix"]))
                     if fold_result.get("classification_report"):
                         fold_classification_reports.append(fold_result["classification_report"])
 
-                logging.info(f"Fold {fold_num} completed successfully in {fold_result.get('training_time', 0):.1f}s")
-
-                if "test_accuracy" in fold_result:
                     logging.info(
-                        f"Fold {fold_num} Test Accuracy: {fold_result['test_accuracy']:.4f}, "
-                        f"F1: {fold_result['test_f1']:.4f}"
+                        f"Fold {fold_num} completed in {fold_result.get('training_time', 0):.1f}s | "
+                        f"Accuracy: {fold_result['test_accuracy']:.4f}, F1: {fold_result['test_f1']:.4f}"
                     )
 
             except Exception as e:
@@ -116,13 +130,10 @@ class CrossValidationManager:
 
     def _setup_main_loggers(self, start_time: datetime) -> list:
         """Set up unified loggers for the entire cross-validation run."""
-        main_loggers = []
         experiment_name = f"hale_{config.classes}_cv_{start_time.strftime('%Y%m%d_%H%M%S')}"
 
         try:
             main_loggers = setup_loggers(experiment_name)
-
-            # Log experiment configuration to main loggers
             experiment_config = {
                 "n_folds": config.N_FOLDS,
                 "classes": config.classes,
@@ -134,6 +145,7 @@ class CrossValidationManager:
                 "image_size": getattr(config, "IMAGE_SIZE", "unknown"),
             }
 
+            # Log hyperparameters to each logger
             for logger in main_loggers:
                 try:
                     if hasattr(logger, "log_hyperparams"):
@@ -144,49 +156,42 @@ class CrossValidationManager:
                     logging.warning(f"Could not log hyperparameters to {type(logger).__name__}: {e}")
 
             logging.info(f"Unified experiment loggers created: {[type(logger).__name__ for logger in main_loggers]}")
+            return main_loggers
 
         except Exception as e:
             logging.warning(f"Could not set up unified loggers: {e}")
-            main_loggers = []
-
-        return main_loggers
+            return []
 
     def _train_single_fold(
         self, df: pd.DataFrame, fold_num: int, main_loggers: list, fold_start_time: datetime
     ) -> dict:
         """Train a single fold and return results."""
         trainer, model, test_results = self.trainer.train_single_fold(df, fold_num, parent_loggers=main_loggers)
+        training_time = (datetime.now() - fold_start_time).total_seconds()
+
+        base_result = {
+            "fold": fold_num,
+            "trainer": trainer,
+            "model": model,
+            "training_time": training_time,
+        }
 
         if test_results and len(test_results) > 0:
             test_metrics = test_results[0]
-
-            # Get confusion matrix and classification report from model
             cm, class_report = model.get_confusion_matrix_and_classification_report(self.class_names)
 
-            fold_result = {
-                "fold": fold_num,
+            return {
+                **base_result,
                 "status": "success",
-                "trainer": trainer,
-                "model": model,
                 "test_loss": test_metrics.get("test_loss", float("nan")),
                 "test_accuracy": test_metrics.get("test_acc", float("nan")),
                 "test_f1": test_metrics.get("test_f1", float("nan")),
                 "best_checkpoint": trainer.checkpoint_callback.best_model_path,
-                "training_time": (datetime.now() - fold_start_time).total_seconds(),
                 "confusion_matrix": cm.tolist() if cm is not None else None,
                 "classification_report": class_report,
             }
-        else:
-            fold_result = {
-                "fold": fold_num,
-                "status": "no_test_results",
-                "trainer": trainer,
-                "model": model,
-                "error": "No test results available",
-                "training_time": (datetime.now() - fold_start_time).total_seconds(),
-            }
 
-        return fold_result
+        return {**base_result, "status": "no_test_results", "error": "No test results available"}
 
     def _extract_fold_metrics(self, fold_result: dict) -> dict:
         """Extract metrics from fold result for summary."""
@@ -241,128 +246,64 @@ class CrossValidationManager:
     def _calculate_metric_statistics(self, fold_metrics: list[dict]) -> dict:
         """Calculate statistics for main metrics across folds."""
         valid_metrics = [m for m in fold_metrics if not np.isnan(m.get("test_accuracy", float("nan")))]
-
         if not valid_metrics:
             return {}
 
-        accuracies = [m["test_accuracy"] for m in valid_metrics]
-        f1_scores = [m["test_f1"] for m in valid_metrics]
-        losses = [m["test_loss"] for m in valid_metrics]
-        times = [m["training_time"] for m in valid_metrics]
+        metric_keys = ["test_accuracy", "test_f1", "test_loss", "training_time"]
+        result = {key: self._compute_stats([m[key] for m in valid_metrics]) for key in metric_keys}
 
-        return {
-            "test_accuracy": {
-                "mean": np.mean(accuracies),
-                "std": np.std(accuracies),
-                "min": np.min(accuracies),
-                "max": np.max(accuracies),
-                "values": accuracies,
-            },
-            "test_f1": {
-                "mean": np.mean(f1_scores),
-                "std": np.std(f1_scores),
-                "min": np.min(f1_scores),
-                "max": np.max(f1_scores),
-                "values": f1_scores,
-            },
-            "test_loss": {
-                "mean": np.mean(losses),
-                "std": np.std(losses),
-                "min": np.min(losses),
-                "max": np.max(losses),
-                "values": losses,
-            },
-            "training_time": {
-                "mean": np.mean(times),
-                "std": np.std(times),
-                "total": np.sum(times),
-                "values": times,
-            },
-        }
+        # Add total time for training_time metric
+        result["training_time"]["total"] = float(np.sum([m["training_time"] for m in valid_metrics]))
+
+        return result
 
     def _calculate_class_metrics(self, fold_classification_reports: list[dict]) -> dict:
         """Calculate per-class metrics across folds."""
         per_class_metrics = {}
+        metric_names = ["precision", "recall", "f1-score", "support"]
 
         for class_name in self.class_names:
-            precisions = []
-            recalls = []
-            f1s = []
-            supports = []
+            class_data = {}
+            for metric_name in metric_names:
+                values = [
+                    report[class_name].get(metric_name, 0)
+                    for report in fold_classification_reports
+                    if class_name in report
+                ]
+                if values:
+                    # Compute stats without 'values' key for cleaner output
+                    stats = self._compute_stats(values)
+                    del stats["values"]
+                    class_data[metric_name] = stats
 
-            for report in fold_classification_reports:
-                if class_name in report:
-                    precisions.append(report[class_name].get("precision", 0))
-                    recalls.append(report[class_name].get("recall", 0))
-                    f1s.append(report[class_name].get("f1-score", 0))
-                    supports.append(report[class_name].get("support", 0))
-
-            if precisions:  # Only add if we have data
-                per_class_metrics[class_name] = {
-                    "precision": {
-                        "mean": np.mean(precisions),
-                        "std": np.std(precisions),
-                        "min": np.min(precisions),
-                        "max": np.max(precisions),
-                    },
-                    "recall": {
-                        "mean": np.mean(recalls),
-                        "std": np.std(recalls),
-                        "min": np.min(recalls),
-                        "max": np.max(recalls),
-                    },
-                    "f1-score": {"mean": np.mean(f1s), "std": np.std(f1s), "min": np.min(f1s), "max": np.max(f1s)},
-                    "support": {
-                        "mean": np.mean(supports),
-                        "std": np.std(supports),
-                        "min": np.min(supports),
-                        "max": np.max(supports),
-                    },
-                }
+            if class_data:
+                per_class_metrics[class_name] = class_data
 
         result = {"per_class_metrics": per_class_metrics}
 
         # Overall macro/weighted averages
-        macro_metrics = self._calculate_averaged_metrics(fold_classification_reports, "macro avg")
-        weighted_metrics = self._calculate_averaged_metrics(fold_classification_reports, "weighted avg")
-
-        if macro_metrics:
-            result["macro_averaged_metrics"] = macro_metrics
-        if weighted_metrics:
-            result["weighted_averaged_metrics"] = weighted_metrics
+        for avg_type, key in [("macro avg", "macro_averaged_metrics"), ("weighted avg", "weighted_averaged_metrics")]:
+            avg_metrics = self._calculate_averaged_metrics(fold_classification_reports, avg_type)
+            if avg_metrics:
+                result[key] = avg_metrics
 
         return result
 
     def _calculate_averaged_metrics(self, fold_classification_reports: list[dict], avg_type: str) -> dict | None:
         """Calculate macro or weighted averaged metrics."""
-        precisions = []
-        recalls = []
-        f1s = []
+        metric_names = ["precision", "recall", "f1-score"]
+        result = {}
 
-        for report in fold_classification_reports:
-            if avg_type in report:
-                precisions.append(report[avg_type].get("precision", 0))
-                recalls.append(report[avg_type].get("recall", 0))
-                f1s.append(report[avg_type].get("f1-score", 0))
+        for metric_name in metric_names:
+            values = [
+                report[avg_type].get(metric_name, 0) for report in fold_classification_reports if avg_type in report
+            ]
+            if values:
+                stats = self._compute_stats(values)
+                del stats["values"]  # Remove values list for cleaner output
+                result[metric_name] = stats
 
-        if not precisions:
-            return None
-
-        return {
-            "precision": {
-                "mean": np.mean(precisions),
-                "std": np.std(precisions),
-                "min": np.min(precisions),
-                "max": np.max(precisions),
-            },
-            "recall": {
-                "mean": np.mean(recalls),
-                "std": np.std(recalls),
-                "min": np.min(recalls),
-                "max": np.max(recalls),
-            },
-            "f1-score": {"mean": np.mean(f1s), "std": np.std(f1s), "min": np.min(f1s), "max": np.max(f1s)},
-        }
+        return result if result else None
 
     def _log_summary_to_main_loggers(self, main_loggers: list, summary: dict) -> None:
         """Log summary metrics to main loggers."""
@@ -370,21 +311,23 @@ class CrossValidationManager:
             return
 
         try:
-            summary_metrics = {
-                "cv_mean_accuracy": summary.get("metrics_summary", {}).get("test_accuracy", {}).get("mean", 0),
-                "cv_std_accuracy": summary.get("metrics_summary", {}).get("test_accuracy", {}).get("std", 0),
-                "cv_mean_f1": summary.get("metrics_summary", {}).get("test_f1", {}).get("mean", 0),
-                "cv_std_f1": summary.get("metrics_summary", {}).get("test_f1", {}).get("std", 0),
-                "cv_mean_loss": summary.get("metrics_summary", {}).get("test_loss", {}).get("mean", 0),
-                "cv_std_loss": summary.get("metrics_summary", {}).get("test_loss", {}).get("std", 0),
-                "cv_total_time": summary.get("experiment_info", {}).get("total_training_time", 0),
-                "cv_successful_folds": len(
-                    summary.get("metrics_summary", {}).get("test_accuracy", {}).get("values", [])
-                ),
-            }
+            metrics_summary = summary.get("metrics_summary", {})
+            metric_map = {"test_accuracy": "accuracy", "test_f1": "f1", "test_loss": "loss"}
+
+            summary_metrics = {}
+            for full_name, short_name in metric_map.items():
+                if full_name in metrics_summary:
+                    for stat in ["mean", "std"]:
+                        summary_metrics[f"cv_{stat}_{short_name}"] = metrics_summary[full_name].get(stat, 0)
+
+            summary_metrics.update(
+                {
+                    "cv_total_time": summary.get("experiment_info", {}).get("total_training_time", 0),
+                    "cv_successful_folds": len(metrics_summary.get("test_accuracy", {}).get("values", [])),
+                }
+            )
 
             log_experiment_summary(main_loggers, summary_metrics)
-
         except Exception as e:
             logging.warning(f"Could not log summary metrics: {e}")
 
@@ -400,44 +343,32 @@ class CrossValidationManager:
 
     def _save_results_to_files(self, summary: dict, fold_metrics: list[dict], results: dict) -> Path:
         """Save cross-validation results to files."""
-        # Create results directory
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         results_dir = Path(f"cv_results_{config.classes}_{config.MODEL_NAME}_{timestamp}")
         results_dir.mkdir(exist_ok=True)
 
-        # Save summary as JSON
-        summary_path = results_dir / "cross_validation_summary.json"
-        with open(summary_path, "w") as f:
-            json.dump(summary, f, indent=2, default=str)
+        # Define files to save
+        files_to_save = {
+            "cross_validation_summary.json": summary,
+            "detailed_results.json": {
+                fold_num: {k: v for k, v in fold_result.items() if k not in ["trainer", "model"]}
+                for fold_num, fold_result in results.items()
+            },
+            "config.json": {
+                attr: getattr(config, attr)
+                for attr in dir(config)
+                if not attr.startswith("_") and not callable(getattr(config, attr))
+            },
+        }
+
+        # Save JSON files
+        for filename, data in files_to_save.items():
+            with open(results_dir / filename, "w") as f:
+                json.dump(data, f, indent=2, default=str)
 
         # Save fold metrics as CSV
         if fold_metrics:
-            metrics_df = pd.DataFrame(fold_metrics)
-            metrics_path = results_dir / "fold_metrics.csv"
-            metrics_df.to_csv(metrics_path, index=False)
-
-        # Save detailed results as JSON (excluding non-serializable objects)
-        serializable_results = {}
-        for fold_num, fold_result in results.items():
-            serializable_results[fold_num] = {
-                k: v
-                for k, v in fold_result.items()
-                if k not in ["trainer", "model"]  # Exclude non-serializable objects
-            }
-
-        detailed_path = results_dir / "detailed_results.json"
-        with open(detailed_path, "w") as f:
-            json.dump(serializable_results, f, indent=2, default=str)
-
-        # Save configuration
-        config_dict = {
-            attr: getattr(config, attr)
-            for attr in dir(config)
-            if not attr.startswith("_") and not callable(getattr(config, attr))
-        }
-        config_path = results_dir / "config.json"
-        with open(config_path, "w") as f:
-            json.dump(config_dict, f, indent=2, default=str)
+            pd.DataFrame(fold_metrics).to_csv(results_dir / "fold_metrics.csv", index=False)
 
         logging.info(f"Cross-validation results saved to: {results_dir}")
         return results_dir
@@ -472,43 +403,33 @@ class CrossValidationManager:
 
         logging.info("=" * 80)
 
+    def _log_metric_dict(self, metrics: dict, indent: str = "", skip_keys: set[str] | None = None) -> None:
+        """Log metrics dictionary with formatting."""
+        skip_keys = skip_keys or set()
+        for metric_name, metric_data in metrics.items():
+            if metric_name not in skip_keys:
+                mean_val = metric_data.get("mean", 0)
+                min_val = metric_data.get("min", 0)
+                max_val = metric_data.get("max", 0)
+                line = self._format_metric_line(metric_name, mean_val, min_val, max_val)
+                logging.info(f"{indent}{line}")
+
     def _log_metrics_summary(self, metrics: dict) -> None:
         """Log metrics summary to console."""
         logging.info("\nMETRICS ACROSS FOLDS:")
         logging.info("-" * 40)
-
-        for metric_name, metric_data in metrics.items():
-            if metric_name != "training_time":
-                mean_val = metric_data.get("mean", 0)
-                min_val = metric_data.get("min", 0)
-                max_val = metric_data.get("max", 0)
-                range_val = (max_val - min_val) / 2  # Half range for ± notation
-                logging.info(f"{metric_name:15}: {mean_val:.4f} ± {range_val:.4f} (range: {min_val:.4f}-{max_val:.4f})")
+        self._log_metric_dict(metrics, skip_keys={"training_time"})
 
     def _log_per_class_metrics(self, per_class: dict) -> None:
         """Log per-class metrics to console."""
         logging.info("\nPER-CLASS METRICS (Mean ± Range/2):")
         logging.info("-" * 40)
-
         for class_name, metrics in per_class.items():
             logging.info(f"{class_name}:")
-            for metric_name, metric_data in metrics.items():
-                if metric_name != "support":
-                    mean_val = metric_data.get("mean", 0)
-                    min_val = metric_data.get("min", 0)
-                    max_val = metric_data.get("max", 0)
-                    range_val = (max_val - min_val) / 2  # Half range for ± notation
-                    logging.info(
-                        f"  {metric_name:10}: {mean_val:.4f} ± {range_val:.4f} (range: {min_val:.4f}-{max_val:.4f})"
-                    )
+            self._log_metric_dict(metrics, indent="  ", skip_keys={"support"})
 
     def _log_averaged_metrics(self, title: str, averaged_metrics: dict) -> None:
         """Log macro/weighted averaged metrics to console."""
         logging.info(f"\n{title}:")
         logging.info("-" * 40)
-        for metric_name, metric_data in averaged_metrics.items():
-            mean_val = metric_data.get("mean", 0)
-            min_val = metric_data.get("min", 0)
-            max_val = metric_data.get("max", 0)
-            range_val = (max_val - min_val) / 2  # Half range for ± notation
-            logging.info(f"{metric_name:15}: {mean_val:.4f} ± {range_val:.4f} (range: {min_val:.4f}-{max_val:.4f})")
+        self._log_metric_dict(averaged_metrics)
