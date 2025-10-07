@@ -15,6 +15,7 @@ import pytorch_lightning as pl
 import torch
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 from pytorch_lightning.callbacks.progress import RichProgressBar
+from sklearn.preprocessing import LabelEncoder
 from sklearn.utils.class_weight import compute_class_weight
 
 import arccnet.models.cutouts.hale.config as config
@@ -46,35 +47,31 @@ class HaleTrainer:
     model creation, training, testing, and evaluation.
     """
 
+    WARNING_PATTERNS = [
+        ".*hipBLASLt.*",  # AMD GPUs warning
+        ".*Precision.*not supported by the model summary.*",
+        ".*does not have many workers.*",
+    ]
+
     def __init__(self, class_names: list[str] | None = None):
         """
-        Initialize the HaleTrainer.
-
-        Args:
-            class_names: List of class names (defaults to Alpha, Beta, Beta-Gamma)
+        Initialize the trainer.
         """
-        self.class_names = class_names or ["Alpha", "Beta", "Beta-Gamma"]
+        self.class_names = class_names or config.class_names
         self._setup_warnings()
-        self._setup_precision()
+        self.precision = self._get_precision()
 
     def _setup_warnings(self) -> None:
         """Suppress common warnings."""
-        warnings.filterwarnings("ignore", category=UserWarning, message=".*hipBLASLt.*")
-        warnings.filterwarnings(
-            "ignore", category=UserWarning, message=".*Precision.*not supported by the model summary.*"
-        )
-        warnings.filterwarnings("ignore", category=UserWarning, message=".*does not have many workers.*")
+        for pattern in self.WARNING_PATTERNS:
+            warnings.filterwarnings("ignore", category=UserWarning, message=pattern)
 
-    def _setup_precision(self) -> None:
-        """Set up mixed precision training based on CUDA version."""
+    def _get_precision(self) -> str:
+        """Get mixed precision setting based on CUDA version."""
         torch.set_float32_matmul_precision("medium")
-        cuda_version = torch.version.cuda
-        if cuda_version and float(cuda_version) < 11.8:
-            self.precision = "16-mixed"  # Use legacy mixed precision for older CUDA
-        else:
-            self.precision = "16-mixed"  # Use modern mixed precision for newer CUDA
-
-        logging.info(f"Using precision: {self.precision}")
+        precision = "16-mixed"
+        logging.info(f"Using precision: {precision}")
+        return precision
 
     def prepare_dataset_once(self) -> pd.DataFrame:
         """
@@ -83,17 +80,15 @@ class HaleTrainer:
         Returns:
             Processed DataFrame with encoded labels
         """
-        processed_data_path = (
-            Path(config.DATA_FOLDER)
-            / f"processed_dataset_{config.classes}_{config.N_FOLDS}-splits_rs-{config.RANDOM_STATE}.parquet"
-        )
+        filename = f"processed_dataset_{config.classes}_{config.N_FOLDS}-splits_rs-{config.RANDOM_STATE}.parquet"
+        processed_data_path = Path(config.DATA_FOLDER) / filename
 
-        if not processed_data_path.exists():
+        if processed_data_path.exists():
+            logging.info(f"Loading previously prepared dataset: {processed_data_path.name}")
+            df_processed = pd.read_parquet(processed_data_path)
+        else:
             logging.info("Preparing dataset for the first time...")
             df_processed = prepare_dataset(save_path=str(processed_data_path))
-        else:
-            logging.info(f"Loading previously prepared dataset: {processed_data_path.name}")
-            df_processed = pd.read_parquet(str(processed_data_path))
 
         logging.info(f"Dataset shape: {df_processed.shape}")
         logging.info(f"Label distribution:\n{df_processed['grouped_labels'].value_counts()}")
@@ -102,30 +97,21 @@ class HaleTrainer:
 
     def _encode_labels(self, df: pd.DataFrame) -> pd.DataFrame:
         """Encode labels consistently."""
-        from sklearn.preprocessing import LabelEncoder
-
         logging.info("Creating consistent label encoding from 'grouped_labels'...")
         label_encoder = LabelEncoder()
         df["model_labels"] = label_encoder.fit_transform(df["grouped_labels"])
 
-        # Create label mapping for reference
-        label_mapping = {
-            str(class_name): int(encoded_val)
-            for class_name, encoded_val in zip(label_encoder.classes_, label_encoder.transform(label_encoder.classes_))
-        }
+        label_mapping = {label: int(index) for index, label in enumerate(label_encoder.classes_)}
         logging.info(f"Label mapping: {label_mapping}")
 
-        # Convert to regular Python ints for cleaner logging
-        model_labels_counts = df["model_labels"].value_counts().sort_index()
-        model_labels_dist = {int(k): int(v) for k, v in model_labels_counts.items()}
+        model_labels_dist = df["model_labels"].value_counts().sort_index().to_dict()
         logging.info(f"Model labels distribution: {model_labels_dist}")
 
-        # Verify we have the expected number of classes
-        expected_classes = config.NUM_CLASSES
+        # Verify class count
         actual_classes = len(label_encoder.classes_)
-        if actual_classes != expected_classes:
+        if actual_classes != config.NUM_CLASSES:
             logging.warning(
-                f"Expected {expected_classes} classes but found {actual_classes}: {list(label_encoder.classes_)}"
+                f"Expected {config.NUM_CLASSES} classes but found {actual_classes}: {list(label_encoder.classes_)}"
             )
         else:
             logging.info(f"Found expected {actual_classes} classes: {list(label_encoder.classes_)}")
@@ -148,24 +134,13 @@ class HaleTrainer:
 
         # Create data module and setup
         data_module = self._create_data_module(df, fold_num)
-
-        # Create model with class weights
         model = self._create_model(data_module)
-
-        # Setup loggers
         loggers = self._setup_loggers(fold_num, parent_loggers)
-
-        # Create trainer
-        trainer = self._create_trainer(loggers)
-
-        # Log training info
+        trainer = self._create_trainer(loggers, fold_num)
         self._log_training_info(trainer)
-
         # Train and test
         trainer.fit(model, data_module)
         test_results = trainer.test(model, data_module, ckpt_path="best")
-
-        # Comprehensive evaluation
         self._evaluate_model(model, data_module, loggers, fold_num, test_results, trainer)
 
         return trainer, model, test_results
@@ -175,18 +150,12 @@ class HaleTrainer:
         data_module = HaleDataModule(df=df, fold_num=fold_num)
         data_module.setup("fit")
 
-        # Log dataset statistics
-        train_class_dist = data_module.train_dataset.df["grouped_labels"].value_counts().sort_index()
-        class_distribution = {}
-
-        for grouped_label, count in train_class_dist.items():
-            model_label = data_module.train_dataset.df[data_module.train_dataset.df["grouped_labels"] == grouped_label][
-                "model_labels"
-            ].iloc[0]
-            class_distribution[f"{grouped_label} (model_label={int(model_label)})"] = count
+        # Create class distribution mapping
+        train_df = data_module.train_dataset.df
+        class_distribution = self._get_class_distribution(train_df)
 
         log_dataset_statistics(
-            train_size=len(data_module.train_dataset.df),
+            train_size=len(train_df),
             val_size=len(data_module.val_dataset.df),
             test_size=len(data_module.test_dataset.df),
             total_size=len(df),
@@ -194,6 +163,19 @@ class HaleTrainer:
         )
 
         return data_module
+
+    def _get_class_distribution(self, df: pd.DataFrame) -> dict[str, int]:
+        """Get class distribution with model labels."""
+        label_counts = df["grouped_labels"].value_counts().sort_index()
+        label_mapping = (
+            df[["grouped_labels", "model_labels"]]
+            .drop_duplicates(subset="grouped_labels")
+            .set_index("grouped_labels")["model_labels"]
+        )
+
+        return {
+            f"{label} (model_label={int(label_mapping[label])})": int(count) for label, count in label_counts.items()
+        }
 
     def _create_model(self, data_module: HaleDataModule) -> HaleLightningModel:
         """Create model with class weights."""
@@ -225,25 +207,40 @@ class HaleTrainer:
         if parent_loggers is not None:
             logging.info(f"Using parent loggers for fold {fold_num}")
             return parent_loggers
-        else:
-            experiment_name = f"hale_fold_{fold_num}"
-            loggers = setup_loggers(experiment_name)
 
-            # Log hyperparameters to Comet if present
-            for logger in loggers:
-                if hasattr(logger, "experiment") and hasattr(logger.experiment, "log_parameters"):
-                    log_hyperparameters_to_comet(logger, fold_num)
+        experiment_name = f"hale_fold_{fold_num}"
+        loggers = setup_loggers(experiment_name)
 
-            return loggers
+        # Log hyperparameters to Comet if present
+        for logger in loggers:
+            if hasattr(logger, "experiment") and hasattr(logger.experiment, "log_parameters"):
+                log_hyperparameters_to_comet(logger, fold_num)
 
-    def _create_trainer(self, loggers: list) -> pl.Trainer:
+        return loggers
+
+    def _create_trainer(self, loggers: list, fold_num: int = 1) -> pl.Trainer:
         """Create PyTorch Lightning trainer."""
-        # Setup callbacks
+        return pl.Trainer(
+            max_epochs=config.MAX_EPOCHS,
+            accelerator=config.ACCELERATOR,
+            devices=config.DEVICES,
+            precision=self.precision,
+            logger=loggers,
+            callbacks=self._create_callbacks(fold_num),
+            log_every_n_steps=config.LOG_EVERY_N_STEPS,
+            enable_progress_bar=True,
+            enable_model_summary=getattr(config, "ENABLE_MODEL_SUMMARY", True),
+            deterministic=False,
+        )
+
+    def _create_callbacks(self, fold_num: int) -> list:
+        """Create training callbacks."""
         checkpoint_callback = ModelCheckpoint(
             monitor=config.CHECKPOINT_MONITOR,
             mode="max",
             save_top_k=1,
-            filename="hale-{epoch:02d}-{val_acc:.3f}",
+            filename=f"hale-fold{fold_num}-{{epoch:02d}}-{{val_acc:.3f}}",
+            dirpath=getattr(config, "LOG_DIR", "logs"),
         )
 
         early_stop_callback = EarlyStopping(
@@ -253,27 +250,11 @@ class HaleTrainer:
             verbose=True,
         )
 
-        progress_bar = RichProgressBar(leave=True)
-
-        # Create trainer
-        trainer = pl.Trainer(
-            max_epochs=config.MAX_EPOCHS,
-            accelerator=config.ACCELERATOR,
-            devices=config.DEVICES,
-            precision=self.precision,
-            logger=loggers,
-            callbacks=[checkpoint_callback, early_stop_callback, progress_bar],
-            log_every_n_steps=config.LOG_EVERY_N_STEPS,
-            enable_progress_bar=True,
-            enable_model_summary=getattr(config, "ENABLE_MODEL_SUMMARY", True),
-            deterministic=False,
-        )
-
-        return trainer
+        return [checkpoint_callback, early_stop_callback, RichProgressBar(leave=True)]
 
     def _log_training_info(self, trainer: pl.Trainer) -> None:
         """Log training configuration information."""
-        device_info = str(trainer.device_ids) if hasattr(trainer, "device_ids") else "auto"
+        device_info = getattr(trainer, "device_ids", "auto")
 
         log_training_info(
             max_epochs=config.MAX_EPOCHS,
@@ -306,21 +287,11 @@ class HaleTrainer:
 
         test_metrics = test_results[0]
 
-        # Log test results
         log_test_results(test_metrics, trainer.checkpoint_callback.best_model_path)
-
-        # Log confusion matrix and classification report
         log_confusion_matrix_and_classification_report(model, loggers, fold_num, self.class_names)
-
-        # Generate and log ROC curves
         self._generate_and_log_roc_curves(model, loggers, fold_num)
-
-        # Find and log misclassified samples
         self._find_and_log_misclassified_samples(model, data_module, loggers, fold_num)
-
-        # Log final metrics
         log_final_metrics(loggers, test_metrics, trainer.checkpoint_callback.best_model_path, fold_num)
-
         # Reset model's test collections for next fold
         model.reset_test_collections()
 
@@ -330,24 +301,21 @@ class HaleTrainer:
             y_true = model.test_targets
             y_pred_proba = torch.softmax(model.test_predictions, dim=1)
 
-            if len(y_true) > 0:
-                # Convert to numpy for sklearn functions
-                y_true_np = y_true.cpu().numpy()
-                y_pred_proba_np = y_pred_proba.cpu().numpy()
-
-                # Generate ROC curves
-                roc_image, roc_data = generate_roc_curves(y_true_np, y_pred_proba_np, self.class_names, fold_num)
-
-                # Log ROC curves to experiment trackers
-                log_roc_curves(roc_image, roc_data, loggers, fold_num)
-
-                logging.info(f"Generated and logged ROC curves for fold {fold_num}")
-
-                # Log AUC scores for each class
-                for class_name, data in roc_data.items():
-                    logging.info(f"Fold {fold_num} - {class_name} AUC: {data['auc']:.4f}")
-            else:
+            if len(y_true) == 0:
                 logging.warning(f"No test predictions available for ROC curves in fold {fold_num}")
+                return
+
+            # Convert to numpy and generate ROC curves
+            y_true_np = y_true.cpu().numpy()
+            y_pred_proba_np = y_pred_proba.cpu().numpy()
+            roc_image, roc_data = generate_roc_curves(y_true_np, y_pred_proba_np, self.class_names, fold_num)
+
+            # Log ROC curves and AUC scores
+            log_roc_curves(roc_image, roc_data, loggers, fold_num)
+            logging.info(f"Generated and logged ROC curves for fold {fold_num}")
+
+            for class_name, data in roc_data.items():
+                logging.info(f"Fold {fold_num} - {class_name} AUC: {data['auc']:.4f}")
 
         except Exception as e:
             logging.warning(f"Could not generate ROC curves for fold {fold_num}: {e}")

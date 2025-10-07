@@ -341,5 +341,3 @@ def analyze_group_overlaps(df, group_col=GROUP_COL):
 
 # Perform compact group overlap analysis
 analysis_results = analyze_group_overlaps(df_processed, group_col="number")
-
-# %%

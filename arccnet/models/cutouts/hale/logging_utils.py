@@ -77,9 +77,12 @@ def setup_loggers(experiment_name: str, fold_num: int | None = None) -> list:
         experiment_name = f"{experiment_name}_fold_{fold_num}"
 
     # Add loggers based on config
+
+    log_dir = getattr(config, "LOG_DIR", "logs")
+
     if getattr(config, "ENABLE_TENSORBOARD", True):
         tb_logger = SafeTensorBoardLogger(
-            save_dir=getattr(config, "LOG_DIR", "logs"),
+            save_dir=log_dir,
             name=experiment_name,
             version=None,  # Auto-increment version
         )
@@ -87,7 +90,7 @@ def setup_loggers(experiment_name: str, fold_num: int | None = None) -> list:
 
     if getattr(config, "ENABLE_CSV", True):
         csv_logger = CSVLogger(
-            save_dir=getattr(config, "LOG_DIR", "logs"),
+            save_dir=log_dir,
             name=experiment_name,
         )
         loggers.append(csv_logger)
@@ -100,7 +103,7 @@ def setup_loggers(experiment_name: str, fold_num: int | None = None) -> list:
     # Use at least CSV logger if no loggers are enabled
     if not loggers:
         csv_logger = CSVLogger(
-            save_dir=getattr(config, "LOG_DIR", "logs"),
+            save_dir=log_dir,
             name=experiment_name,
         )
         loggers.append(csv_logger)

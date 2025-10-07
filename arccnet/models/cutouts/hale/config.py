@@ -1,29 +1,25 @@
 import os
 
-from arccnet.models.labels import LABEL_MAPPING_DICT
-
-# ==============================================================================
-# USER INPUT PARAMETERS
-# ==============================================================================
+from arccnet.models.labels import CLASS_NAMES_DICT, LABEL_MAPPING_DICT
 
 # Dataset selection
 classes = "a-b-bg"  # Options: "qs-ia-ar", "ia-ar", "qs-ia", "qs-ia-a-b-bg", "a-b-bg"
+class_names = CLASS_NAMES_DICT.get(classes, ["Unknown"])
 
 # Data type selection - choose which data to use for training
 # Options: "magnetogram", "continuum", "both"
-# Note: Currently only "magnetogram" is fully implemented
 DATA_TYPE = "magnetogram"
 
 # Model selection
 MODEL_NAME = "resnet18"  # Options: "resnet18", "resnet34", "resnet50"
 
 # Training configuration
-BATCH_SIZE = 32  # Batch size for training
-LEARNING_RATE = 1e-3  # Learning rate for optimizer
-MAX_EPOCHS = 50  # Maximum number of epochs to train
+BATCH_SIZE = 32
+LEARNING_RATE = 1e-3
+MAX_EPOCHS = 50
 
 # Cross-validation setup
-N_FOLDS = 8  # Number of folds for cross-validation
+N_FOLDS = 8
 RANDOM_STATE = 42
 TRAIN_ALL_FOLDS = True  # Set to False to train only fold 1 for testing
 
@@ -32,16 +28,13 @@ ACCELERATOR = "gpu"  # Options: "gpu", "cpu"
 DEVICES = 1  # Number of devices to use
 NUM_WORKERS = 16  # Number of workers for data loading
 
-# ==============================================================================
-# PREPROCESSING CONSTANTS - Usually don't need to change these
-# ==============================================================================
-
 # Image preprocessing parameters
-IMAGE_TARGET_HEIGHT = 200  # Target height for resized images
-IMAGE_TARGET_WIDTH = 200  # Target width for resized images
-IMAGE_DIVISOR = 3000.0  # Divisor for normalizing image pixel values
-HARDTANH_MIN_VAL = -1.0  # Minimum value for hardtanh transformation
-HARDTANH_MAX_VAL = 1.0  # Maximum value for hardtanh transformation
+IMAGE_TARGET_HEIGHT = 200
+IMAGE_TARGET_WIDTH = 200
+# HardTanh parameters
+IMAGE_DIVISOR = 800.0
+HARDTANH_MIN_VAL = -1.0
+HARDTANH_MAX_VAL = 1.0
 
 # Model architecture parameters
 LEAKY_RELU_NEGATIVE_SLOPE = 0.01  # Negative slope for LeakyReLU activation
@@ -79,18 +72,22 @@ DATALOADER_MULTIPROCESSING_CONTEXT = "spawn"  # Multiprocessing context
 
 # Logging and progress tracking
 LOG_EVERY_N_STEPS = 10  # How often to log during training
-ENABLE_MODEL_SUMMARY = False  # Whether to show model summary (avoid precision warnings)
+
+ENABLE_MODEL_SUMMARY = False  # Whether to show model summary
+LOG_DIR = os.path.join(os.path.dirname(__file__), "logs")
 
 # Experiment tracking configuration
-PROJECT_NAME = "arccnet-hale"  # Base project name for experiment tracking
-ENABLE_COMET = False  # Whether to enable Comet ML logging
-ENABLE_TENSORBOARD = True  # Whether to enable TensorBoard logging
-ENABLE_CSV = True  # Whether to enable CSV logging
-TENSORBOARD_LOG_HYPERPARAMS = True  # Whether to attempt hyperparameter logging to TensorBoard
+PROJECT_NAME = f"arcaff-v20250805-{classes}"
+ENABLE_COMET = True
+ENABLE_TENSORBOARD = True
+ENABLE_CSV = True
+TENSORBOARD_LOG_HYPERPARAMS = True
 
 # ==============================================================================
-# DATASET PARAMETERS - Usually don't change unless using different dataset
+# DATASET PARAMETERS
 # ==============================================================================
+
+PROCESSED_DATASET_FILENAME = f"processed_dataset_{classes}_{N_FOLDS}-splits_rs-{RANDOM_STATE}.parquet"
 
 # Dataset creation parameters
 LONG_LIMIT_DEG = 65  # Longitude limit in degrees
@@ -101,13 +98,6 @@ DATA_FOLDER = os.getenv("ARCAFF_DATA_FOLDER", "/home/edoardo/Code/ARCAFF/data")
 DATASET_FOLDER = "arccnet-v20250805/04_final"
 DF_FILE_NAME = "data/cutout_classification/region_classification.parq"
 
-# ==============================================================================
-# DERIVED PARAMETERS - Automatically calculated, don't modify
-# ==============================================================================
-
 # Label mapping based on selected classes
 label_mapping = LABEL_MAPPING_DICT[classes]
-
-# Calculate number of unique classes from the mapping (excluding None)
-_unique_classes = set(v for v in label_mapping.values() if v is not None)
-NUM_CLASSES = len(_unique_classes)  # Should be 3 for "a-b-bg": Alpha, Beta, Beta-Gamma
+NUM_CLASSES = len(class_names)
