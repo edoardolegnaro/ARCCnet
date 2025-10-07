@@ -116,7 +116,7 @@ def _setup_comet_logger(experiment_name: str) -> CometLogger | None:
     """Set up Comet ML logger if credentials are available."""
     try:
         comet_logger = CometLogger(
-            project_name=getattr(config, "COMET_PROJECT_NAME", f"arccnet-hale-{config.classes}"),
+            project_name=getattr(config, "COMET_PROJECT_NAME", config.PROJECT_NAME),
             experiment_name=f"{experiment_name}_rs{config.RANDOM_STATE}",
             save_dir=getattr(config, "LOG_DIR", "logs"),
         )

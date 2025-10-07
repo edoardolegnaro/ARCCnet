@@ -55,13 +55,44 @@ def convert_old_path_to_new(old_path: str) -> str:
     )
 
 
-def load_image(row):
-    fits_file_path = convert_old_path_to_new(row["path_image_cutout_hmi"] or row["path_image_cutout_mdi"])
+def load_image(row, data_type="magnetogram"):
+    """Load magnetogram or continuum FITS file as np.ndarray."""
+    if data_type == "magnetogram":
+        fits_file_path = convert_old_path_to_new(row["path_image_cutout_hmi"] or row["path_image_cutout_mdi"])
+    elif data_type == "continuum":
+        # Derive continuum path by replacing '_mag_' with '_cont_' in filename
+        mag_path = row["path_image_cutout_hmi"] or row["path_image_cutout_mdi"]
+        fits_file_path = convert_old_path_to_new(mag_path.replace("_mag_", "_cont_"))
+    else:
+        raise ValueError(f"Unsupported data_type: {data_type}")
     try:
         with fits.open(fits_file_path, memmap=True) as img_fits:
             return img_fits[0].data.astype(np.float32)
     except Exception as e:
         raise RuntimeError(f"Failed to load FITS file {fits_file_path}: {e}")
+
+
+def normalize_continuum(image: np.ndarray) -> np.ndarray:
+    """
+    Normalize continuum image using inverted min-max scaling.
+    c_out = 1 - (c_in - min) / (max - min)
+    Output is in [0, 1], with background near 0 and brightest points near 1.
+    NaNs are set to 0.
+    """
+    # Mask out NaNs for min/max computation
+    finite = np.isfinite(image)
+    if not np.any(finite):
+        return np.zeros_like(image, dtype=np.float32)
+    min_val = np.nanmin(image[finite])
+    max_val = np.nanmax(image[finite])
+    denom = max_val - min_val
+    if denom == 0 or not np.isfinite(denom):
+        norm = np.zeros_like(image, dtype=np.float32)
+    else:
+        norm = 1.0 - (image - min_val) / denom
+    norm = np.clip(norm, 0.0, 1.0)
+    norm = np.nan_to_num(norm, nan=0.0, copy=False)
+    return norm.astype(np.float32)
 
 
 class HaleDataset(Dataset):
@@ -103,13 +134,22 @@ class HaleDataset(Dataset):
     def __getitem__(self, idx):
         row = self.df.iloc[idx]
         if self.data_type == "magnetogram":
-            image = torch.from_numpy(np.nan_to_num(load_image(row), nan=0.0)).unsqueeze(0)
+            image = torch.from_numpy(np.nan_to_num(load_image(row, "magnetogram"), nan=0.0)).unsqueeze(0)
             image = torch.clamp(image / self.divisor, config.HARDTANH_MIN_VAL, config.HARDTANH_MAX_VAL)
             image = transforms.functional.resize(image, [self.target_height, self.target_width], antialias=True)
         elif self.data_type == "continuum":
-            raise NotImplementedError("Continuum data loading not implemented yet")
+            image = load_image(row, "continuum")
+            image = normalize_continuum(image)
+            image = torch.from_numpy(image).unsqueeze(0)
+            image = transforms.functional.resize(image, [self.target_height, self.target_width], antialias=True)
         elif self.data_type == "both":
-            raise NotImplementedError("Combined data loading not implemented yet")
+            # Load both magnetogram and continuum, stack as channels
+            mag = torch.from_numpy(np.nan_to_num(load_image(row, "magnetogram"), nan=0.0))
+            mag = torch.clamp(mag / self.divisor, config.HARDTANH_MIN_VAL, config.HARDTANH_MAX_VAL)
+            cont = load_image(row, "continuum")
+            cont = normalize_continuum(cont)
+            stacked = torch.stack([mag, torch.from_numpy(cont)], dim=0)
+            image = transforms.functional.resize(stacked, [self.target_height, self.target_width], antialias=True)
         else:
             raise ValueError(f"Unsupported data_type: {self.data_type}")
         if self.transform:

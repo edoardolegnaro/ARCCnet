@@ -299,7 +299,11 @@ class HaleTrainer:
         """Generate and log ROC curves."""
         try:
             y_true = model.test_targets
-            y_pred_proba = torch.softmax(model.test_predictions, dim=1)
+            # Ensure predictions are a tensor before softmax
+            preds = model.test_predictions
+            if isinstance(preds, list):
+                preds = torch.tensor(preds)
+            y_pred_proba = torch.softmax(preds, dim=1)
 
             if len(y_true) == 0:
                 logging.warning(f"No test predictions available for ROC curves in fold {fold_num}")

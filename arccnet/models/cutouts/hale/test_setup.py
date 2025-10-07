@@ -29,10 +29,12 @@ except ImportError as e:
     exit(1)
 
 try:
+    from sklearn.utils.class_weight import compute_class_weight
+
     import arccnet.models.cutouts.hale.config as config
     from arccnet.models.cutouts.hale.dataset import get_fold_data
     from arccnet.models.cutouts.hale.lightning_data import HaleDataModule
-    from arccnet.models.cutouts.hale.lightning_model import HaleLightningModel, compute_class_weights
+    from arccnet.models.cutouts.hale.lightning_model import HaleLightningModel
 
     logging.info("✓ Local imports successful")
 except ImportError as e:
@@ -84,7 +86,8 @@ def test_data_loading():
         data_module = HaleDataModule(df=df, fold_num=1)
         data_module.setup("fit")
         train_labels = data_module.get_train_labels()
-        class_weights = compute_class_weights(train_labels, config.NUM_CLASSES)
+        unique_labels = np.unique(train_labels)
+        class_weights = compute_class_weight("balanced", classes=unique_labels, y=train_labels)
 
         logging.info("✓ DataModule created successfully")
         logging.info(f"✓ Original labels in training: {np.unique(train_labels)}")
