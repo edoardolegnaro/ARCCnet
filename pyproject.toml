@@ -50,7 +50,9 @@ models = [
     "tensorboard",
     "pytorch-lightning",
     "matplotlib",
-    "seaborn"
+    "seaborn",
+    "p_tqdm",
+    "torchmetrics"
 ]
 tests = [
     "pytest",
@@ -67,7 +69,8 @@ docs = [
     "myst_nb",
     "linkify-it-py"
 ]
-dev = ["arccnet[docs,tests]"]
+dev = ["arccnet[docs,tests]",
+    "pre-commit"]
 
 [project.scripts]
 arccnet-cli = "arccnet.cli.main:main"
