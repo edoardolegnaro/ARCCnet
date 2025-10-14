@@ -68,7 +68,14 @@ class HaleTrainer:
 
     def _get_precision(self) -> str:
         """Get mixed precision setting based on CUDA version."""
-        torch.set_float32_matmul_precision("medium")
+        if torch.cuda.is_available():
+            cuda_matmul = getattr(getattr(torch.backends, "cuda", None), "matmul", None)
+            if cuda_matmul and hasattr(cuda_matmul, "fp32_precision"):
+                cuda_matmul.fp32_precision = "medium"
+            else:
+                torch.set_float32_matmul_precision("medium")
+        else:
+            torch.set_float32_matmul_precision("medium")
         precision = "16-mixed"
         logging.info(f"Using precision: {precision}")
         return precision

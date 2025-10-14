@@ -11,7 +11,7 @@ class_names = CLASS_NAMES_DICT.get(classes, ["Unknown"])
 DATA_TYPE = "magnetogram"
 
 # Model selection
-MODEL_NAME = "resnet18"  # Options: "resnet18", "resnet34", "resnet50"
+MODEL_NAME = "resnet50"  # Options: "resnet18", "resnet34", "resnet50"
 
 # Training configuration
 BATCH_SIZE = 32
@@ -94,7 +94,7 @@ LONG_LIMIT_DEG = 65  # Longitude limit in degrees
 UNDERSAMPLE = False  # Whether to undersample the dataset
 
 # Data paths
-DATA_FOLDER = os.getenv("ARCAFF_DATA_FOLDER", "/home/edoardo/Code/ARCAFF/data")
+DATA_FOLDER = os.getenv("ARCAFF_DATA_FOLDER", "/ARCAFF/data")
 DATASET_FOLDER = "arccnet-v20250805/04_final"
 DF_FILE_NAME = "data/cutout_classification/region_classification.parq"
 

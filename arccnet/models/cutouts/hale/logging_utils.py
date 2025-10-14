@@ -13,50 +13,74 @@ from pytorch_lightning.loggers.comet import CometLogger
 import arccnet.models.cutouts.hale.config as config
 
 
-class SafeTensorBoardLogger(TensorBoardLogger):
+def log_hyperparameters(logger, params: dict[str, Any]) -> None:
     """
-    TensorBoard logger that safely handles hyperparameter logging with NumPy 2.0.
+    Log hyperparameters to a PyTorch Lightning logger with graceful fallbacks.
+
+    Args:
+        logger: Lightning logger instance
+        params: Dictionary of hyperparameters to log
     """
+    if not params:
+        return
 
-    def log_hyperparams(self, params: dict[str, Any], metrics: dict[str, float] | None = None) -> None:
-        """Override to handle NumPy 2.0 compatibility issues with TensorBoard."""
-        if not getattr(config, "TENSORBOARD_LOG_HYPERPARAMS", True):
-            logging.info("TensorBoard hyperparameter logging disabled in config")
-            return
+    if isinstance(logger, TensorBoardLogger):
+        _log_tensorboard_hyperparams(logger, params)
+        return
 
+    if hasattr(logger, "log_hyperparams"):
         try:
-            # Try the standard hyperparameter logging first
-            super().log_hyperparams(params=params, metrics=metrics)
-            logging.info("TensorBoard hyperparameters logged successfully")
-        except (AttributeError, ImportError) as e:
-            if "np.string_" in str(e) or "numpy" in str(e).lower():
-                # Handle NumPy 2.0 compatibility issue
-                logging.warning(
-                    "TensorBoard hyperparameter logging failed due to NumPy 2.0 compatibility. "
-                    "Logging hyperparameters as text instead."
-                )
-                self._log_hyperparams_as_text(params)
-            else:
-                # Re-raise if it's a different error
-                raise e
+            logger.log_hyperparams(params)
+            logging.info(f"Hyperparameters logged to {type(logger).__name__}")
         except Exception as e:
-            logging.warning(f"TensorBoard hyperparameter logging failed: {e}")
-            self._log_hyperparams_as_text(params)
+            logging.warning(f"Could not log hyperparameters to {type(logger).__name__}: {e}")
+        return
 
-    def _log_hyperparams_as_text(self, params: dict[str, Any]) -> None:
-        """Log hyperparameters as text summary instead of hyperparams."""
-        if not params:
-            return
-
-        hparam_text = "Hyperparameters:\n"
-        for key, value in params.items():
-            hparam_text += f"- {key}: {value}\n"
-
+    if hasattr(logger, "experiment") and hasattr(logger.experiment, "log_parameters"):
         try:
-            self.experiment.add_text("Hyperparameters", hparam_text, global_step=0)
-            logging.info("Hyperparameters logged as text to TensorBoard")
-        except Exception as text_error:
-            logging.warning(f"Could not log hyperparameters as text: {text_error}")
+            logger.experiment.log_parameters(params)
+            logging.info(f"Hyperparameters logged via experiment API for {type(logger).__name__}")
+        except Exception as e:
+            logging.warning(f"Could not log hyperparameters via experiment API for {type(logger).__name__}: {e}")
+
+
+def _log_tensorboard_hyperparams(logger: TensorBoardLogger, params: dict[str, Any]) -> None:
+    """Handle TensorBoard hyperparameter logging with NumPy 2.0 fallback."""
+    if not getattr(config, "TENSORBOARD_LOG_HYPERPARAMS", True):
+        logging.info("TensorBoard hyperparameter logging disabled in config")
+        return
+
+    try:
+        logger.log_hyperparams(params=params)
+        logging.info("TensorBoard hyperparameters logged successfully")
+    except (AttributeError, ImportError) as e:
+        if "np.string_" in str(e) or "numpy" in str(e).lower():
+            logging.warning(
+                "TensorBoard hyperparameter logging failed due to NumPy 2.0 compatibility. "
+                "Logging hyperparameters as text instead."
+            )
+            _log_hyperparams_as_text(logger, params)
+        else:
+            raise e
+    except Exception as e:
+        logging.warning(f"TensorBoard hyperparameter logging failed: {e}")
+        _log_hyperparams_as_text(logger, params)
+
+
+def _log_hyperparams_as_text(logger: TensorBoardLogger, params: dict[str, Any]) -> None:
+    """Log hyperparameters as text summary instead of structured hyperparameters."""
+    if not params or not hasattr(logger, "experiment") or not hasattr(logger.experiment, "add_text"):
+        return
+
+    hparam_text = "Hyperparameters:\n"
+    for key, value in params.items():
+        hparam_text += f"- {key}: {value}\n"
+
+    try:
+        logger.experiment.add_text("Hyperparameters", hparam_text, global_step=0)
+        logging.info("Hyperparameters logged as text to TensorBoard")
+    except Exception as text_error:
+        logging.warning(f"Could not log hyperparameters as text: {text_error}")
 
 
 def setup_loggers(experiment_name: str, fold_num: int | None = None) -> list:
@@ -81,7 +105,7 @@ def setup_loggers(experiment_name: str, fold_num: int | None = None) -> list:
     log_dir = getattr(config, "LOG_DIR", "logs")
 
     if getattr(config, "ENABLE_TENSORBOARD", True):
-        tb_logger = SafeTensorBoardLogger(
+        tb_logger = TensorBoardLogger(
             save_dir=log_dir,
             name=experiment_name,
             version=None,  # Auto-increment version

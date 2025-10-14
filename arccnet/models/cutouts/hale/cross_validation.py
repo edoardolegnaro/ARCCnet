@@ -16,6 +16,7 @@ import pandas as pd
 import arccnet.models.cutouts.hale.config as config
 from arccnet.models.cutouts.hale.logging_utils import (
     log_experiment_summary,
+    log_hyperparameters,
     setup_basic_logging,
     setup_loggers,
 )
@@ -148,10 +149,7 @@ class CrossValidationManager:
             # Log hyperparameters to each logger
             for logger in main_loggers:
                 try:
-                    if hasattr(logger, "log_hyperparams"):
-                        logger.log_hyperparams(experiment_config)
-                    elif hasattr(logger, "experiment") and hasattr(logger.experiment, "log_parameters"):
-                        logger.experiment.log_parameters(experiment_config)
+                    log_hyperparameters(logger, experiment_config)
                 except Exception as e:
                     logging.warning(f"Could not log hyperparameters to {type(logger).__name__}: {e}")
 
