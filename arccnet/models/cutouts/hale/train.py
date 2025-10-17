@@ -1,5 +1,7 @@
 import logging
 import warnings
+from pathlib import Path
+from datetime import datetime
 
 import arccnet.models.cutouts.hale.config as config
 from arccnet.models.cutouts.hale.cross_validation import CrossValidationManager
@@ -90,7 +92,16 @@ def main() -> None:
 
     Prepares the dataset and runs training according to configuration.
     """
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+    log_dir = Path(getattr(config, "LOG_DIR", Path(__file__).parent / "logs"))
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = log_dir / f"hale_training_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(levelname)s - %(message)s",
+        handlers=[logging.FileHandler(log_file), logging.StreamHandler()],
+        force=True,
+    )
 
     # Log configuration info
     log_section("HALE CLASSIFICATION TRAINING", width=60)

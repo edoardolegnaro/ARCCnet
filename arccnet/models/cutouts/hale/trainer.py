@@ -51,6 +51,8 @@ class HaleTrainer:
         ".*hipBLASLt.*",  # AMD GPUs warning
         ".*Precision.*not supported by the model summary.*",
         ".*does not have many workers.*",
+        ".*Please use the new API settings to control TF32 behavior.*",
+        ".*You are using a CUDA device.*Tensor Cores.*",
     ]
 
     def __init__(self, class_names: list[str] | None = None):
@@ -67,26 +69,13 @@ class HaleTrainer:
             warnings.filterwarnings("ignore", category=UserWarning, message=pattern)
 
     def _get_precision(self) -> str:
-        """Get mixed precision setting based on CUDA version."""
-        if torch.cuda.is_available():
-            cuda_backend = getattr(torch.backends, "cuda", None)
-            matmul_backend = getattr(cuda_backend, "matmul", None)
-            if matmul_backend and hasattr(matmul_backend, "fp32_precision"):
-                try:
-                    matmul_backend.fp32_precision = "tf32"
-                    if getattr(matmul_backend, "fp32_precision", None) != "tf32":
-                        matmul_backend.fp32_precision = "ieee"
-                        logging.info("CUDA matmul backend does not support 'tf32'; using 'ieee' precision")
-                    else:
-                        logging.info("Configured CUDA matmul fp32 precision to 'tf32'")
-                except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
-                    logging.warning(f"Could not set CUDA matmul precision to 'tf32': {exc}")
-                    torch.set_float32_matmul_precision("high")
-            else:
-                torch.set_float32_matmul_precision("high")
-        else:
-            torch.set_float32_matmul_precision("high")
+        """
+        Get mixed precision setting.
 
+        PyTorch 2.9 manages TF32/FP32 precision via backend-specific APIs that may
+        clash with the deprecated `torch.set_float32_matmul_precision` helper.
+        Let PyTorch keep its defaults and just report the precision Lightning will use.
+        """
         precision = "16-mixed"
         logging.info(f"Using precision: {precision}")
         return precision
