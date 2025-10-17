@@ -69,13 +69,24 @@ class HaleTrainer:
     def _get_precision(self) -> str:
         """Get mixed precision setting based on CUDA version."""
         if torch.cuda.is_available():
-            cuda_matmul = getattr(getattr(torch.backends, "cuda", None), "matmul", None)
-            if cuda_matmul and hasattr(cuda_matmul, "fp32_precision"):
-                cuda_matmul.fp32_precision = "medium"
+            cuda_backend = getattr(torch.backends, "cuda", None)
+            matmul_backend = getattr(cuda_backend, "matmul", None)
+            if matmul_backend and hasattr(matmul_backend, "fp32_precision"):
+                try:
+                    matmul_backend.fp32_precision = "tf32"
+                    if getattr(matmul_backend, "fp32_precision", None) != "tf32":
+                        matmul_backend.fp32_precision = "ieee"
+                        logging.info("CUDA matmul backend does not support 'tf32'; using 'ieee' precision")
+                    else:
+                        logging.info("Configured CUDA matmul fp32 precision to 'tf32'")
+                except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
+                    logging.warning(f"Could not set CUDA matmul precision to 'tf32': {exc}")
+                    torch.set_float32_matmul_precision("high")
             else:
-                torch.set_float32_matmul_precision("medium")
+                torch.set_float32_matmul_precision("high")
         else:
-            torch.set_float32_matmul_precision("medium")
+            torch.set_float32_matmul_precision("high")
+
         precision = "16-mixed"
         logging.info(f"Using precision: {precision}")
         return precision

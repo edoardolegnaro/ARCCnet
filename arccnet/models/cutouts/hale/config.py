@@ -14,7 +14,7 @@ DATA_TYPE = "magnetogram"
 MODEL_NAME = "resnet50"  # Options: "resnet18", "resnet34", "resnet50"
 
 # Training configuration
-BATCH_SIZE = 32
+BATCH_SIZE = 64
 LEARNING_RATE = 1e-3
 MAX_EPOCHS = 50
 
