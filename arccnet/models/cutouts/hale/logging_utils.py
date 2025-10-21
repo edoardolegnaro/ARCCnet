@@ -4,8 +4,10 @@ Logging utilities for Hale classification models.
 This module contains logging setup, custom loggers, and logging helper functions.
 """
 
+import shutil
 import logging
 from typing import Any
+from pathlib import Path
 
 from pytorch_lightning.loggers import CSVLogger, TensorBoardLogger
 from pytorch_lightning.loggers.comet import CometLogger
@@ -202,25 +204,31 @@ def log_final_metrics(
         "final_test_f1": test_metrics.get("test_f1", 0),
     }
 
+    best_checkpoint = Path(best_model_path) if best_model_path else None
     for logger in loggers:
         try:
+            metrics_logged = False
+
             if hasattr(logger, "log_metrics"):
                 logger.log_metrics(final_metrics)
-            elif hasattr(logger, "experiment") and hasattr(logger.experiment, "log_metric"):
-                # For Comet ML
-                for metric_name, metric_value in final_metrics.items():
-                    logger.experiment.log_metric(metric_name, metric_value)
+                metrics_logged = True
 
-                # Log model artifact to Comet if checkpoint exists
-                if best_model_path and fold_num is not None:
-                    try:
-                        logger.experiment.log_model(
+            experiment = getattr(logger, "experiment", None)
+            if experiment:
+                if not metrics_logged and hasattr(experiment, "log_metric"):
+                    for metric_name, metric_value in final_metrics.items():
+                        experiment.log_metric(metric_name, metric_value)
+
+                if best_checkpoint and best_checkpoint.exists() and fold_num is not None:
+                    if hasattr(experiment, "log_model"):
+                        experiment.log_model(
                             name=f"hale_model_fold_{fold_num}",
-                            file_or_folder=best_model_path,
+                            file_or_folder=str(best_checkpoint),
                         )
                         logging.info(f"Model artifact logged to Comet for fold {fold_num}")
-                    except Exception as e:
-                        logging.warning(f"Could not log model to Comet: {e}")
+
+            if isinstance(logger, TensorBoardLogger) and best_checkpoint and best_checkpoint.exists():
+                _backup_checkpoint_to_tensorboard(logger, best_checkpoint, fold_num)
 
         except Exception as e:
             logging.warning(f"Could not log final metrics to {type(logger).__name__}: {e}")
@@ -252,6 +260,34 @@ def log_experiment_summary(loggers: list, summary_metrics: dict[str, float]) -> 
 def setup_basic_logging() -> None:
     """Set up basic logging configuration."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
+
+def _backup_checkpoint_to_tensorboard(
+    tb_logger: TensorBoardLogger, checkpoint_path: Path, fold_num: int | None
+) -> None:
+    """Copy the best checkpoint into the TensorBoard log directory for local access."""
+    try:
+        log_dir = Path(tb_logger.log_dir)
+        if fold_num is not None:
+            backup_dir = log_dir / "checkpoints" / f"fold_{fold_num}"
+        else:
+            backup_dir = log_dir / "checkpoints"
+
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        target_path = backup_dir / checkpoint_path.name
+        shutil.copy2(checkpoint_path, target_path)
+        logging.info(f"Checkpoint copied to TensorBoard log dir: {target_path}")
+
+        experiment = getattr(tb_logger, "experiment", None)
+        if experiment and hasattr(experiment, "add_text"):
+            step = fold_num if fold_num is not None else 0
+            experiment.add_text(
+                tag=f"fold_{fold_num}/checkpoint_path" if fold_num is not None else "checkpoint_path",
+                text_string=str(target_path),
+                global_step=step,
+            )
+    except Exception as e:
+        logging.warning(f"Could not back up checkpoint to TensorBoard directory: {e}")
 
 
 def log_dataset_statistics(

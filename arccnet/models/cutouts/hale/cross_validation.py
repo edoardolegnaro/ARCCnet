@@ -342,8 +342,8 @@ class CrossValidationManager:
     def _save_results_to_files(self, summary: dict, fold_metrics: list[dict], results: dict) -> Path:
         """Save cross-validation results to files."""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        results_dir = Path(f"cv_results_{config.classes}_{config.MODEL_NAME}_{timestamp}")
-        results_dir.mkdir(exist_ok=True)
+        results_dir = Path(config.LOG_DIR) / f"cv_results_{config.classes}_{config.MODEL_NAME}_{timestamp}"
+        results_dir.mkdir(parents=True, exist_ok=True)
 
         # Define files to save
         files_to_save = {

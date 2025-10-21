@@ -21,7 +21,7 @@ MAX_EPOCHS = 50
 # Cross-validation setup
 N_FOLDS = 8
 RANDOM_STATE = 42
-TRAIN_ALL_FOLDS = True  # Set to False to train only fold 1 for testing
+TRAIN_ALL_FOLDS = True  # False trains only fold 1 for testing
 
 # Hardware configuration
 ACCELERATOR = "gpu"  # Options: "gpu", "cpu"

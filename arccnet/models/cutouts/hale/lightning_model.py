@@ -92,6 +92,7 @@ class HaleLightningModel(pl.LightningModule):
         # Store for confusion matrix and classification report
         self.test_predictions = []
         self.test_targets = []
+        self.test_logits = []
 
     def forward(self, x):
         return self.backbone(x)
@@ -155,6 +156,7 @@ class HaleLightningModel(pl.LightningModule):
         # Store predictions and targets for confusion matrix and classification report
         self.test_predictions.extend(preds.cpu().numpy())
         self.test_targets.extend(labels.cpu().numpy())
+        self.test_logits.append(logits.detach().cpu())
 
         # Log metrics
         self.log("test_loss", loss)
@@ -198,6 +200,7 @@ class HaleLightningModel(pl.LightningModule):
         """Reset the test predictions and targets collections."""
         self.test_predictions = []
         self.test_targets = []
+        self.test_logits = []
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(

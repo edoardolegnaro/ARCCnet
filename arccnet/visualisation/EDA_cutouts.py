@@ -45,9 +45,9 @@ config = load_config()
 
 # %%
 data_folder = os.getenv("ARCAFF_DATA_FOLDER", "/ARCAFF/data")
-dataset_folder = "arccnet-v20250805/04_final"
+dataset_folder = "arccnet-v20251017/04_final"
 df_file_name = "data/cutout_classification/region_classification.parq"
-dataset_title = "arccnet v20250805"
+dataset_title = "arccnet v20251017"
 
 # %%
 df, _, filtered_ql_df = ut_d.make_dataframe(data_folder, dataset_folder, df_file_name)

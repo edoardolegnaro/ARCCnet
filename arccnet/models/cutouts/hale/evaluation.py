@@ -394,10 +394,11 @@ def _log_confusion_matrix_to_tensorboard(
                     report_text += f"recall={metrics.get('recall', 0):.4f}, "
                     report_text += f"f1={metrics.get('f1-score', 0):.4f}\n"
 
+        step = fold_num if fold_num is not None else 0
         logger.experiment.add_text(
             f"Fold_{fold_num}/Confusion_Matrix_and_Classification_Report",
             cm_text + report_text,
-            global_step=0,
+            global_step=step,
         )
 
     except Exception as e:

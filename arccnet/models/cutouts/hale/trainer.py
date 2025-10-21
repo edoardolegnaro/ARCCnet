@@ -306,18 +306,21 @@ class HaleTrainer:
         """Generate and log ROC curves."""
         try:
             y_true = model.test_targets
-            # Ensure predictions are a tensor before softmax
-            preds = model.test_predictions
-            if isinstance(preds, list):
-                preds = torch.tensor(preds)
-            y_pred_proba = torch.softmax(preds, dim=1)
+            logits_collection = getattr(model, "test_logits", [])
+            if not logits_collection:
+                logging.warning(f"No test logits available for ROC curves in fold {fold_num}")
+                return
+
+            logits = torch.cat(logits_collection, dim=0)
+            y_pred_proba = torch.softmax(logits, dim=1)
 
             if len(y_true) == 0:
                 logging.warning(f"No test predictions available for ROC curves in fold {fold_num}")
                 return
 
             # Convert to numpy and generate ROC curves
-            y_true_np = y_true.cpu().numpy()
+            y_true_tensor = torch.tensor(y_true, device=logits.device)
+            y_true_np = y_true_tensor.cpu().numpy()
             y_pred_proba_np = y_pred_proba.cpu().numpy()
             roc_image, roc_data = generate_roc_curves(y_true_np, y_pred_proba_np, self.class_names, fold_num)
 
