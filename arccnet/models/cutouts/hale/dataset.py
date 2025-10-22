@@ -67,7 +67,7 @@ def load_image(row, data_type="magnetogram"):
         raise ValueError(f"Unsupported data_type: {data_type}")
     try:
         with fits.open(fits_file_path, memmap=True) as img_fits:
-            return img_fits[0].data.astype(np.float32)
+            return img_fits[1].data.astype(np.float32)
     except Exception as e:
         raise RuntimeError(f"Failed to load FITS file {fits_file_path}: {e}")
 

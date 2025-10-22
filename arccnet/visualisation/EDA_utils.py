@@ -244,9 +244,9 @@ def load_and_analyze_fits_pair(idx, df_clean, data_folder, dataset_folder):
 
     # Load data
     with fits.open(fits_magn_path) as hdul:
-        mag_data = hdul[0].data
+        mag_data = hdul[1].data
     with fits.open(fits_cont_path) as hdul:
-        cont_data = hdul[0].data
+        cont_data = hdul[1].data
 
     # Check if data is not empty
     if mag_data is None or mag_data.size == 0:

@@ -352,7 +352,7 @@ print(f"\nn° of classes: {len(grouped_classes)}")
 
 
 # %%
-idx = 26530
+idx = 5564
 
 data = load_and_analyze_fits_pair(idx, AR_IA_df, data_folder, dataset_folder)
 
