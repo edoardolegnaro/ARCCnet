@@ -26,7 +26,6 @@ import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import seaborn as sns
 from p_tqdm import p_map
 
 from arccnet import load_config
@@ -174,7 +173,7 @@ latV = get_coordinates(AR_IA_df, "latitude")
 degree_ticks = np.arange(-90, 91, 15)
 
 # Plot histograms
-with sns.axes_style("darkgrid"):
+with plt.style.context("seaborn-v0_8-darkgrid"):
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 6))
     plot_histogram(ax1, lonV, degree_ticks, "Longitude")
     plot_histogram(ax2, latV, degree_ticks, "Latitude")
@@ -452,13 +451,17 @@ colors = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#e3
 all_labels = stats_df["label"].unique()
 
 for col, title, _ in stats_config:
-    plt.figure(figsize=(14, 8))
-    sns.boxplot(x="label", y=col, hue="label", data=stats_df, palette=colors[: len(all_labels)], legend=False)
-    plt.title(f"{title} by Active Region Class", fontsize=18)
-    plt.xticks(rotation=45, ha="right", fontsize=14)
-    plt.xlabel("")  # Remove x-axis label
-    plt.ylabel("Value", fontsize=16)
-    plt.grid(True, alpha=0.3)
+    fig, ax = plt.subplots(figsize=(14, 8))
+    data_by_label = [stats_df[stats_df["label"] == label][col].values for label in all_labels]
+    bp = ax.boxplot(data_by_label, labels=all_labels, patch_artist=True)
+    for patch, color in zip(bp["boxes"], colors[: len(all_labels)]):
+        patch.set_facecolor(color)
+    ax.set_title(f"{title} by Active Region Class", fontsize=18)
+    ax.tick_params(axis="x", rotation=45, labelsize=14)
+    ax.set_xlabel("")
+    ax.set_ylabel("Value", fontsize=16)
+    ax.grid(True, alpha=0.3)
+    fig.autofmt_xdate(ha="right")
     plt.tight_layout()
     plt.show()
 # %%
