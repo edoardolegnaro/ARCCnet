@@ -25,7 +25,7 @@ extensions = [
     "sphinx.ext.intersphinx",
     "sphinx.ext.todo",
     "sphinx.ext.coverage",
-    # "sphinx.ext.inheritance_diagram",  # Removed: requires graphviz, not currently used
+    "sphinx.ext.inheritance_diagram",
     "sphinx.ext.viewcode",
     "sphinx.ext.napoleon",
     "sphinx.ext.doctest",
