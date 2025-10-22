@@ -54,8 +54,22 @@ def _convert_jd_to_datetime(df):
 
 def _remove_problematic_quicklooks(df):
     """Remove problematic magnetograms from the dataset."""
-    problematic_quicklooks = [ql.strip() for ql in config.get("magnetograms", "problematic_quicklooks").split(",")]
-    mask = df["quicklook_path_mdi"].apply(lambda x: os.path.basename(x) in problematic_quicklooks)
+    # Parse and clean the problematic quicklooks list
+    # Strip whitespace and remove backslash line continuations
+    problematic_quicklooks = [
+        ql.strip().lstrip("\\").strip() for ql in config.get("magnetograms", "problematic_quicklooks").split(",")
+    ]
+
+    def is_problematic(path):
+        """Check if a path's basename matches any problematic quicklook."""
+        if not path or pd.isna(path) or path == "" or path == "None":
+            return False
+        return os.path.basename(path) in problematic_quicklooks
+
+    # Check both MDI and HMI quicklook paths
+    mask_mdi = df["quicklook_path_mdi"].apply(is_problematic)
+    mask_hmi = df["quicklook_path_hmi"].apply(is_problematic)
+    mask = mask_mdi | mask_hmi
     filtered_df = df[mask]
     df = df[~mask].reset_index(drop=True)
     return df, filtered_df
