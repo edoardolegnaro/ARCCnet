@@ -26,6 +26,7 @@ import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import seaborn as sns
 from p_tqdm import p_map
 
 from arccnet import load_config
@@ -413,7 +414,7 @@ stats_df.describe()
 
 # %%
 # Find the indices of the 10 highest mag_mean values
-top10_indices = stats_df["mag_max"].nlargest(10).index
+top10_indices = stats_df["mag_mean"].nlargest(10).index
 # Get the corresponding rows
 top10_rows = stats_df.loc[top10_indices]
 top10_rows
@@ -450,12 +451,12 @@ plt.show()
 colors = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#e377c2", "#7f7f7f"]
 all_labels = stats_df["label"].unique()
 
+# Create a custom color palette
+palette = {label: colors[i % len(colors)] for i, label in enumerate(all_labels)}
+
 for col, title, _ in stats_config:
     fig, ax = plt.subplots(figsize=(14, 8))
-    data_by_label = [stats_df[stats_df["label"] == label][col].values for label in all_labels]
-    bp = ax.boxplot(data_by_label, labels=all_labels, patch_artist=True)
-    for patch, color in zip(bp["boxes"], colors[: len(all_labels)]):
-        patch.set_facecolor(color)
+    sns.boxplot(data=stats_df, x="label", y=col, hue="label", palette=palette, ax=ax, legend=False)
     ax.set_title(f"{title} by Active Region Class", fontsize=18)
     ax.tick_params(axis="x", rotation=45, labelsize=14)
     ax.set_xlabel("")
