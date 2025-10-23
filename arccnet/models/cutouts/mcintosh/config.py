@@ -27,9 +27,9 @@ teacher_forcing_decay = 0.9
 teacher_forcing = True
 
 ### Dataset ###
-data_folder = os.getenv("ARCAFF_DATA_FOLDER", "../../../../../data/")
-dataset_folder = "arccnet-cutout-dataset-v20240715"
-df_name = "cutout-magnetic-catalog-v20240715.parq"
+data_folder = os.getenv("ARCAFF_DATA_FOLDER", "/ARCAFF/data")
+dataset_folder = "arccnet-v20251017/04_final"
+df_name = "data/cutout_classification/region_classification.parq"
 long_limit_deg = 65
 train_size = 0.7
 val_size = 0.15
@@ -40,5 +40,5 @@ plot_histograms = False
 
 ### Comet ###
 use_comet = True
-project_name = "arcaff-mcintosh"
+project_name = "arcaff-mcintosh-v20251017"
 workspace = "arcaff"

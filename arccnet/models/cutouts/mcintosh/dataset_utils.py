@@ -43,8 +43,8 @@ def display_sample_image(data_folder: str, dataset_folder: str, df: pd.DataFrame
 
 def process_ar_dataset(
     data_folder,
-    dataset_folder="arccnet-cutout-dataset-v20240715",
-    df_name="cutout-magnetic-catalog-v20240715.parq",
+    dataset_folder="arccnet-v20251017/04_final",
+    df_name="data/cutout_classification/region_classification.parq",
     plot_histograms=True,
     histogram_params=None,
     verbose=False,
@@ -72,10 +72,10 @@ def process_ar_dataset(
     if data_folder is None:
         data_folder = os.getenv("ARCAFF_DATA_FOLDER", "../../../../../data/")
 
-    df, _ = ut_d.make_dataframe(data_folder, dataset_folder, df_name)
+    df, AR_df, _ = ut_d.make_dataframe(data_folder, dataset_folder, df_name)
 
     # Filter out rows where 'magnetic_class' is empty
-    AR_df = df[df["magnetic_class"] != ""].copy()
+    AR_df = AR_df[AR_df["magnetic_class"] != ""].copy()
 
     # Extract McIntosh classification components
     AR_df["Z_component"] = AR_df["mcintosh_class"].str[0]

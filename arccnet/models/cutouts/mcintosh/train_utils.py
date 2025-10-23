@@ -56,7 +56,7 @@ def train(
         use_teacher_forcing = teacher_forcing_ratio is not None
 
         if scaler:
-            with torch.amp.autocast("cuda"):
+            with torch.amp.autocast(device.type):
                 output_z, output_p, output_c = model(
                     inputs,
                     Z_true=labels_z if use_teacher_forcing else None,
