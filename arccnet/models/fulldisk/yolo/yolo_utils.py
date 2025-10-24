@@ -36,14 +36,15 @@ def normalize_continuum(
     global_max : float
         Global maximum value from dataset (default: 2.0)
     """
-    # Set NaNs to 0 before normalization
-    data = np.nan_to_num(data, nan=0.0, copy=False)
+    # Masking: keep NaNs for off-disk/background
     denom = global_max - global_min
     if denom == 0 or not np.isfinite(denom):
         norm = np.zeros_like(data, dtype=np.float32)
     else:
         norm = 1.0 - (data - global_min) / denom
     norm = np.clip(norm, 0.0, 1.0)
+    # Set background (NaNs) to neutral gray (0.5)
+    norm = np.where(np.isnan(data), 0.5, norm)
     return norm.astype(np.float32)
 
 
