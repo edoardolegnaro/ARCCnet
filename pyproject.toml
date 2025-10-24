@@ -53,7 +53,9 @@ models = [
     "matplotlib",
     "seaborn",
     "p_tqdm",
-    "torchmetrics"
+    "torchmetrics",
+    "opencv-python",
+    "ultralytics"
 ]
 tests = [
     "pytest",

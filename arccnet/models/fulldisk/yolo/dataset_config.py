@@ -1,9 +1,3 @@
-"""
-Configuration for YOLO dataset generation from full-disk solar observations.
-
-Edit these constants to modify dataset generation parameters.
-"""
-
 import os
 from pathlib import Path
 
@@ -36,8 +30,10 @@ LABEL_MAPPING = {
 
 # Dataset split
 TRAIN_SPLIT_RATIO = 0.8
+TEMPORAL_GAP_DAYS = 14  # Days gap between train and val to prevent temporal leakage
+INCLUDE_EMPTY_LABELS = True  # Include images with no valid regions as negative examples
 
 # Image processing
 RESIZE_DIM = (1024, 1024)
-USE_COLORMAP_MAG = False
+USE_COLORMAP_MAG = False  # False is grayscale
 NUM_CPUS = 30

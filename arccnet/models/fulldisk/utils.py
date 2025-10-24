@@ -19,7 +19,6 @@ from matplotlib.patches import Circle, Patch, Rectangle
 from p_tqdm import p_map
 
 import astropy.units as u
-from astropy.io import fits
 from astropy.time import Time
 
 from arccnet.visualisation.EDA_utils import create_solar_grid
@@ -29,7 +28,7 @@ LabelFormatter = Callable[[Any], str]
 IMG_SIZE_BY_INSTRUMENT: dict[str, int] = {"MDI": 1024, "HMI": 4096}
 
 CLASS_COLOR_MAP = {
-    "0.0": "#2E2E2E",  # black
+    "IA": "#828282",
     "Alpha": "#00BFFF",  # bright sky blue
     "Beta": "#00B45A",  # bright spring green
     "Beta-Gamma": "#FFDD00",  # bright gold
@@ -42,11 +41,8 @@ CLASS_COLOR_MAP = {
 
 def load_rotated_map(fits_path: FitsPath, mask_off_disk: bool = True) -> sunpy.map.Map:
     """Return a rotated SunPy map, optionally masking off-disk pixels."""
-    with fits.open(Path(fits_path)) as img_fit:
-        data = img_fit[1].data
-        header = img_fit[1].header
+    sun_map = sunpy.map.Map(fits_path)
 
-    sun_map = sunpy.map.Map(data, header)
     if mask_off_disk:
         x_pix, y_pix = np.meshgrid(np.arange(sun_map.data.shape[1]), np.arange(sun_map.data.shape[0]))
         coords = sun_map.pixel_to_world(x_pix * u.pix, y_pix * u.pix)
@@ -338,14 +334,122 @@ def prepare_fulldisk_dataset(
     img_size_dic: Mapping[str, int] | None = None,
     filter_selected: bool = True,
 ) -> pd.DataFrame:
-    """Load and prepare a full-disk dataset with quality filtering."""
-    df = load_fulldisk_dataframe(data_folder, dataset_root, dataset_folder, df_name)
+    """Load and prepare a full-disk dataset with quality filtering using Astropy Table."""
+    from astropy.table import Table
 
+    # Load as Astropy Table
+    tab = Table.read(data_folder / dataset_folder / df_name)
+
+    # Filter by quality first (using Astropy Table)
     if filter_selected:
-        df = filter_by_data_quality(df)
+        good_quality_tab = tab[~tab["filtered"]]
+    else:
+        good_quality_tab = tab
+
+    # Convert only 1D columns to DataFrame
+    names_1d = [name for name in good_quality_tab.colnames if len(good_quality_tab[name].shape) <= 1]
+    df = good_quality_tab[names_1d].to_pandas()
+
+    # Add multidimensional columns as lists
+    for col in ["top_right_cutout", "bottom_left_cutout"]:
+        if col in good_quality_tab.colnames:
+            df[col] = list(good_quality_tab[col])
+
+    # Add time columns
+    df["time"] = df["datetime.jd1"] + df["datetime.jd2"]
+    from astropy.time import Time
+
+    times = Time(df["time"], format="jd")
+    df["datetime"] = pd.to_pandas(times.iso)
+
+    # Replace 0.0 and NaN in magnetic_class with 'IA'
+    if "magnetic_class" in df.columns:
+        df["magnetic_class"] = df["magnetic_class"].apply(lambda x: "IA" if x == 0.0 or pd.isna(x) else x)
 
     df = filter_front_side(df, longitude_threshold)
     df = calculate_region_sizes(df, img_size_dic)
     df = filter_by_minimum_size(df, min_size)
 
     return df
+
+
+def get_fits_statistics(img_path: str, data_folder: Path, dataset_root: Path) -> list[float]:
+    """Extract statistical properties from a FITS file using SunPy Map."""
+    local_path = img_path.replace("/mnt/ARCAFF/v0.3.0/", str(data_folder / dataset_root) + "/")
+    try:
+        sun_map = sunpy.map.Map(local_path)
+        data = sun_map.data
+        finite_mask = np.isfinite(data)
+        finite_data = data[finite_mask]
+        if len(finite_data) > 0:
+            return [
+                float(np.min(finite_data)),
+                float(np.max(finite_data)),
+                float(np.mean(finite_data)),
+                float(np.std(finite_data)),
+                float(np.sum(~finite_mask)),
+                float(data.size),
+            ]
+        return [np.nan, np.nan, np.nan, np.nan, 0.0, float(data.size)]
+    except Exception as e:
+        print(f"Error processing {local_path}: {e}")
+        return [np.nan, np.nan, np.nan, np.nan, 0.0, 0.0]
+
+
+def identify_outliers(
+    values: np.ndarray,
+    paths: np.ndarray,
+    label: str,
+    threshold: float = 3.0,
+    data_folder: Path | None = None,
+    dataset_root: Path | None = None,
+    visualize: bool = False,
+    max_visualize: int = 10,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Identify outliers using z-score method and optionally visualize them."""
+    mean = np.mean(values)
+    std = np.std(values)
+    z_scores = np.abs((values - mean) / std)
+    outliers = z_scores > threshold
+    outlier_indices = np.where(outliers)[0]
+
+    if np.any(outliers):
+        print(f"\n{label} Outliers (z-score > {threshold}):")
+        for idx in outlier_indices:
+            print(f"  {paths[idx]}")
+            print(f"    Value: {values[idx]:.4e}, Z-score: {z_scores[idx]:.2f}")
+
+        if visualize and data_folder is not None and dataset_root is not None:
+            n_to_show = min(len(outlier_indices), max_visualize)
+            print(f"\nVisualizing first {n_to_show} outliers:")
+
+            fig, axes = plt.subplots(2, 5, figsize=(20, 8))
+            axes = axes.flatten()
+
+            for i, idx in enumerate(outlier_indices[:n_to_show]):
+                img_path = paths[idx]
+                local_path = img_path.replace("/mnt/ARCAFF/v0.3.0/", str(data_folder / dataset_root) + "/")
+                try:
+                    sun_map = sunpy.map.Map(local_path)
+                    data = sun_map.data
+                    axes[i].imshow(data, cmap="gray", origin="lower")
+                    axes[i].set_title(f"Z={z_scores[idx]:.2f}\nVal={values[idx]:.2e}", fontsize=10)
+                    axes[i].axis("off")
+                except Exception as e:
+                    axes[i].text(0.5, 0.5, f"Error:\n{str(e)[:30]}", ha="center", va="center")
+                    axes[i].axis("off")
+            for i in range(n_to_show, len(axes)):
+                axes[i].axis("off")
+            plt.tight_layout()
+            plt.show()
+    else:
+        print(f"\n{label}: No outliers detected")
+    return outlier_indices, z_scores
+
+
+def check_file_exists(path: str, data_folder: Path, dataset_root: Path) -> bool:
+    """Check if file exists after path conversion."""
+    if pd.isna(path):
+        return False
+    local_path = path.replace("/mnt/ARCAFF/v0.3.0/", str(data_folder / dataset_root) + "/")
+    return Path(local_path).exists()

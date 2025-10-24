@@ -11,27 +11,64 @@ from astropy.io import fits
 from arccnet.models import labels
 from arccnet.visualisation import utils as ut_v
 
+# Global normalization values from EDA analysis
+CONTINUUM_MIN = 0.0
+CONTINUUM_MAX = 2.0
+MAGNETOGRAM_MIN = -4000.0
+MAGNETOGRAM_MAX = 4000.0
 
-def normalize_continuum(data: np.ndarray) -> np.ndarray:
+
+def normalize_continuum(
+    data: np.ndarray, global_min: float = CONTINUUM_MIN, global_max: float = CONTINUUM_MAX
+) -> np.ndarray:
     """
-    Normalize continuum image using inverted min-max scaling.
-    c_out = 1 - (c_in - min) / (max - min)
+    Normalize continuum image using inverted global min-max scaling.
+    c_out = 1 - (c_in - global_min) / (global_max - global_min)
     Output is in [0, 1], with background near 0 and brightest points near 1.
     NaNs are set to 0.
+
+    Parameters
+    ----------
+    data : np.ndarray
+        Input continuum image data
+    global_min : float
+        Global minimum value from dataset (default: 0.0)
+    global_max : float
+        Global maximum value from dataset (default: 2.0)
     """
-    # Mask out NaNs for min/max computation
-    finite = np.isfinite(data)
-    if not np.any(finite):
-        return np.zeros_like(data, dtype=np.float32)
-    min_val = np.nanmin(data[finite])
-    max_val = np.nanmax(data[finite])
-    denom = max_val - min_val
+    # Set NaNs to 0 before normalization
+    data = np.nan_to_num(data, nan=0.0, copy=False)
+    denom = global_max - global_min
     if denom == 0 or not np.isfinite(denom):
         norm = np.zeros_like(data, dtype=np.float32)
     else:
-        norm = 1.0 - (data - min_val) / denom
+        norm = 1.0 - (data - global_min) / denom
     norm = np.clip(norm, 0.0, 1.0)
-    norm = np.nan_to_num(norm, nan=0.0, copy=False)
+    return norm.astype(np.float32)
+
+
+def normalize_magnetogram(
+    data: np.ndarray, global_min: float = MAGNETOGRAM_MIN, global_max: float = MAGNETOGRAM_MAX
+) -> np.ndarray:
+    """
+    Normalize magnetogram image using global min-max scaling.
+    Output is in [0, 1].
+
+    Parameters
+    ----------
+    data : np.ndarray
+        Input magnetogram image data
+    global_min : float
+        Global minimum value from dataset (default: -4000.0)
+    global_max : float
+        Global maximum value from dataset (default: 4000.0)
+    """
+    denom = global_max - global_min
+    if denom == 0 or not np.isfinite(denom):
+        norm = np.zeros_like(data, dtype=np.float32)
+    else:
+        norm = (data - global_min) / denom
+    norm = np.clip(norm, 0.0, 1.0)
     return norm.astype(np.float32)
 
 
@@ -197,8 +234,8 @@ def process_fits_pair(
         if crota2 != 0:
             mag_data = rotate(mag_data, crota2, reshape=False, mode="constant", cval=0)
 
-        # Normalize and scale magnetogram
-        mag_data = (mag_data - np.min(mag_data)) / (np.max(mag_data) - np.min(mag_data))
+        # Normalize and scale magnetogram using global values
+        mag_data = normalize_magnetogram(mag_data)
         mag_data = (mag_data * 255).astype(np.uint8)
 
         if cmap:
