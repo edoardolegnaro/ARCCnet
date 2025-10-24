@@ -18,7 +18,7 @@ FILTER_SELECTED = True  # Only non-filtered items
 
 # Magnetic class mapping (classes mapped to "None" are excluded)
 LABEL_MAPPING = {
-    "0.0": "None",
+    "IA": "None",
     "Alpha": "Alpha",
     "Beta": "Beta",
     "Beta-Delta": "Beta",

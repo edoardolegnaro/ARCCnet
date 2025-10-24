@@ -355,13 +355,6 @@ def prepare_fulldisk_dataset(
         if col in good_quality_tab.colnames:
             df[col] = list(good_quality_tab[col])
 
-    # Add time columns
-    df["time"] = df["datetime.jd1"] + df["datetime.jd2"]
-    from astropy.time import Time
-
-    times = Time(df["time"], format="jd")
-    df["datetime"] = pd.to_pandas(times.iso)
-
     # Replace 0.0 and NaN in magnetic_class with 'IA'
     if "magnetic_class" in df.columns:
         df["magnetic_class"] = df["magnetic_class"].apply(lambda x: "IA" if x == 0.0 or pd.isna(x) else x)

@@ -41,7 +41,7 @@ initial_count = len(df)
 df["mag_exists"] = df["processed_path_image_mag"].apply(check_file_exists)
 df["cont_exists"] = df["processed_path_image_cont"].apply(check_file_exists)
 df = df[df["mag_exists"] & df["cont_exists"]].copy()
-print(f"  File existence check: kept {len(df)}/{initial_count} ({len(df) / initial_count * 100:.1f}%)")
+print(f"  File existence: present {len(df)}/{initial_count} ({len(df) / initial_count * 100:.1f}%)")
 
 # Store all unique images BEFORE label filtering (for negative examples)
 print("\n[2/6] Processing labels and creating YOLO annotations...")
@@ -62,6 +62,9 @@ all_images_before_filter = all_images_before_filter.rename(
 print(f"  Total unique images (before label filter): {len(all_images_before_filter)}")
 
 # Map and encode labels
+for label, count in df["magnetic_class"].value_counts().items():
+    print(f"    {label}: {count} ({count / len(df) * 100:.1f}%)")
+
 df["grouped_label"] = df["magnetic_class"].map(cfg.LABEL_MAPPING)
 print("\n  Label distribution (before filtering 'None'):")
 for label, count in df["grouped_label"].value_counts().items():

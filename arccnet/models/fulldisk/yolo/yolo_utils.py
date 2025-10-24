@@ -11,66 +11,72 @@ from astropy.io import fits
 from arccnet.models import labels
 from arccnet.visualisation import utils as ut_v
 
-# Global normalization values from EDA analysis
-CONTINUUM_MIN = 0.0
-CONTINUUM_MAX = 2.0
-MAGNETOGRAM_MIN = -4000.0
-MAGNETOGRAM_MAX = 4000.0
+# Normalization parameters matching cutout processing
+MAGNETOGRAM_DIVISOR = 800.0
 
 
-def normalize_continuum(
-    data: np.ndarray, global_min: float = CONTINUUM_MIN, global_max: float = CONTINUUM_MAX
-) -> np.ndarray:
+def normalize_magnetogram(data: np.ndarray, divisor: float = MAGNETOGRAM_DIVISOR) -> np.ndarray:
     """
-    Normalize continuum image using inverted global min-max scaling.
-    c_out = 1 - (c_in - global_min) / (global_max - global_min)
-    Output is in [0, 1], with background near 0 and brightest points near 1.
-    NaNs are set to 0.
+    Normalize magnetogram using hardtanh transformation, matching cutout processing.
+    First scales by divisor, then clips to [-1, 1], then maps to [0, 1] for uint8.
+
+    This matches the processing in arccnet.models.cutouts where:
+    1. hardtanh_transform_npy divides by 800 and clips to [-1, 1]
+    2. Values are mapped to [0, 1] for image saving
+
+    Parameters
+    ----------
+    data : np.ndarray
+        Input magnetogram image data (in Gauss)
+    divisor : float
+        Divisor for scaling (default: 800.0)
+
+    Returns
+    -------
+    np.ndarray
+        Normalized data in [0, 1] range
+    """
+    # Replace NaNs with 0
+    data = np.nan_to_num(data, nan=0.0)
+
+    # Scale and clip to [-1, 1] (hardtanh)
+    data = data / divisor
+    data = np.clip(data, -1.0, 1.0)
+
+    # Map from [-1, 1] to [0, 1]
+    data = (data + 1.0) / 2.0
+
+    return data.astype(np.float32)
+
+
+def normalize_continuum(data: np.ndarray) -> np.ndarray:
+    """
+    Normalize continuum image using simple min-max normalization.
+    Output is in [0, 1], matching the magnetogram processing style.
 
     Parameters
     ----------
     data : np.ndarray
         Input continuum image data
-    global_min : float
-        Global minimum value from dataset (default: 0.0)
-    global_max : float
-        Global maximum value from dataset (default: 2.0)
+
+    Returns
+    -------
+    np.ndarray
+        Normalized data in [0, 1] range
     """
-    # Masking: keep NaNs for off-disk/background
-    denom = global_max - global_min
-    if denom == 0 or not np.isfinite(denom):
-        norm = np.zeros_like(data, dtype=np.float32)
+    # Replace NaNs with 0
+    data = np.nan_to_num(data, nan=0.0)
+
+    # Simple min-max normalization per image
+    data_min = np.min(data)
+    data_max = np.max(data)
+
+    if data_max - data_min > 0:
+        data = (data - data_min) / (data_max - data_min)
     else:
-        norm = 1.0 - (data - global_min) / denom
-    norm = np.clip(norm, 0.0, 1.0)
-    # Set background (NaNs) to neutral gray (0.5)
-    norm = np.where(np.isnan(data), 0.5, norm)
-    return norm.astype(np.float32)
+        data = np.zeros_like(data)
 
-
-def normalize_magnetogram(
-    data: np.ndarray, global_min: float = MAGNETOGRAM_MIN, global_max: float = MAGNETOGRAM_MAX
-) -> np.ndarray:
-    """
-    Normalize magnetogram image using global min-max scaling.
-    Output is in [0, 1].
-
-    Parameters
-    ----------
-    data : np.ndarray
-        Input magnetogram image data
-    global_min : float
-        Global minimum value from dataset (default: -4000.0)
-    global_max : float
-        Global maximum value from dataset (default: 4000.0)
-    """
-    denom = global_max - global_min
-    if denom == 0 or not np.isfinite(denom):
-        norm = np.zeros_like(data, dtype=np.float32)
-    else:
-        norm = (data - global_min) / denom
-    norm = np.clip(norm, 0.0, 1.0)
-    return norm.astype(np.float32)
+    return data.astype(np.float32)
 
 
 def to_yolo(encoded_label, top_right, bottom_left, img_width, img_height):
@@ -229,26 +235,28 @@ def process_fits_pair(
             mag_data = img_fit[1].data
             header = img_fit[1].header
 
-        mag_data = np.nan_to_num(mag_data, nan=0.0)
-        mag_data = ut_v.hardtanh_transform_npy(mag_data)
+        # Handle rotation first (before normalization)
         crota2 = header.get("CROTA2", 0)
         if crota2 != 0:
             mag_data = rotate(mag_data, crota2, reshape=False, mode="constant", cval=0)
 
-        # Normalize and scale magnetogram using global values
+        # Normalize magnetogram (this includes NaN handling and hardtanh)
         mag_data = normalize_magnetogram(mag_data)
-        mag_data = (mag_data * 255).astype(np.uint8)
+
+        # Apply padding and resizing (before uint8 conversion for better precision)
+        mag_data = ut_v.pad_resize_normalize(mag_data, target_height=target_width, target_width=target_height)
 
         if cmap:
-            mag_data = ut_v.pad_resize_normalize(mag_data, target_height=target_width, target_width=target_height)
+            # Save with colormap
             plt.imshow(mag_data, cmap=ut_v.magnetic_map)
             plt.axis("off")
             plt.savefig(output_image_path_mag, bbox_inches="tight", pad_inches=0, dpi=300)
             plt.close()
         else:
-            img = Image.fromarray(mag_data)
-            img_resized = img.resize(resize_dim)
-            img_resized.save(output_image_path_mag)
+            # Save as grayscale
+            mag_data = (mag_data * 255).astype(np.uint8)
+            img = Image.fromarray(mag_data, mode="L")
+            img.save(output_image_path_mag)
 
         with open(os.path.join(base_label_dir_mag, label_filename), "w") as label_file:
             label_file.write(label)
@@ -267,13 +275,15 @@ def process_fits_pair(
             cont_data = img_fit[1].data
             header = img_fit[1].header
 
-        cont_data = np.nan_to_num(cont_data, nan=0.0)
+        # Handle rotation first (before normalization)
         crota2 = header.get("CROTA2", 0)
         if crota2 != 0:
             cont_data = rotate(cont_data, crota2, reshape=False, mode="constant", cval=0)
 
-        # Normalize continuum using the inverted min-max scaling
+        # Normalize continuum (this includes NaN handling)
         cont_data = normalize_continuum(cont_data)
+
+        # Apply padding and resizing (this should be done BEFORE uint8 conversion to preserve precision)
         cont_data = ut_v.pad_resize_normalize(cont_data, target_height=target_width, target_width=target_height)
         cont_data = (cont_data * 255).astype(np.uint8)
         img = Image.fromarray(cont_data, mode="L")

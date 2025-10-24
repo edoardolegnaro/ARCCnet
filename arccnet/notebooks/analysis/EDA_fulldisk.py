@@ -24,7 +24,6 @@ import pandas as pd
 import plotly.graph_objects as go
 import seaborn as sns
 from p_tqdm import p_map
-from sunpy.map import Map
 
 from astropy.table import Table
 
@@ -68,18 +67,6 @@ unique_cont_images = df["processed_path_image_cont"].unique()
 unique_cont_images = [p for p in unique_cont_images if isinstance(p, str)]
 print(f"Total unique continuum images: {len(unique_cont_images)}")
 
-
-for i, img_path in enumerate(unique_cont_images[:3]):
-    local_path = img_path.replace("/mnt/ARCAFF/v0.3.0/", str(data_folder / dataset_root) + "/")
-    try:
-        sun_map = Map(local_path)
-        plt.figure(figsize=(8, 8))
-        sun_map.plot()
-        plt.title(f"Continuum Full-Disk {i + 1}")
-        plt.show()
-    except Exception as e:
-        print(f"Error opening {local_path}: {e}")
-
 stats_results = p_map(
     fd_utils.get_fits_statistics,
     unique_cont_images,
@@ -104,6 +91,7 @@ print(f"  Global Range: {global_max - global_min:.4e}")
 print(f"  Mean of Means: {overall_mean:.4e}")
 print(f"  Mean of Stds: {overall_std:.4e}")
 print(f"  NaN pixels: {total_nan_pixels:,} / {total_pixel_count:,} ({nan_percentage:.3f}%)")
+
 
 # %%
 # Visualize distributions

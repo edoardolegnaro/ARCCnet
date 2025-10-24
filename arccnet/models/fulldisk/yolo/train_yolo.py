@@ -1,9 +1,12 @@
+import os
 import argparse
 from pathlib import Path
 
 import comet_ml
 import yaml
 from ultralytics import YOLO
+
+os.environ["TORCH_CPP_LOG_LEVEL"] = "ERROR"
 
 # Parse command-line arguments
 parser = argparse.ArgumentParser(description="Train YOLO on magnetogram or continuum data")
