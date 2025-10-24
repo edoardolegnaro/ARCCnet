@@ -1,9 +1,9 @@
 import comet_ml
 from ultralytics import YOLO
 
-comet_ml.login(project_name="arcaff-v2-fulldisk-detection-classification", workspace="arcaff")
+comet_ml.login(project_name="arcaff-v20251710", workspace="arcaff")
 
-model = YOLO("yolo11x.pt")  # load a pretrained model
+model = YOLO("yolo11s.pt")  # load a pretrained model
 
 
 # Define training arguments

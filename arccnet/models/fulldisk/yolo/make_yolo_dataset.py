@@ -1,92 +1,84 @@
-# %% Clean up Dataframe
-import os
+"""Generate YOLO datasets from full-disk solar observations (mag/cont)."""
+
+from pathlib import Path
 
 import pandas as pd
 from p_tqdm import p_map
 
-from astropy.time import Time
+from arccnet.models.fulldisk import utils as fd_utils
+from arccnet.models.fulldisk.yolo import dataset_config as cfg
+from arccnet.models.fulldisk.yolo import yolo_utils as ut
 
-from arccnet.models.fulldisk.YOLO import utilities as ut
+# Load and filter data
+df = fd_utils.prepare_fulldisk_dataset(
+    cfg.DATA_FOLDER,
+    cfg.DATASET_ROOT,
+    cfg.DATASET_FOLDER,
+    cfg.DATAFRAME_NAME,
+    longitude_threshold=cfg.LONGITUDE_THRESHOLD,
+    min_size=cfg.MIN_SIZE,
+    filter_selected=cfg.FILTER_SELECTED,
+)
 
-# %% Clean up Dataframe
-data_folder = os.getenv("ARCAFF_DATA_FOLDER", "../../../data/")
-dataset_folder = "arccnet-fulldisk-dataset-v20240917"
-df_name = "fulldisk-detection-catalog-v20240917.parq"
 
-local_path_root = os.path.join(data_folder, dataset_folder)
+def check_file_exists(path):
+    if pd.isna(path):
+        return False
+    local_path = path.replace("/mnt/ARCAFF/v0.3.0/", str(cfg.DATA_FOLDER / cfg.DATASET_ROOT) + "/")
+    return Path(local_path).exists()
 
-df = pd.read_parquet(os.path.join(data_folder, dataset_folder, df_name))
-df["time"] = df["datetime.jd1"] + df["datetime.jd2"]
-times = Time(df["time"], format="jd")
-df["datetime"] = pd.to_datetime(times.iso)
 
-selected_df = df[~df["filtered"]]
+initial_count = len(df)
+df["mag_exists"] = df["processed_path_image_mag"].apply(check_file_exists)
+df["cont_exists"] = df["processed_path_image_cont"].apply(check_file_exists)
+df = df[df["mag_exists"] & df["cont_exists"]].copy()
+print(f"File check: kept {len(df)}/{initial_count} ({len(df) / initial_count * 100:.1f}%)")
 
-lon_trshld = 70
-front_df = selected_df[(selected_df["longitude"] < lon_trshld) & (selected_df["longitude"] > -lon_trshld)]
-
-min_size = 0.024
-img_size_dic = {"MDI": 1024, "HMI": 4096}
-
-cleaned_df = front_df.copy()
-for idx, row in cleaned_df.iterrows():
-    x_min, y_min = row["bottom_left_cutout"]
-    x_max, y_max = row["top_right_cutout"]
-
-    img_sz = img_size_dic.get(row["instrument"])
-    width = (x_max - x_min) / img_sz
-    height = (y_max - y_min) / img_sz
-
-    cleaned_df.at[idx, "width"] = width
-    cleaned_df.at[idx, "height"] = height
-
-cleaned_df = cleaned_df[(cleaned_df["width"] >= min_size) & (cleaned_df["height"] >= min_size)]
-
-label_mapping = {
-    "Alpha": "Alpha",
-    "Beta": "Beta",
-    "Beta-Delta": "Beta",
-    "Beta-Gamma": "Beta-Gamma",
-    "Beta-Gamma-Delta": "Beta-Gamma",
-    "Gamma": "None",
-    "Gamma-Delta": "None",
-}
-
-unique_labels = cleaned_df["magnetic_class"].map(label_mapping).unique()
+# Map and encode labels
+unique_labels = df["magnetic_class"].map(cfg.LABEL_MAPPING).unique()
 label_to_index = {label: idx for idx, label in enumerate(unique_labels)}
-cleaned_df["grouped_label"] = cleaned_df["magnetic_class"].map(label_mapping)
-cleaned_df = cleaned_df[cleaned_df["grouped_label"] != "None"].copy()  # Exclude 'None' labels if necessary
-cleaned_df["encoded_label"] = cleaned_df["grouped_label"].map(label_to_index)
+df["grouped_label"] = df["magnetic_class"].map(cfg.LABEL_MAPPING)
+df = df[df["grouped_label"] != "None"].copy()
+df["encoded_label"] = df["grouped_label"].map(label_to_index)
 
-# %% YOLO Labels
-cleaned_df["yolo_label"] = cleaned_df.apply(
+# Create YOLO labels
+img_size_dic = fd_utils.IMG_SIZE_BY_INSTRUMENT
+df["yolo_label"] = df.apply(
     lambda row: ut.to_yolo(
         row["encoded_label"],
         row["top_right_cutout"],
         row["bottom_left_cutout"],
-        img_size_dic.get(row["instrument"]),
-        img_size_dic.get(row["instrument"]),
+        img_size_dic[row["instrument"]],
+        img_size_dic[row["instrument"]],
     ),
     axis=1,
 )
 
-df_yolo = cleaned_df.groupby("path")["yolo_label"].apply(lambda x: "\n".join(x)).reset_index()
+# Group by full-disk image
+df_yolo = (
+    df.groupby("processed_path_image_mag")
+    .agg(
+        {
+            "yolo_label": "\n".join,
+            "processed_path_image_cont": "first",  # All rows in a group have the same continuum path
+        }
+    )
+    .reset_index()
+)
+df_yolo = df_yolo.rename(columns={"processed_path_image_mag": "path_mag", "processed_path_image_cont": "path_cont"})
 
-# %% temporal dataset split
-split_idx = int(0.8 * len(df_yolo))
-train_df = df_yolo[:split_idx]
-val_df = df_yolo[split_idx:]
+# Split train/val
+split_idx = int(cfg.TRAIN_SPLIT_RATIO * len(df_yolo))
+train_df, val_df = df_yolo[:split_idx], df_yolo[split_idx:]
 
-YOLO_root_path = os.path.join(data_folder, "YOLO_dataset_cmap")
-
-
-def process_train(row):
-    return ut.process_fits_row(row, local_path_root, YOLO_root_path, "train", resize_dim=(1024, 1024), cmap=True)
+# Process and save
+local_root = str(cfg.DATA_FOLDER / cfg.DATASET_ROOT)
+mag_root, cont_root = str(cfg.YOLO_OUTPUT_MAG), str(cfg.YOLO_OUTPUT_CONT)
 
 
-def process_val(row):
-    return ut.process_fits_row(row, local_path_root, YOLO_root_path, "val", resize_dim=(1024, 1024), cmap=True)
+def process(row, split):
+    return ut.process_fits_pair(row, local_root, mag_root, cont_root, split, cfg.RESIZE_DIM, cfg.USE_COLORMAP_MAG)
 
 
-p_map(process_train, [row for _, row in train_df.iterrows()], num_cpus=32)
-p_map(process_val, [row for _, row in val_df.iterrows()], num_cpus=32)
+p_map(lambda r: process(r, "train"), [r for _, r in train_df.iterrows()], num_cpus=cfg.NUM_CPUS)
+p_map(lambda r: process(r, "val"), [r for _, r in val_df.iterrows()], num_cpus=cfg.NUM_CPUS)
