@@ -8,7 +8,7 @@ from scipy.ndimage import rotate
 
 from astropy.io import fits
 
-from arccnet.models import labels
+from arccnet.models.fulldisk.yolo import dataset_config as cfg
 from arccnet.visualisation import utils as ut_v
 
 # Normalization parameters matching cutout processing
@@ -323,7 +323,9 @@ def draw_yolo_labels_on_image(image_path, output_path=None):
     - output_path: Path where the output image will be saved.
                    If None, display the image.
     """
-    class_names = [name for name, _ in sorted(labels.fulldisk_labels_ARs.items(), key=lambda item: item[1])]
+    class_names = [
+        cfg.LABEL_MAPPING[label] for label in sorted(cfg.LABEL_MAPPING.keys()) if cfg.LABEL_MAPPING[label] != "None"
+    ]
 
     # Load the image
     img = Image.open(image_path).convert("RGB")
@@ -345,8 +347,11 @@ def draw_yolo_labels_on_image(image_path, output_path=None):
             x2 = (x_center + bbox_width / 2) * width
             y2 = (y_center + bbox_height / 2) * height
 
-            # Draw the bounding box rectangle and the label
+            # Draw the bounding box rectangle
             draw.rectangle([x1, y1, x2, y2], outline="orange", width=1)
-            draw.text((x1, y1), class_names[int(class_id)], fill="yellow", font=font)
+            # Draw the label text just above the top-left corner of the box
+            text_x = x1
+            text_y = y1 - 28 if y1 - 28 > 0 else y1 + 2  # 28px above, or just below if too close to top
+            draw.text((text_x, text_y), class_names[int(class_id)], fill="yellow", font=font)
 
     return img
