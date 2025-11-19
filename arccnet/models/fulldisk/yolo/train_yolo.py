@@ -14,6 +14,7 @@ os.environ["TORCH_CPP_LOG_LEVEL"] = "ERROR"
 TEMP_WORKSPACE = Path(__file__).parent / "temp"
 TEMP_WORKSPACE.mkdir(parents=True, exist_ok=True)
 os.environ.setdefault("YOLO_CONFIG_DIR", str(TEMP_WORKSPACE))
+os.environ.setdefault("ULTRALYTICS_CACHE_DIR", str(TEMP_WORKSPACE / "weights"))
 
 _temp_configs_dir = TEMP_WORKSPACE / "configs"
 _temp_runs_dir = TEMP_WORKSPACE / "runs"
@@ -72,7 +73,7 @@ print(f"  Temp workspace: {TEMP_WORKSPACE}")
 
 comet_ml.login(project_name="arcaff-v20251710", workspace="arcaff")
 
-model = YOLO("yolo11n.pt")  # load a pretrained model
+model = YOLO("yolo11l.pt")  # load a pretrained model
 
 
 # Define training arguments
