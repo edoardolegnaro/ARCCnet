@@ -39,7 +39,18 @@ lon_lim_degrees = 85
 ; Magnetograms ;
 ;;;;;;;;;;;;;;;;
 [magnetograms]
-problematic_quicklooks = 20010116_000028_MDI.png, 20001130_000028_MDI.png, 19990420_235943_MDI.png
+problematic_quicklooks = 20010116_000028_MDI.png, \
+    20001130_000028_MDI.png, \
+    19990420_235943_MDI.png, \
+    19960904_000030_.png, \
+    19960905_000030_.png, \
+    20010116_000028_.png, \
+    20001130_000028_.png, \
+    19990420_235943_.png, \
+    19960916_000030_.png, \
+    19960903_000030_.png, \
+    20050201_235943_.png, \
+    20090527_000026_.png
 
 
 [magnetograms.cutouts]

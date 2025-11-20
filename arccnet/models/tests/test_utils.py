@@ -11,7 +11,9 @@ def sample_dataframe():
     data = {
         "processed_path_image_hmi": ["path1", "", "path3", "path4", "", "path6"],
         "longitude_hmi": [30, -70, 45, 80, -50, 50],
-        "longitude_mdi": [np.nan, 60, np.nan, 90, np.nan, 60],
+        "longitude_mdi": [np.nan, 60, np.nan, 90, 40, 60],
+        "latitude_hmi": [0, 10, 20, 30, 40, 50],
+        "latitude_mdi": [np.nan, 15, np.nan, 35, 45, 55],
         "label": ["A", "B", "C", "A", "B", "C"],
     }
     return pd.DataFrame(data)
@@ -105,9 +107,12 @@ def test_undersample_group_filter(monkeypatch, sample_dataframe):
         buffer_percentage=0.1,
     )
 
-    # Test that all front locations are present without undersampling
-    expected_front_indices = df_modified_no_undersample[df_modified_no_undersample["location"] == "front"].index
-    assert set(df_no_undersample.index) == set(expected_front_indices), "Filtering without undersampling incorrect."
+    # Test that all locations in the result are 'front' (rear should be filtered)
+    assert all(df_no_undersample["location"] == "front"), "Not all locations are 'front' after filtering."
 
-    # Test that all front locations are present
-    assert df_no_undersample.shape[0] == 5, "Incorrect number of rows after filtering without undersampling."
+    # Test that we have the correct number of front locations (5 out of 6 total rows)
+    expected_front_count = (df_modified_no_undersample["location"] == "front").sum()
+    assert df_no_undersample.shape[0] == expected_front_count, (
+        "Incorrect number of rows after filtering without undersampling."
+    )
+    assert df_no_undersample.shape[0] == 5, "Expected 5 front locations, got a different count."

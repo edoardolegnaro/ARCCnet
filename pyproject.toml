@@ -39,7 +39,8 @@ dependencies = [
     "pyarrow",
     "drms~=0.9",
     "astropy~=7.0",
-    "pandas~=2.0"
+    "pandas~=2.0",
+    "p_tqdm"
 ]
 
 [project.optional-dependencies]
