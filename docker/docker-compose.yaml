@@ -17,4 +17,8 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - ..:/opt/program
     working_dir: /opt/program
+    # Increase shared memory for PyTorch multiprocessing
+    shm_size: '16gb'
+    # Alternative: use host IPC for unlimited shared memory
+    # ipc: host
     command: [ "/bin/sleep", "365d" ]
