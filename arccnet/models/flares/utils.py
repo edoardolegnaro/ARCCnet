@@ -1,4 +1,5 @@
 import os
+import glob
 
 from sklearn.model_selection import train_test_split
 
@@ -47,6 +48,14 @@ def check_fits_file_existence(df, data_folder, dataset_folder):
         except ImportError:
             return False
 
+    def normalize_filename(filename):
+        """Remove mag/cont indicators to normalize filenames for comparison."""
+        return filename.replace('_mag_', '_').replace('_cont_', '_')
+
+    # Pre-load all FITS files and normalize them for comparison
+    fits_dir = os.path.join(data_folder, dataset_folder, "data/cutout_classification/fits")
+    all_fits_files = {normalize_filename(os.path.basename(f)) for f in glob.glob(os.path.join(fits_dir, "*.fits"))}
+
     df["file_exists"] = False
     missing_path_indices = []
 
@@ -69,10 +78,9 @@ def check_fits_file_existence(df, data_folder, dataset_folder):
             path_value = mdi_path
 
         base_filename = os.path.basename(path_value)
-        fits_file_path = os.path.join(data_folder, dataset_folder, "data/cutout_classification/fits", base_filename)
-
-        # Check if the constructed file path exists
-        if os.path.exists(fits_file_path):
+        normalized_filename = normalize_filename(base_filename)
+        
+        if normalized_filename in all_fits_files:
             df.loc[index, "file_exists"] = True
 
     return df, missing_path_indices

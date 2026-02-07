@@ -35,12 +35,13 @@ pd.set_option("display.max_columns", None)
 
 # %%
 # Setup
-data_folder = os.getenv("ARCAFF_DATA_FOLDER", "../../../data")
+data_folder = os.getenv("ARCAFF_DATA_FOLDER", "/ARCAFF/data")
 df_flares_name = "mag-pit-flare-dataset_1996-01-01_2023-01-01_dev.parq"
 df_flares = pd.read_parquet(os.path.join(data_folder, df_flares_name))
 
-dataset_folder = "arccnet-cutout-dataset-v20240715"
-df_file_name = "cutout-mcintosh-catalog-v20240715.parq"
+dataset_folder = "arccnet-v20251017/04_final"
+df_file_name = "data/cutout_classification/region_classification.parq"
+dataset_title = "arccnet v20251017"
 
 # %%
 ut_v.make_classes_histogram(
