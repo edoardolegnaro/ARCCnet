@@ -49,12 +49,24 @@ def check_fits_file_existence(df, data_folder, dataset_folder):
             return False
 
     def normalize_filename(filename):
-        """Remove mag/cont indicators to normalize filenames for comparison."""
-        return filename.replace('_mag_', '_').replace('_cont_', '_')
+        """Remove mag/cont/SIDE1 indicators to normalize filenames for comparison."""
+        base = os.path.splitext(filename)[0]
+        return base.replace('_mag_', '_').replace('_cont_', '_').replace('_SIDE1', '')
 
-    # Pre-load all FITS files and normalize them for comparison
+    # Pre-compute mapping of normalized filenames to actual files, preferring _mag_
     fits_dir = os.path.join(data_folder, dataset_folder, "data/cutout_classification/fits")
-    all_fits_files = {normalize_filename(os.path.basename(f)) for f in glob.glob(os.path.join(fits_dir, "*.fits"))}
+    all_fits_files = glob.glob(os.path.join(fits_dir, "*.fits"))
+    
+    normalized_to_file = {}
+    for fits_file in all_fits_files:
+        filename = os.path.basename(fits_file)
+        normalized = normalize_filename(filename)
+        
+        # Only add _mag_ files, or add _cont_ if no _mag_ entry exists yet
+        if '_mag_' in filename:
+            normalized_to_file[normalized] = filename
+        elif normalized not in normalized_to_file:
+            normalized_to_file[normalized] = filename
 
     df["file_exists"] = False
     missing_path_indices = []
@@ -74,14 +86,19 @@ def check_fits_file_existence(df, data_folder, dataset_folder):
         # Prefer HMI path if available, otherwise use MDI path
         if not hmi_missing:
             path_value = hmi_path
+            path_column = "path_image_cutout_hmi"
         else:
             path_value = mdi_path
+            path_column = "path_image_cutout_mdi"
 
         base_filename = os.path.basename(path_value)
         normalized_filename = normalize_filename(base_filename)
         
-        if normalized_filename in all_fits_files:
+        # O(1) lookup and update the DataFrame with the actual filename
+        if normalized_filename in normalized_to_file:
             df.loc[index, "file_exists"] = True
+            # Update the path column to point to the actual file found
+            df.loc[index, path_column] = normalized_to_file[normalized_filename]
 
     return df, missing_path_indices
 
