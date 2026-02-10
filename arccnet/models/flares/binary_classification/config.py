@@ -10,8 +10,8 @@ import os
 # =============================================================================
 MODEL_NAME = "vit_small_patch8_224"  # Name of the timm model
 
-BATCH_SIZE = 32
-NUM_WORKERS = os.cpu_count() // 2
+BATCH_SIZE = 64
+NUM_WORKERS = 0
 LEARNING_RATE = 1e-4
 MAX_EPOCHS = 500
 RANDOM_SEED = 42  # Seed for reproducibility in train, val, test splitting
@@ -47,9 +47,9 @@ LR_FINDER_AUTO_UPDATE = True  # Automatically update the model with suggested LR
 # =============================================================================
 # Paths and File Names
 # =============================================================================
-DATA_FOLDER = os.getenv("ARCAFF_DATA_FOLDER", "/data")  # Base data directory
+DATA_FOLDER = os.getenv("ARCAFF_DATA_FOLDER", "/ARCAFF/data")  # Base data directory
 FLARES_PARQ = "mag-pit-flare-dataset_1996-01-01_2023-01-01_dev.parq"  # Input flare catalog
-CUTOUT_DATASET_FOLDER = "arccnet-cutout-dataset-v20251017"
+CUTOUT_DATASET_FOLDER = "arccnet-v20251017/04_final"
 
 # =============================================================================
 # Data Processing Parameters

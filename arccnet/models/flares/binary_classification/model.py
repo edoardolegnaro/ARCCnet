@@ -239,9 +239,10 @@ class FlareClassifier(pl.LightningModule):
 
     def on_test_epoch_end(self):
         """Called at the end of test epoch."""
-        if self.logger is not None:
+        experiment = getattr(self.logger, "experiment", None) if self.logger is not None else None
+        if experiment is not None and hasattr(experiment, "log_confusion_matrix"):
             cm = self.test_confusion_matrix.compute().cpu().numpy()
-            self.logger.experiment.log_confusion_matrix(
+            experiment.log_confusion_matrix(
                 matrix=cm,
                 labels=["No Flare", "Flare"],
                 title="Test Set Confusion Matrix",

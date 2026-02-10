@@ -24,18 +24,17 @@ class CometModelCheckpointCallback(Callback):
     def __init__(self, comet_logger):
         super().__init__()
         self.comet_logger = comet_logger
+        self._last_logged_best_path = None
 
-    def on_save_checkpoint(self, trainer, pl_module, checkpoint):
-        # Skip if this is not a regular training checkpoint
-        if "checkpoint_callback_best_model_path" not in checkpoint:
-            return
-
-        # Only log when it's the best model
-        if trainer.checkpoint_callback.best_model_path == checkpoint["checkpoint_callback_best_model_path"]:
+    def on_validation_end(self, trainer, pl_module):
+        # Log only when a new best checkpoint path appears.
+        if trainer.checkpoint_callback and trainer.checkpoint_callback.best_model_path:
+            best_path = trainer.checkpoint_callback.best_model_path
+            if best_path == self._last_logged_best_path:
+                return
             logger.info("Logging best model to Comet...")
-            self.comet_logger.experiment.log_model(
-                "best_model", checkpoint["checkpoint_callback_best_model_path"], overwrite=True
-            )
+            self.comet_logger.experiment.log_model("best_model", best_path, overwrite=True)
+            self._last_logged_best_path = best_path
             logger.info("Best model logged to Comet successfully.")
 
 
@@ -50,13 +49,15 @@ def load_data():
         target_column=f"flares_above_{config.THRESHOLD_CLASS}",
         test_size=config.TEST_SIZE,
         val_size=config.VAL_SIZE,
-        random_state=42,
+        random_state=config.RANDOM_SEED,
     )
     logger.info("Data loading and splitting complete.")
     return train_df, val_df, test_df
 
 
 # Load data once at the beginning
+pl.seed_everything(config.RANDOM_SEED, workers=True)
+logger.info(f"Global seed set to {config.RANDOM_SEED}.")
 train_df, val_df, test_df = load_data()
 
 # ---  Initialize DataModule and Model ---
@@ -124,7 +125,7 @@ checkpoint_callback = ModelCheckpoint(
     monitor=config.CHECKPOINT_METRIC,
     mode="max",
     save_top_k=1,
-    filename="best-model-{epoch:02d}-{val_f1:.3f}",  # Check config for metric name if different
+    filename=f"best-model-{{epoch:02d}}-{{{config.CHECKPOINT_METRIC}:.3f}}",
 )
 
 early_stopping_callback = EarlyStopping(
@@ -161,7 +162,7 @@ trainer = pl.Trainer(
     accelerator="auto",  # Automatically chooses GPU, TPU, CPU etc.
     devices="auto",  # Automatically selects the devices
     precision="16-mixed",  # Enable 16-bit mixed-precision training
-    deterministic=False,  # Set True for reproducibility, may impact performance
+    deterministic=True,
     enable_progress_bar=True,
     logger=comet_logger if comet_logger else False,  # Use CometLogger if enabled
     callbacks=callbacks,  # Add all callbacks
@@ -175,10 +176,11 @@ if config.USE_LR_FINDER:
     tuner = Tuner(trainer)
     lr_finder = tuner.lr_find(
         flare_model,
-        data_module,
+        datamodule=data_module,
         min_lr=config.LR_FINDER_MIN_LR,
         max_lr=config.LR_FINDER_MAX_LR,
         num_training=config.LR_FINDER_NUM_TRAINING,
+        update_attr=False,
     )
 
     # Plot and save results
@@ -203,9 +205,12 @@ if config.USE_LR_FINDER:
 
     # Update model's learning rate if auto-update is enabled
     if config.LR_FINDER_AUTO_UPDATE:
-        logger.info(f"Updating learning rate from {flare_model.learning_rate} to {suggested_lr}")
-        flare_model.learning_rate = suggested_lr
-        flare_model.hparams.learning_rate = suggested_lr
+        if suggested_lr is not None:
+            logger.info(f"Updating learning rate from {flare_model.learning_rate} to {suggested_lr}")
+            flare_model.learning_rate = suggested_lr
+            flare_model.hparams.learning_rate = suggested_lr
+        else:
+            logger.warning("LR finder did not return a valid suggestion; keeping current learning rate.")
 
 # --- Run Training ---
 logger.info("Starting training (trainer.fit)...")

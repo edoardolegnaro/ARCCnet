@@ -7,7 +7,7 @@ import logging
 
 import pandas as pd
 
-from arccnet.models.flares.binary_classification import utils as ut_f
+from arccnet.models.flares import utils as ut_f
 
 # Configure basic logging (can be configured externally in a real application)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -64,7 +64,7 @@ def load_and_split_data(
     df_flares = df_flares_exists[df_flares_exists["file_exists"]].copy()
 
     # --- Feature Engineering: Binary Flare Columns ---
-    logger.info("Creating binary 'flares_above_ ' columns...")
+    logger.info("Creating binary 'flares_above_*' columns...")
     for i in range(len(ut_f.FLARE_CLASSES)):
         threshold_class = ut_f.FLARE_CLASSES[i]
         # Select columns from current class onward
@@ -98,13 +98,14 @@ def load_and_split_data(
     # --- Logging Distributions ---
     flare_dist = pd.concat(
         [
-            train_df["flares_above_C"].value_counts().rename("Train"),
-            val_df["flares_above_C"].value_counts().rename("Validation"),
-            test_df["flares_above_C"].value_counts().rename("Test"),
+            train_df[target_column].value_counts().rename("Train"),
+            val_df[target_column].value_counts().rename("Validation"),
+            test_df[target_column].value_counts().rename("Test"),
         ],
         axis=1,
-    )
+    ).fillna(0)
     for col in flare_dist.columns:
+        flare_dist[col] = flare_dist[col].astype(int)
         percentages = (flare_dist[col] / flare_dist[col].sum() * 100).round(1)
         flare_dist[col] = flare_dist[col].astype(str) + " (" + percentages.astype(str) + "%)"
     logger.info(f"\nFlare Classification Distribution ({target_column}):\n{flare_dist.to_string()}")
@@ -120,14 +121,12 @@ def load_and_split_data(
     )
 
     # Reindex to ensure correct order
-    mag_dist = mag_dist.reindex(ut_f.MAG_CLASS_ORDER)
+    mag_dist = mag_dist.reindex(ut_f.MAG_CLASS_ORDER).fillna(0)
     # Combine counts and percentages in the same columns
     for col in mag_dist.columns:
+        mag_dist[col] = mag_dist[col].astype(int)
         percentages = (mag_dist[col] / mag_dist[col].sum() * 100).round(1)
         mag_dist[col] = mag_dist[col].astype(str) + " (" + percentages.astype(str) + "%)"
-    # Fill NaN values with "0 (0%)" if any classes are missing
-    mag_dist = mag_dist.fillna("0 (0%)")
-    # No need for fillna here as _calculate_and_format_distribution handles it with `order`
     logger.info(f"\nMagnetic Class Distribution:\n{mag_dist.to_string()}")
 
     return train_df, val_df, test_df

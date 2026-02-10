@@ -40,7 +40,10 @@ class FlareDataset(Dataset):
         self.divisor = divisor
         self.min_val = min_val
         self.max_val = max_val
-        self.fits_base_path = os.path.join(self.data_folder, self.dataset_folder, "fits")
+        # Dataset stores FITS files under data/cutout_classification/fits.
+        self.fits_base_path = os.path.join(
+            self.data_folder, self.dataset_folder, "data", "cutout_classification", "fits"
+        )
 
         if not all(col in df.columns for col in ["path_image_cutout_hmi", "path_image_cutout_mdi", self.target_column]):
             raise ValueError("DataFrame missing required columns (path_image_cutout_hmi/mdi or target column)")

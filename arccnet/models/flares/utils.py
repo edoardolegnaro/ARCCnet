@@ -1,7 +1,10 @@
 import os
 import glob
+import logging
 
 from sklearn.model_selection import train_test_split
+
+logger = logging.getLogger(__name__)
 
 FLARE_CLASSES = ["A", "B", "C", "M", "X"]
 MAG_CLASS_MAPPING = {
@@ -51,19 +54,19 @@ def check_fits_file_existence(df, data_folder, dataset_folder):
     def normalize_filename(filename):
         """Remove mag/cont/SIDE1 indicators to normalize filenames for comparison."""
         base = os.path.splitext(filename)[0]
-        return base.replace('_mag_', '_').replace('_cont_', '_').replace('_SIDE1', '')
+        return base.replace("_mag_", "_").replace("_cont_", "_").replace("_SIDE1", "")
 
     # Pre-compute mapping of normalized filenames to actual files, preferring _mag_
     fits_dir = os.path.join(data_folder, dataset_folder, "data/cutout_classification/fits")
     all_fits_files = glob.glob(os.path.join(fits_dir, "*.fits"))
-    
+
     normalized_to_file = {}
     for fits_file in all_fits_files:
         filename = os.path.basename(fits_file)
         normalized = normalize_filename(filename)
-        
+
         # Only add _mag_ files, or add _cont_ if no _mag_ entry exists yet
-        if '_mag_' in filename:
+        if "_mag_" in filename:
             normalized_to_file[normalized] = filename
         elif normalized not in normalized_to_file:
             normalized_to_file[normalized] = filename
@@ -93,7 +96,7 @@ def check_fits_file_existence(df, data_folder, dataset_folder):
 
         base_filename = os.path.basename(path_value)
         normalized_filename = normalize_filename(base_filename)
-        
+
         # O(1) lookup and update the DataFrame with the actual filename
         if normalized_filename in normalized_to_file:
             df.loc[index, "file_exists"] = True
@@ -155,13 +158,13 @@ def split_dataframe(df, stratify_col, test_size=0.1, val_size=0.2, random_state=
     test_df = df[df["number"].isin(test_ars)]
 
     # Verification
-    print("Unique ARs in Train:", train_df["number"].nunique())
-    print("Unique ARs in Validation:", val_df["number"].nunique())
-    print("Unique ARs in Test:", test_df["number"].nunique())
+    logger.info("Unique ARs in Train: %s", train_df["number"].nunique())
+    logger.info("Unique ARs in Validation: %s", val_df["number"].nunique())
+    logger.info("Unique ARs in Test: %s", test_df["number"].nunique())
 
-    print("\nAR Overlap Check:")
-    print("Train vs Val AR Overlap:", len(set(train_ars) & set(val_ars)))
-    print("Train vs Test AR Overlap:", len(set(train_ars) & set(test_ars)))
-    print("Val vs Test AR Overlap:", len(set(val_ars) & set(test_ars)))
+    logger.info("AR Overlap Check:")
+    logger.info("Train vs Val AR Overlap: %s", len(set(train_ars) & set(val_ars)))
+    logger.info("Train vs Test AR Overlap: %s", len(set(train_ars) & set(test_ars)))
+    logger.info("Val vs Test AR Overlap: %s", len(set(val_ars) & set(test_ars)))
 
     return train_df, val_df, test_df
