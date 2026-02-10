@@ -40,7 +40,6 @@ class FlareDataset(Dataset):
         self.divisor = divisor
         self.min_val = min_val
         self.max_val = max_val
-        # Dataset stores FITS files under data/cutout_classification/fits.
         self.fits_base_path = os.path.join(
             self.data_folder, self.dataset_folder, "data", "cutout_classification", "fits"
         )
