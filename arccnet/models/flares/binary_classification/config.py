@@ -8,10 +8,10 @@ import os
 # =============================================================================
 # Model & Training Parameters
 # =============================================================================
-MODEL_NAME = "vit_small_patch8_224"  # Name of the timm model
+MODEL_NAME = "resnet18"  # Name of the timm model
 
-BATCH_SIZE = 64
-NUM_WORKERS = 0
+BATCH_SIZE = 32
+NUM_WORKERS = 8
 LEARNING_RATE = 1e-4
 MAX_EPOCHS = 500
 RANDOM_SEED = 42  # Seed for reproducibility in train, val, test splitting
@@ -26,13 +26,13 @@ ACCELERATOR = "auto"
 DEVICES = "auto"
 PRECISION = "16-mixed"
 CPU_PRECISION = "32-true"
-FALLBACK_TO_CPU_ON_CUDA_ERROR = True
+FALLBACK_TO_CPU_ON_CUDA_ERROR = False
 HARD_DISABLE_CUDA_ON_FALLBACK = True
 
 # =============================================================================
 # Loss Function Parameters
 # =============================================================================
-LOSS_FUNCTION = "focal"  # Options: "bce", "focal", "weighted_bce"
+LOSS_FUNCTION = "weighted_bce"  # Options: "bce", "focal", "weighted_bce"
 # - "bce": Standard Binary Cross Entropy loss
 # - "focal": Focal Loss for addressing class imbalance (focuses on hard examples)
 # - "weighted_bce": Weighted Binary Cross Entropy with class weights
@@ -60,7 +60,7 @@ LR_FINDER_AUTO_UPDATE = True  # Automatically update the model with suggested LR
 # =============================================================================
 DATA_FOLDER = os.getenv("ARCAFF_DATA_FOLDER", "/ARCAFF/data")  # Base data directory
 FLARES_PARQ = "mag-pit-flare-dataset_1996-01-01_2023-01-01_dev.parq"  # Input flare catalog
-CUTOUT_DATASET_FOLDER = "arccnet-v20251017/04_final"
+CUTOUT_DATASET_FOLDER = "arcnet-v20251017/04_final"
 
 # =============================================================================
 # Data Processing Parameters
@@ -83,8 +83,8 @@ IMG_MAX_VAL = 1.0
 
 # DataLoader parameters
 PIN_MEMORY = True
-PERSISTENT_WORKERS = True
-PREFETCH_FACTOR = 2
+PERSISTENT_WORKERS = False
+PREFETCH_FACTOR = 1
 DATALOADER_MULTIPROCESSING_CONTEXT = None
 
 # =============================================================================

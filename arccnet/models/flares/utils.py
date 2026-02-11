@@ -1,4 +1,5 @@
 import os
+import re
 import glob
 import logging
 
@@ -51,25 +52,42 @@ def check_fits_file_existence(df, data_folder, dataset_folder):
         except ImportError:
             return False
 
-    def normalize_filename(filename):
-        """Remove mag/cont/SIDE1 indicators to normalize filenames for comparison."""
-        base = os.path.splitext(filename)[0]
-        return base.replace("_mag_", "_").replace("_cont_", "_").replace("_SIDE1", "")
+    def extract_key_info(filename):
+        """Extract date, AR number, and instrument from filename.
+        Returns tuple of (date, ar_number, instrument) or None if pattern doesn't match.
+        """
+        # Pattern: YYYYMMDD_HHMMSS_[prefix]-[AR_number]_..._[instrument][_SIDE1].fits
+        # Examples:
+        #   19960604_000130_I-7968_mag_MDI.fits
+        #   19961212_235945_I-8003_MDI.fits
+        #   20100407_235819_I-11060_HMI_SIDE1.fits
+        # Match and extract: date, AR number, and instrument (before optional _SIDE1)
+        match = re.match(r"(\d{8})_\d{6}_[A-Z]+-(\d+).*_([A-Z]+)(?:_SIDE\d+)?\.fits", filename)
+        if match:
+            date, ar_number, instrument = match.groups()
+            return (date, ar_number, instrument)
+        return None
 
-    # Pre-compute mapping of normalized filenames to actual files, preferring _mag_
+    # Pre-compute mapping based on (date, ar_number, instrument) to actual files
     fits_dir = os.path.join(data_folder, dataset_folder, "data/cutout_classification/fits")
     all_fits_files = glob.glob(os.path.join(fits_dir, "*.fits"))
 
-    normalized_to_file = {}
+    logger.info(f"Looking for FITS files in: {fits_dir}")
+    logger.info(f"Found {len(all_fits_files)} FITS files")
+
+    key_to_file = {}
     for fits_file in all_fits_files:
         filename = os.path.basename(fits_file)
-        normalized = normalize_filename(filename)
+        key = extract_key_info(filename)
 
-        # Only add _mag_ files, or add _cont_ if no _mag_ entry exists yet
-        if "_mag_" in filename:
-            normalized_to_file[normalized] = filename
-        elif normalized not in normalized_to_file:
-            normalized_to_file[normalized] = filename
+        if key:
+            # Prefer _mag_ files over _cont_ files
+            if key not in key_to_file or "_mag_" in filename:
+                key_to_file[key] = filename
+        else:
+            logger.debug(f"Could not extract key from filename: {filename}")
+
+    logger.info(f"Successfully mapped {len(key_to_file)} unique (date, AR, instrument) keys")
 
     df["file_exists"] = False
     missing_path_indices = []
@@ -95,13 +113,21 @@ def check_fits_file_existence(df, data_folder, dataset_folder):
             path_column = "path_image_cutout_mdi"
 
         base_filename = os.path.basename(path_value)
-        normalized_filename = normalize_filename(base_filename)
+        key = extract_key_info(base_filename)
 
-        # O(1) lookup and update the DataFrame with the actual filename
-        if normalized_filename in normalized_to_file:
+        if not key:
+            logger.debug(f"Row {index}: Could not extract key from dataframe filename: {base_filename}")
+
+        # Look up the file by key (date, ar_number, instrument)
+        if key and key in key_to_file:
             df.loc[index, "file_exists"] = True
             # Update the path column to point to the actual file found
-            df.loc[index, path_column] = normalized_to_file[normalized_filename]
+            df.loc[index, path_column] = key_to_file[key]
+        elif key:
+            logger.debug(f"Row {index}: No matching file for key {key} (from {base_filename})")
+
+    files_found = df["file_exists"].sum()
+    logger.info(f"Found existing files for {files_found}/{len(df)} rows")
 
     return df, missing_path_indices
 
