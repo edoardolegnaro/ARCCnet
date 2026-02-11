@@ -1,5 +1,12 @@
-import os
 import logging
+import os
+from typing import Any, Dict
+
+# Import comet_ml before torch/pytorch-lightning for full automatic logging.
+try:
+    import comet_ml  # noqa: F401
+except ImportError:
+    comet_ml = None
 
 import matplotlib.pyplot as plt
 import pytorch_lightning as pl
@@ -19,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 
 class CometModelCheckpointCallback(Callback):
-    """Custom callback to log model to Comet when best checkpoint is saved."""
+    """Log a new best checkpoint artifact to Comet."""
 
     def __init__(self, comet_logger):
         super().__init__()
@@ -27,10 +34,9 @@ class CometModelCheckpointCallback(Callback):
         self._last_logged_best_path = None
 
     def on_validation_end(self, trainer, pl_module):
-        # Log only when a new best checkpoint path appears.
         if trainer.checkpoint_callback and trainer.checkpoint_callback.best_model_path:
             best_path = trainer.checkpoint_callback.best_model_path
-            if best_path == self._last_logged_best_path:
+            if best_path == self._last_logged_best_path or not os.path.exists(best_path):
                 return
             logger.info("Logging best model to Comet...")
             self.comet_logger.experiment.log_model("best_model", best_path, overwrite=True)
@@ -38,7 +44,6 @@ class CometModelCheckpointCallback(Callback):
             logger.info("Best model logged to Comet successfully.")
 
 
-# --- Load data once ---
 def load_data():
     """Load and split data in train, val and test sets."""
     logger.info("Loading and splitting data (one-time)...")
@@ -55,172 +60,256 @@ def load_data():
     return train_df, val_df, test_df
 
 
-# Load data once at the beginning
-pl.seed_everything(config.RANDOM_SEED, workers=True)
-logger.info(f"Global seed set to {config.RANDOM_SEED}.")
-train_df, val_df, test_df = load_data()
+def resolve_trainer_runtime() -> Dict[str, Any]:
+    """Validate runtime device availability and return Trainer settings."""
+    runtime = {
+        "accelerator": config.ACCELERATOR,
+        "devices": config.DEVICES,
+        "precision": config.PRECISION,
+        "force_disable_cuda": False,
+    }
 
-# ---  Initialize DataModule and Model ---
-logger.info("Initializing DataModule...")
-data_module = lm.FlareDataModule(
-    data_folder=config.DATA_FOLDER,
-    dataset_folder=config.CUTOUT_DATASET_FOLDER,
-    train_df=train_df,
-    val_df=val_df,
-    test_df=test_df,
-    target_column=config.TARGET_COLUMN,
-    batch_size=config.BATCH_SIZE,
-    num_workers=config.NUM_WORKERS,
-    img_target_height=config.IMG_TARGET_HEIGHT,
-    img_target_width=config.IMG_TARGET_WIDTH,
-    img_divisor=config.IMG_DIVISOR,
-    img_min_val=config.IMG_MIN_VAL,
-    img_max_val=config.IMG_MAX_VAL,
-)
-logger.info("DataModule initialized.")
+    accel = str(runtime["accelerator"]).lower()
+    force_gpu = accel in {"gpu", "cuda"}
 
-logger.info(f"Initializing model '{config.MODEL_NAME}'...")
+    if accel in {"auto", "gpu", "cuda"}:
+        try:
+            if not torch.cuda.is_available():
+                raise RuntimeError("torch.cuda.is_available() returned False")
+            if torch.cuda.device_count() < 1:
+                raise RuntimeError("CUDA reports zero visible devices")
+            # Force CUDA initialization now to avoid a delayed crash at trainer.fit().
+            torch.cuda.get_device_capability(0)
+            logger.info(
+                "CUDA preflight passed. Visible devices: %d. Primary device: %s",
+                torch.cuda.device_count(),
+                torch.cuda.get_device_name(0),
+            )
+        except Exception as exc:
+            if force_gpu or not config.FALLBACK_TO_CPU_ON_CUDA_ERROR:
+                raise RuntimeError(f"CUDA initialization failed: {exc}") from exc
+            logger.warning("CUDA preflight failed (%s). Falling back to CPU runtime.", exc)
+            runtime["accelerator"] = "cpu"
+            runtime["devices"] = 1
+            runtime["precision"] = config.CPU_PRECISION
+            runtime["force_disable_cuda"] = bool(getattr(config, "HARD_DISABLE_CUDA_ON_FALLBACK", True))
 
-# Calculate class weights
-pos_weight = torch.tensor(
-    [(len(train_df) - train_df[config.TARGET_COLUMN].sum()) / train_df[config.TARGET_COLUMN].sum()], dtype=torch.float32
-)
+    if str(runtime["accelerator"]).lower() == "cpu":
+        if runtime["devices"] == "auto":
+            runtime["devices"] = 1
+        if isinstance(runtime["precision"], str) and "16" in runtime["precision"]:
+            runtime["precision"] = config.CPU_PRECISION
 
-logger.info(f"Calculated positive class weight: {pos_weight.item():.2f}")
-logger.info(f"Using loss function: {config.LOSS_FUNCTION}")
+    return runtime
 
-# Set pos_weight based on loss function configuration
-use_pos_weight = pos_weight if config.LOSS_FUNCTION == "weighted_bce" and config.USE_CLASS_WEIGHTS else None
 
-flare_model = model.FlareClassifier(
-    model_name=config.MODEL_NAME,
-    num_classes=1,
-    in_chans=1,
-    learning_rate=config.LEARNING_RATE,
-    pretrained=False,
-    loss_function=config.LOSS_FUNCTION,
-    pos_weight=use_pos_weight,
-    focal_alpha=config.FOCAL_ALPHA,
-    focal_gamma=config.FOCAL_GAMMA,
-)
-if config.LOSS_FUNCTION == "focal":
-    logger.info(
-        f"Model '{config.MODEL_NAME}' initialized with Focal Loss (alpha={config.FOCAL_ALPHA}, gamma={config.FOCAL_GAMMA})."
-    )
-elif config.LOSS_FUNCTION == "weighted_bce":
-    if config.USE_CLASS_WEIGHTS:
-        logger.info(
-            f"Model '{config.MODEL_NAME}' initialized with Weighted Binary Cross Entropy Loss (pos_weight={pos_weight.item():.2f})."
-        )
-    else:
-        logger.info(
-            f"Model '{config.MODEL_NAME}' initialized with Weighted Binary Cross Entropy Loss (no class weights)."
-        )
-else:
-    logger.info(f"Model '{config.MODEL_NAME}' initialized with standard Binary Cross Entropy Loss.")
+def hard_disable_cuda_for_process():
+    """
+    Force CPU-only execution for this process after a CUDA preflight failure.
 
-# --- Define Callbacks ---
-logger.info("Setting up callbacks...")
-checkpoint_callback = ModelCheckpoint(
-    monitor=config.CHECKPOINT_METRIC,
-    mode="max",
-    save_top_k=1,
-    filename=f"best-model-{{epoch:02d}}-{{{config.CHECKPOINT_METRIC}:.3f}}",
-)
+    Some environments report CUDA as "available" during framework checks but still
+    fail later at first real CUDA call; this prevents Lightning from touching CUDA.
+    """
+    os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
-early_stopping_callback = EarlyStopping(
-    monitor=config.CHECKPOINT_METRIC,
-    patience=config.PATIENCE,
-    mode="max",
-    verbose=True,  # Log when stopping occurs
-)
+    torch.cuda.is_available = lambda: False  # type: ignore[assignment]
+    torch.cuda.device_count = lambda: 0  # type: ignore[assignment]
+    torch.cuda.get_rng_state_all = lambda: []  # type: ignore[assignment]
 
-# Initialize CometLogger if enabled
-comet_logger = None
-if config.ENABLE_COMET_LOGGING:
+    logger.info("CUDA has been disabled for this process after fallback.")
+
+
+def init_comet_logger():
+    if not config.ENABLE_COMET_LOGGING:
+        return None
+
     logger.info("Comet logging is enabled. Initializing CometLogger...")
-    comet_logger = CometLogger(
-        api_key=os.getenv("COMET_API_KEY"),
-        project_name=config.COMET_PROJECT_NAME,
-        workspace=config.COMET_WORKSPACE,
-    )
+
+    common_kwargs = {
+        "api_key": os.getenv("COMET_API_KEY"),
+        "workspace": config.COMET_WORKSPACE,
+    }
+
+    try:
+        comet_logger = CometLogger(project=config.COMET_PROJECT_NAME, **common_kwargs)
+    except TypeError:
+        comet_logger = CometLogger(project_name=config.COMET_PROJECT_NAME, **common_kwargs)
+
     logger.info("CometLogger initialized.")
+    return comet_logger
 
-    # Add Comet model checkpoint callback
-    comet_model_callback = CometModelCheckpointCallback(comet_logger)
-    callbacks = [checkpoint_callback, early_stopping_callback, comet_model_callback]
-else:
-    callbacks = [checkpoint_callback, early_stopping_callback]
 
-logger.info("Callbacks defined: ModelCheckpoint, EarlyStopping, and CometModelCheckpoint (if enabled).")
+def main():
+    pl.seed_everything(config.RANDOM_SEED, workers=True)
+    logger.info("Global seed set to %s.", config.RANDOM_SEED)
 
-# --- Initialize Trainer ---
-logger.info("Initializing PyTorch Lightning Trainer...")
+    runtime = resolve_trainer_runtime()
+    if runtime.get("force_disable_cuda", False):
+        hard_disable_cuda_for_process()
 
-trainer = pl.Trainer(
-    max_epochs=config.MAX_EPOCHS,
-    accelerator="auto",  # Automatically chooses GPU, TPU, CPU etc.
-    devices="auto",  # Automatically selects the devices
-    precision="16-mixed",  # Enable 16-bit mixed-precision training
-    deterministic=True,
-    enable_progress_bar=True,
-    logger=comet_logger if comet_logger else False,  # Use CometLogger if enabled
-    callbacks=callbacks,  # Add all callbacks
-)
-
-logger.info(f"Trainer initialized for {config.MAX_EPOCHS} epochs with mixed precision ('16-mixed').")
-
-# --- Learning Rate Finder ---
-if config.USE_LR_FINDER:
-    logger.info("Running learning rate finder...")
-    tuner = Tuner(trainer)
-    lr_finder = tuner.lr_find(
-        flare_model,
-        datamodule=data_module,
-        min_lr=config.LR_FINDER_MIN_LR,
-        max_lr=config.LR_FINDER_MAX_LR,
-        num_training=config.LR_FINDER_NUM_TRAINING,
-        update_attr=False,
+    use_pin_memory = bool(config.PIN_MEMORY and str(runtime["accelerator"]).lower() != "cpu")
+    logger.info(
+        "Trainer runtime config: accelerator=%s, devices=%s, precision=%s, pin_memory=%s",
+        runtime["accelerator"],
+        runtime["devices"],
+        runtime["precision"],
+        use_pin_memory,
     )
 
-    # Plot and save results
-    fig = lr_finder.plot(suggest=True)
-    suggested_lr = lr_finder.suggestion()
+    train_df, val_df, test_df = load_data()
 
-    logger.info(f"Learning rate finder suggests: {suggested_lr}")
+    logger.info("Initializing DataModule...")
+    data_module = lm.FlareDataModule(
+        data_folder=config.DATA_FOLDER,
+        dataset_folder=config.CUTOUT_DATASET_FOLDER,
+        train_df=train_df,
+        val_df=val_df,
+        test_df=test_df,
+        target_column=config.TARGET_COLUMN,
+        batch_size=config.BATCH_SIZE,
+        num_workers=config.NUM_WORKERS,
+        img_target_height=config.IMG_TARGET_HEIGHT,
+        img_target_width=config.IMG_TARGET_WIDTH,
+        img_divisor=config.IMG_DIVISOR,
+        img_min_val=config.IMG_MIN_VAL,
+        img_max_val=config.IMG_MAX_VAL,
+        pin_memory=use_pin_memory,
+        persistent_workers=config.PERSISTENT_WORKERS,
+        prefetch_factor=config.PREFETCH_FACTOR,
+        multiprocessing_context=config.DATALOADER_MULTIPROCESSING_CONTEXT,
+    )
+    logger.info("DataModule initialized.")
 
-    # Save the plot
-    os.makedirs("lr_finder_results", exist_ok=True)
-    plot_path = "lr_finder_results/lr_finder_plot.png"
-    fig.savefig(plot_path)
+    logger.info("Initializing model '%s'...", config.MODEL_NAME)
 
-    # Log to Comet if enabled
-    if config.ENABLE_COMET_LOGGING and comet_logger:
-        logger.info("Logging learning rate finder plot to Comet...")
-        comet_logger.experiment.log_figure(figure_name="Learning Rate Finder", figure=fig)
-        # Also log as a metric
-        comet_logger.experiment.log_metric("suggested_learning_rate", suggested_lr)
+    positives = int(train_df[config.TARGET_COLUMN].sum())
+    negatives = len(train_df) - positives
+    if positives == 0:
+        raise ValueError(f"No positive samples found in training set for target '{config.TARGET_COLUMN}'.")
 
-    plt.close(fig)
+    pos_weight = torch.tensor([negatives / positives], dtype=torch.float32)
+    logger.info("Calculated positive class weight: %.2f", pos_weight.item())
+    logger.info("Using loss function: %s", config.LOSS_FUNCTION)
 
-    # Update model's learning rate if auto-update is enabled
-    if config.LR_FINDER_AUTO_UPDATE:
-        if suggested_lr is not None:
-            logger.info(f"Updating learning rate from {flare_model.learning_rate} to {suggested_lr}")
-            flare_model.learning_rate = suggested_lr
-            flare_model.hparams.learning_rate = suggested_lr
+    use_pos_weight = pos_weight if config.LOSS_FUNCTION == "weighted_bce" and config.USE_CLASS_WEIGHTS else None
+
+    flare_model = model.FlareClassifier(
+        model_name=config.MODEL_NAME,
+        num_classes=1,
+        in_chans=1,
+        learning_rate=config.LEARNING_RATE,
+        pretrained=False,
+        loss_function=config.LOSS_FUNCTION,
+        pos_weight=use_pos_weight,
+        focal_alpha=config.FOCAL_ALPHA,
+        focal_gamma=config.FOCAL_GAMMA,
+    )
+    if config.LOSS_FUNCTION == "focal":
+        logger.info(
+            "Model '%s' initialized with Focal Loss (alpha=%s, gamma=%s).",
+            config.MODEL_NAME,
+            config.FOCAL_ALPHA,
+            config.FOCAL_GAMMA,
+        )
+    elif config.LOSS_FUNCTION == "weighted_bce":
+        if config.USE_CLASS_WEIGHTS:
+            logger.info(
+                "Model '%s' initialized with Weighted BCE Loss (pos_weight=%.2f).",
+                config.MODEL_NAME,
+                pos_weight.item(),
+            )
         else:
-            logger.warning("LR finder did not return a valid suggestion; keeping current learning rate.")
+            logger.info(
+                "Model '%s' initialized with Weighted BCE Loss (no class weights).",
+                config.MODEL_NAME,
+            )
+    else:
+        logger.info("Model '%s' initialized with standard BCE loss.", config.MODEL_NAME)
 
-# --- Run Training ---
-logger.info("Starting training (trainer.fit)...")
-trainer.fit(flare_model, data_module)
-logger.info("Training finished.")
+    logger.info("Setting up callbacks...")
+    checkpoint_callback = ModelCheckpoint(
+        monitor=config.CHECKPOINT_METRIC,
+        mode="max",
+        save_top_k=1,
+        filename=f"best-model-{{epoch:02d}}-{{{config.CHECKPOINT_METRIC}:.3f}}",
+    )
+    early_stopping_callback = EarlyStopping(
+        monitor=config.CHECKPOINT_METRIC,
+        patience=config.PATIENCE,
+        mode="max",
+        verbose=True,
+    )
 
-# --- Run Testing ---
-logger.info("Starting testing (trainer.test) using the best checkpoint...")
-# Load the best checkpoint automatically by trainer using ckpt_path='best'
-test_results = trainer.test(model=flare_model, datamodule=data_module, ckpt_path="best")
-logger.info("Testing finished.")
-# Use logger to report results, converting the list/dict to string for logging
-logger.info(f"Test Results: {test_results}")
+    comet_logger = init_comet_logger()
+    if comet_logger:
+        comet_model_callback = CometModelCheckpointCallback(comet_logger)
+        callbacks = [checkpoint_callback, early_stopping_callback, comet_model_callback]
+    else:
+        callbacks = [checkpoint_callback, early_stopping_callback]
+
+    logger.info("Initializing PyTorch Lightning Trainer...")
+    trainer = pl.Trainer(
+        max_epochs=config.MAX_EPOCHS,
+        accelerator=runtime["accelerator"],
+        devices=runtime["devices"],
+        precision=runtime["precision"],
+        deterministic=True,
+        enable_progress_bar=True,
+        logger=comet_logger if comet_logger else False,
+        callbacks=callbacks,
+    )
+    logger.info(
+        "Trainer initialized for %d epochs (accelerator=%s, devices=%s, precision=%s).",
+        config.MAX_EPOCHS,
+        runtime["accelerator"],
+        runtime["devices"],
+        runtime["precision"],
+    )
+
+    if config.USE_LR_FINDER:
+        logger.info("Running learning rate finder...")
+        tuner = Tuner(trainer)
+        lr_finder = tuner.lr_find(
+            flare_model,
+            datamodule=data_module,
+            min_lr=config.LR_FINDER_MIN_LR,
+            max_lr=config.LR_FINDER_MAX_LR,
+            num_training=config.LR_FINDER_NUM_TRAINING,
+            update_attr=False,
+        )
+
+        fig = lr_finder.plot(suggest=True)
+        suggested_lr = lr_finder.suggestion()
+        logger.info("Learning rate finder suggests: %s", suggested_lr)
+
+        os.makedirs("lr_finder_results", exist_ok=True)
+        plot_path = "lr_finder_results/lr_finder_plot.png"
+        fig.savefig(plot_path)
+
+        if config.ENABLE_COMET_LOGGING and comet_logger:
+            logger.info("Logging learning rate finder plot to Comet...")
+            comet_logger.experiment.log_figure(figure_name="Learning Rate Finder", figure=fig)
+            comet_logger.experiment.log_metric("suggested_learning_rate", suggested_lr)
+
+        plt.close(fig)
+
+        if config.LR_FINDER_AUTO_UPDATE:
+            if suggested_lr is not None:
+                logger.info("Updating learning rate from %s to %s", flare_model.learning_rate, suggested_lr)
+                flare_model.learning_rate = suggested_lr
+                flare_model.hparams.learning_rate = suggested_lr
+            else:
+                logger.warning("LR finder did not return a valid suggestion; keeping current learning rate.")
+
+    logger.info("Starting training (trainer.fit)...")
+    trainer.fit(flare_model, data_module)
+    logger.info("Training finished.")
+
+    logger.info("Starting testing (trainer.test) using the best checkpoint...")
+    test_results = trainer.test(model=flare_model, datamodule=data_module, ckpt_path="best")
+    logger.info("Testing finished.")
+    logger.info("Test Results: %s", test_results)
+
+
+if __name__ == "__main__":
+    main()

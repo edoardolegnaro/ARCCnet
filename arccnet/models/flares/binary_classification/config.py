@@ -18,6 +18,17 @@ RANDOM_SEED = 42  # Seed for reproducibility in train, val, test splitting
 PATIENCE = 10
 CHECKPOINT_METRIC = "val_f1"
 
+# Trainer runtime selection
+# - "auto": try CUDA first, then fall back based on availability checks in train.py
+# - "cpu": force CPU training
+# - "gpu": force GPU training (will raise if CUDA cannot be initialized)
+ACCELERATOR = "auto"
+DEVICES = "auto"
+PRECISION = "16-mixed"
+CPU_PRECISION = "32-true"
+FALLBACK_TO_CPU_ON_CUDA_ERROR = True
+HARD_DISABLE_CUDA_ON_FALLBACK = True
+
 # =============================================================================
 # Loss Function Parameters
 # =============================================================================
@@ -70,9 +81,15 @@ IMG_DIVISOR = 800.0
 IMG_MIN_VAL = -1.0
 IMG_MAX_VAL = 1.0
 
+# DataLoader parameters
+PIN_MEMORY = True
+PERSISTENT_WORKERS = True
+PREFETCH_FACTOR = 2
+DATALOADER_MULTIPROCESSING_CONTEXT = None
+
 # =============================================================================
 # Logging Parameters
 # =============================================================================
-ENABLE_COMET_LOGGING = True  # Set to True to enable Comet logging
+ENABLE_COMET_LOGGING = False  # Set to True to enable Comet logging
 COMET_PROJECT_NAME = "ars-flare-classification"
 COMET_WORKSPACE = "arcaff"

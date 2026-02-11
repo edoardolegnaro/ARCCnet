@@ -116,6 +116,9 @@ class FlareDataModule(pl.LightningDataModule):
         img_min_val=-1.0,
         img_max_val=1.0,
         pin_memory=True,
+        persistent_workers=True,
+        prefetch_factor=2,
+        multiprocessing_context=None,
         train_transform=None,
         val_test_transform=None,
     ):
@@ -134,10 +137,25 @@ class FlareDataModule(pl.LightningDataModule):
         self.img_min_val = img_min_val
         self.img_max_val = img_max_val
         self.pin_memory = pin_memory
+        self.persistent_workers = persistent_workers
+        self.prefetch_factor = prefetch_factor
+        self.multiprocessing_context = multiprocessing_context
         self.train_transform = train_transform
         self.val_test_transform = val_test_transform
         # Avoid saving large dataframes in checkpoints
         self.save_hyperparameters(ignore=["train_df", "val_df", "test_df"])
+
+    def _dataloader_kwargs(self, shuffle):
+        num_workers = self.num_workers
+        return {
+            "batch_size": self.batch_size,
+            "shuffle": shuffle,
+            "num_workers": num_workers,
+            "pin_memory": self.pin_memory,
+            "persistent_workers": self.persistent_workers if num_workers > 0 else False,
+            "prefetch_factor": self.prefetch_factor if num_workers > 0 else None,
+            "multiprocessing_context": self.multiprocessing_context if num_workers > 0 else None,
+        }
 
     def setup(self, stage=None):
         dataset_args = {
@@ -161,34 +179,13 @@ class FlareDataModule(pl.LightningDataModule):
             self.test_dataset = FlareDataset(df=self.test_df, transform=self.val_test_transform, **dataset_args)
 
     def train_dataloader(self):
-        return DataLoader(
-            self.train_dataset,
-            batch_size=self.batch_size,
-            shuffle=True,
-            num_workers=self.num_workers,
-            pin_memory=self.pin_memory,
-            persistent_workers=False,
-        )
+        return DataLoader(self.train_dataset, **self._dataloader_kwargs(shuffle=True))
 
     def val_dataloader(self):
-        return DataLoader(
-            self.val_dataset,
-            batch_size=self.batch_size,
-            shuffle=False,
-            num_workers=self.num_workers,
-            pin_memory=self.pin_memory,
-            persistent_workers=False,
-        )
+        return DataLoader(self.val_dataset, **self._dataloader_kwargs(shuffle=False))
 
     def test_dataloader(self):
-        return DataLoader(
-            self.test_dataset,
-            batch_size=self.batch_size,
-            shuffle=False,
-            num_workers=self.num_workers,
-            pin_memory=self.pin_memory,
-            persistent_workers=False,
-        )
+        return DataLoader(self.test_dataset, **self._dataloader_kwargs(shuffle=False))
 
     def teardown(self, stage=None):
         """Clean up after fit or test."""
