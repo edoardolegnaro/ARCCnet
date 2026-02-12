@@ -11,7 +11,7 @@ import os
 MODEL_NAME = "resnet18"  # Name of the timm model
 
 BATCH_SIZE = 32
-NUM_WORKERS = 8
+NUM_WORKERS = 12
 LEARNING_RATE = 1e-4
 MAX_EPOCHS = 500
 RANDOM_SEED = 42  # Seed for reproducibility in train, val, test splitting
