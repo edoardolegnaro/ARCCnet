@@ -72,6 +72,7 @@ DATALOADER_MULTIPROCESSING_CONTEXT = "spawn"  # Multiprocessing context
 
 # Logging and progress tracking
 LOG_EVERY_N_STEPS = 10  # How often to log during training
+MISCLASSIFIED_SAMPLES_TO_LOG = 10  # Number of top-confidence misclassified samples to log per fold
 
 ENABLE_MODEL_SUMMARY = False  # Whether to show model summary
 LOG_DIR = os.path.join(os.path.dirname(__file__), "logs")

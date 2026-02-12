@@ -339,7 +339,15 @@ class HaleTrainer:
     ) -> None:
         """Find and log misclassified samples."""
         try:
-            misclassified_samples = find_misclassified_samples(model, data_module, fold_num, num_samples=10)
+            num_samples = max(1, int(getattr(config, "MISCLASSIFIED_SAMPLES_TO_LOG", 10)))
+
+            # Prefer misclassifications cached during trainer.test() to avoid a second full test pass.
+            if hasattr(model, "get_top_misclassified_samples"):
+                misclassified_samples = model.get_top_misclassified_samples(num_samples=num_samples)
+            else:
+                misclassified_samples = find_misclassified_samples(
+                    model, data_module, fold_num, num_samples=num_samples
+                )
 
             if misclassified_samples:
                 log_misclassified_samples(misclassified_samples, loggers, fold_num, self.class_names)

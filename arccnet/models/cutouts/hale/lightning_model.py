@@ -93,6 +93,7 @@ class HaleLightningModel(pl.LightningModule):
         self.test_predictions = []
         self.test_targets = []
         self.test_logits = []
+        self.test_misclassified_samples = []
 
     def forward(self, x):
         return self.backbone(x)
@@ -157,6 +158,7 @@ class HaleLightningModel(pl.LightningModule):
         self.test_predictions.extend(preds.cpu().numpy())
         self.test_targets.extend(labels.cpu().numpy())
         self.test_logits.append(logits.detach().cpu())
+        self._update_top_misclassified_samples(images, labels, preds, logits, batch_idx)
 
         # Log metrics
         self.log("test_loss", loss)
@@ -196,11 +198,45 @@ class HaleLightningModel(pl.LightningModule):
 
         return cm, class_report
 
+    def _update_top_misclassified_samples(self, images, labels, preds, logits, batch_idx: int) -> None:
+        """Track top-confidence misclassifications during the existing test pass."""
+        misclassified_mask = preds != labels
+        if not misclassified_mask.any():
+            return
+
+        probabilities = torch.softmax(logits.detach(), dim=1)
+        wrong_confidences = probabilities[misclassified_mask].max(dim=1)[0]
+        misclassified_images = images[misclassified_mask].detach().cpu()
+        misclassified_true = labels[misclassified_mask].detach().cpu()
+        misclassified_pred = preds[misclassified_mask].detach().cpu()
+
+        for i in range(len(misclassified_images)):
+            self.test_misclassified_samples.append(
+                {
+                    "image": misclassified_images[i],
+                    "true_label": misclassified_true[i].item(),
+                    "pred_label": misclassified_pred[i].item(),
+                    "confidence": wrong_confidences[i].detach().cpu().item(),
+                    "batch_idx": batch_idx,
+                    "sample_idx": i,
+                }
+            )
+
+        max_samples = max(1, int(getattr(config, "MISCLASSIFIED_SAMPLES_TO_LOG", 10)))
+        self.test_misclassified_samples.sort(key=lambda x: x["confidence"], reverse=True)
+        if len(self.test_misclassified_samples) > max_samples:
+            self.test_misclassified_samples = self.test_misclassified_samples[:max_samples]
+
+    def get_top_misclassified_samples(self, num_samples: int = 10) -> list[dict]:
+        """Return cached misclassified samples sorted by confidence descending."""
+        return self.test_misclassified_samples[:num_samples]
+
     def reset_test_collections(self):
         """Reset the test predictions and targets collections."""
         self.test_predictions = []
         self.test_targets = []
         self.test_logits = []
+        self.test_misclassified_samples = []
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(
