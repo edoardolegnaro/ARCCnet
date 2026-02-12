@@ -130,3 +130,59 @@ def load_and_split_data(
     logger.info(f"\nMagnetic Class Distribution:\n{mag_dist.to_string()}")
 
     return train_df, val_df, test_df
+
+
+def split_preprocessed_data(
+    df: pd.DataFrame,
+    target_column: str,
+    test_size: float,
+    val_size: float,
+    random_state: int | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """
+    Split already-preprocessed data into train/val/test sets.
+
+    This function is used when preprocessing is applied after initial loading.
+
+    Args:
+        df: Preprocessed dataframe
+        target_column: Column to stratify on for splitting
+        test_size: Proportion for test set
+        val_size: Proportion of remaining data for validation
+        random_state: Random seed
+
+    Returns:
+        Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]: train_df, val_df, test_df
+    """
+    logger.info(f"Splitting preprocessed data: test_size={test_size}, val_size={val_size}")
+
+    try:
+        train_df, val_df, test_df = ut_f.split_dataframe(
+            df=df,
+            stratify_col=target_column,
+            test_size=test_size,
+            val_size=val_size,
+            random_state=random_state,
+        )
+    except Exception as e:
+        logger.error(f"Error during data splitting: {e}")
+        raise
+
+    logger.info(f"Split complete. Shapes: Train={train_df.shape}, Val={val_df.shape}, Test={test_df.shape}")
+
+    # Log distributions
+    flare_dist = pd.concat(
+        [
+            train_df[target_column].value_counts().rename("Train"),
+            val_df[target_column].value_counts().rename("Validation"),
+            test_df[target_column].value_counts().rename("Test"),
+        ],
+        axis=1,
+    ).fillna(0)
+    for col in flare_dist.columns:
+        flare_dist[col] = flare_dist[col].astype(int)
+        percentages = (flare_dist[col] / flare_dist[col].sum() * 100).round(1)
+        flare_dist[col] = flare_dist[col].astype(str) + " (" + percentages.astype(str) + "%)"
+    logger.info(f"\nFlare Classification Distribution ({target_column}):\n{flare_dist.to_string()}")
+
+    return train_df, val_df, test_df

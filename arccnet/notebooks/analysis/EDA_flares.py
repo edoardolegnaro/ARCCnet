@@ -42,7 +42,7 @@ df_flares_name = "mag-pit-flare-dataset_1996-01-01_2023-01-01_dev.parq"
 df_flares = pd.read_parquet(os.path.join(data_folder, df_flares_name))
 
 dataset_folder = "arcnet-v20251017/04_final"
-df_file_name = os.path.join(dataset_folder, "cutout-mcintosh-catalog-v20251017.parq")
+df_file_name = os.path.join(dataset_folder, "data/cutout_classification/region_classification.parq")
 
 # %%
 ut_v.make_classes_histogram(

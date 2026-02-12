@@ -12,12 +12,14 @@ import pandas as pd
 import pytorch_lightning as pl
 import torch
 import torchvision.transforms as T
-from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
+from pytorch_lightning.callbacks import EarlyStopping
 from sklearn.preprocessing import LabelEncoder
 from sklearn.utils.class_weight import compute_class_weight
 from tqdm import tqdm
 
+from arccnet.models.checkpoint_manager import MulticlassFlareCheckpointManager
 from arccnet.models.dataset_utils import split_data
+from arccnet.models.flares import preprocessing
 from arccnet.models.flares.multiclass import config
 from arccnet.models.flares.multiclass.datamodule import FlareDataModule
 from arccnet.models.flares.multiclass.model import FlareClassifier
@@ -301,7 +303,20 @@ def train():
     # Apply solar limb filtering
     df = filter_solar_limb(df)
 
-    # 1. Filter out rows with missing image paths
+    # Apply cutouts-based preprocessing (quality filtering, path filtering, longitude filtering)
+    logger.info("Applying cutouts-based preprocessing pipeline...")
+    df = preprocessing.preprocess_flare_data(
+        df,
+        apply_quality_filter=getattr(config, "APPLY_QUALITY_FILTER", True),
+        apply_path_filter=getattr(config, "APPLY_PATH_FILTER", True),
+        apply_longitude_filter=False,  # Already done by filter_solar_limb
+        apply_nan_filter=getattr(config, "APPLY_NAN_FILTER", False),
+        max_longitude=getattr(config, "MAX_LONGITUDE", 65.0),
+        data_folder=config.DATA_FOLDER,
+        dataset_folder=config.CUTOUT_DATASET_FOLDER,
+    )
+
+    # 1. Filter out rows with missing image paths (should be minimal now after preprocessing)
     path_cols = ["path_image_cutout_hmi", "path_image_cutout_mdi"]
     initial_count = len(df)
     df.dropna(subset=path_cols, how="all", inplace=True)
@@ -410,13 +425,21 @@ def train():
         log_dataset_histograms(train_df, val_df, test_df, class_names, comet_logger)
 
     logger.info("Setting up callbacks...")
-    checkpoint_callback = ModelCheckpoint(
+    # Initialize checkpoint manager
+    checkpoint_manager = MulticlassFlareCheckpointManager(
+        data_folder=config.DATA_FOLDER,
+        model_name=config.MODEL_NAME,
+        loss_function=config.LOSS_TYPE,
+    )
+    logger.info(f"Checkpoint directory: {checkpoint_manager.get_checkpoint_path()}")
+
+    # Save configuration
+    checkpoint_manager.save_config(vars(config))
+    checkpoint_manager.training_metadata["class_names"] = class_names
+
+    checkpoint_callback = checkpoint_manager.get_checkpoint_callback(
         monitor=config.CHECKPOINT_METRIC,
-        dirpath="trained_models/multiclass/",
-        filename=f"{config.MODEL_NAME}-{{epoch:02d}}-{{{config.CHECKPOINT_METRIC}:.3f}}",
-        save_top_k=1,
         mode="max",
-        auto_insert_metric_name=False,
     )
     early_stop_callback = EarlyStopping(
         monitor=config.CHECKPOINT_METRIC, patience=config.PATIENCE, verbose=True, mode="max"
@@ -441,12 +464,50 @@ def train():
     best_ckpt_path = checkpoint_callback.best_model_path
     if best_ckpt_path and os.path.exists(best_ckpt_path):
         logger.info(f"Loading best checkpoint: {best_ckpt_path}")
-        trainer.test(model, datamodule=data_module, ckpt_path=best_ckpt_path)
+        test_results = trainer.test(model, datamodule=data_module, ckpt_path=best_ckpt_path)
     else:
         logger.warning("No valid checkpoint found, testing with current model weights")
-        trainer.test(model, datamodule=data_module)
+        test_results = trainer.test(model, datamodule=data_module)
 
     logger.info("Training and testing complete.")
+
+    # Save training summary and minimal logging
+    training_metadata = {
+        "best_epoch": trainer.current_epoch if hasattr(trainer, "current_epoch") else None,
+        f"best_{config.CHECKPOINT_METRIC}": test_results[0].get(f"test_{config.CHECKPOINT_METRIC}")
+        if test_results
+        else None,
+        "num_epochs_trained": trainer.current_epoch + 1 if hasattr(trainer, "current_epoch") else None,
+        "early_stopping_triggered": early_stop_callback.wait_count > 0
+        if hasattr(early_stop_callback, "wait_count")
+        else False,
+        "test_results": test_results[0] if test_results else {},
+    }
+
+    checkpoint_manager.save_training_metadata(training_metadata)
+    checkpoint_manager.save_minimal_logging(
+        best_epoch=trainer.current_epoch if hasattr(trainer, "current_epoch") else None,
+        best_metric_value=test_results[0].get(f"test_{config.CHECKPOINT_METRIC}") if test_results else None,
+        best_metric_name=config.CHECKPOINT_METRIC,
+        num_epochs_trained=trainer.current_epoch + 1 if hasattr(trainer, "current_epoch") else None,
+        early_stopping_triggered=early_stop_callback.wait_count > 0
+        if hasattr(early_stop_callback, "wait_count")
+        else False,
+        additional_metrics=test_results[0] if test_results else {},
+    )
+
+    # Prepare and save classification report from test results
+    if test_results:
+        classification_report_data = {
+            "test_metrics": test_results[0],
+            "model_name": config.MODEL_NAME,
+            "loss_function": config.LOSS_TYPE,
+            "class_names": class_names,
+        }
+        checkpoint_manager.save_classification_report(classification_report_data)
+        logger.info("Classification report saved.")
+
+    logger.info(f"All checkpoints and metadata saved to: {checkpoint_manager.get_checkpoint_path()}")
 
 
 if __name__ == "__main__":

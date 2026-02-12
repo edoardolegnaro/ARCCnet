@@ -1,6 +1,6 @@
-import logging
 import os
-from typing import Any, Dict
+import logging
+from typing import Any
 
 # Import comet_ml before torch/pytorch-lightning for full automatic logging.
 try:
@@ -9,12 +9,15 @@ except ImportError:
     comet_ml = None
 
 import matplotlib.pyplot as plt
+import pandas as pd
 import pytorch_lightning as pl
 import torch
-from pytorch_lightning.callbacks import Callback, EarlyStopping, ModelCheckpoint
+from pytorch_lightning.callbacks import Callback, EarlyStopping
 from pytorch_lightning.loggers import CometLogger
 from pytorch_lightning.tuner import Tuner
 
+from arccnet.models.checkpoint_manager import BinaryClassificationCheckpointManager
+from arccnet.models.flares import preprocessing
 from arccnet.models.flares.binary_classification import config, dataset
 from arccnet.models.flares.binary_classification import lighning_modules as lm
 from arccnet.models.flares.binary_classification import model
@@ -45,7 +48,7 @@ class CometModelCheckpointCallback(Callback):
 
 
 def load_data():
-    """Load and split data in train, val and test sets."""
+    """Load, preprocess and split data in train, val and test sets."""
     logger.info("Loading and splitting data (one-time)...")
     train_df, val_df, test_df = dataset.load_and_split_data(
         data_folder=config.DATA_FOLDER,
@@ -56,11 +59,39 @@ def load_data():
         val_size=config.VAL_SIZE,
         random_state=config.RANDOM_SEED,
     )
-    logger.info("Data loading and splitting complete.")
-    return train_df, val_df, test_df
+
+    # Apply preprocessing (quality filtering, path filtering, longitude filtering)
+    # Note: preprocessing is applied before splitting to ensure consistent filtering
+    logger.info("Applying data preprocessing (cutouts-based filtering)...")
+
+    # Combine all splits for preprocessing
+    combined_df = pd.concat([train_df, val_df, test_df], ignore_index=False)
+
+    combined_df_preprocessed = preprocessing.preprocess_flare_data(
+        combined_df,
+        apply_quality_filter=getattr(config, "APPLY_QUALITY_FILTER", True),
+        apply_path_filter=getattr(config, "APPLY_PATH_FILTER", True),
+        apply_longitude_filter=getattr(config, "APPLY_LONGITUDE_FILTER", True),
+        apply_nan_filter=getattr(config, "APPLY_NAN_FILTER", False),
+        max_longitude=getattr(config, "MAX_LONGITUDE", 65.0),
+        data_folder=config.DATA_FOLDER,
+        dataset_folder=config.CUTOUT_DATASET_FOLDER,
+    )
+
+    # Split again after preprocessing to maintain stratification
+    preprocessed_train, preprocessed_val, preprocessed_test = dataset.split_preprocessed_data(
+        combined_df_preprocessed,
+        target_column=f"flares_above_{config.THRESHOLD_CLASS}",
+        test_size=config.TEST_SIZE,
+        val_size=config.VAL_SIZE,
+        random_state=config.RANDOM_SEED,
+    )
+
+    logger.info("Data loading, preprocessing and splitting complete.")
+    return preprocessed_train, preprocessed_val, preprocessed_test
 
 
-def resolve_trainer_runtime() -> Dict[str, Any]:
+def resolve_trainer_runtime() -> dict[str, Any]:
     """Validate runtime device availability and return Trainer settings."""
     runtime = {
         "accelerator": config.ACCELERATOR,
@@ -227,11 +258,20 @@ def main():
         logger.info("Model '%s' initialized with standard BCE loss.", config.MODEL_NAME)
 
     logger.info("Setting up callbacks...")
-    checkpoint_callback = ModelCheckpoint(
+    # Initialize checkpoint manager
+    checkpoint_manager = BinaryClassificationCheckpointManager(
+        data_folder=config.DATA_FOLDER,
+        model_name=config.MODEL_NAME,
+        loss_function=config.LOSS_FUNCTION,
+    )
+    logger.info(f"Checkpoint directory: {checkpoint_manager.get_checkpoint_path()}")
+
+    # Save configuration
+    checkpoint_manager.save_config(vars(config))
+
+    checkpoint_callback = checkpoint_manager.get_checkpoint_callback(
         monitor=config.CHECKPOINT_METRIC,
         mode="max",
-        save_top_k=1,
-        filename=f"best-model-{{epoch:02d}}-{{{config.CHECKPOINT_METRIC}:.3f}}",
     )
     early_stopping_callback = EarlyStopping(
         monitor=config.CHECKPOINT_METRIC,
@@ -309,6 +349,39 @@ def main():
     test_results = trainer.test(model=flare_model, datamodule=data_module, ckpt_path="best")
     logger.info("Testing finished.")
     logger.info("Test Results: %s", test_results)
+
+    # Save training summary and minimal logging
+    training_metadata = {
+        "best_epoch": trainer.current_epoch,
+        f"best_{config.CHECKPOINT_METRIC}": test_results[0].get(f"test_{config.CHECKPOINT_METRIC}")
+        if test_results
+        else None,
+        "num_epochs_trained": trainer.current_epoch + 1,
+        "early_stopping_triggered": early_stopping_callback.wait_count > 0,
+        "test_results": test_results[0] if test_results else {},
+    }
+
+    checkpoint_manager.save_training_metadata(training_metadata)
+    checkpoint_manager.save_minimal_logging(
+        best_epoch=trainer.current_epoch,
+        best_metric_value=test_results[0].get(f"test_{config.CHECKPOINT_METRIC}") if test_results else None,
+        best_metric_name=config.CHECKPOINT_METRIC,
+        num_epochs_trained=trainer.current_epoch + 1,
+        early_stopping_triggered=early_stopping_callback.wait_count > 0,
+        additional_metrics=test_results[0] if test_results else {},
+    )
+
+    # Prepare and save classification report from test results
+    if test_results:
+        classification_report_data = {
+            "test_metrics": test_results[0],
+            "model_name": config.MODEL_NAME,
+            "loss_function": config.LOSS_FUNCTION,
+        }
+        checkpoint_manager.save_classification_report(classification_report_data)
+        logger.info("Classification report saved.")
+
+    logger.info(f"All checkpoints and metadata saved to: {checkpoint_manager.get_checkpoint_path()}")
 
 
 if __name__ == "__main__":

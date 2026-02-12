@@ -75,3 +75,21 @@ LOG_CONFUSION_MATRIX = True
 LOG_MISCLASSIFIED_EXAMPLES = True
 MAX_MISCLASSIFIED_EXAMPLES = 20  # Maximum number of misclassified examples to log
 LOG_CLASSIFICATION_REPORT = True  # Log detailed classification report with per-class metrics
+
+# =============================================================================
+# Data Preprocessing Parameters (from cutouts pipeline)
+# =============================================================================
+# Apply quality filtering: remove low-quality magnetograms based on quality flags
+APPLY_QUALITY_FILTER = True
+
+# Apply path filtering: remove rows where both HMI and MDI paths are missing
+APPLY_PATH_FILTER = True
+
+# Apply longitude filtering: keep only front-hemisphere observations
+# Note: multiclass also has filter_solar_limb() which does similar filtering
+APPLY_LONGITUDE_FILTER = False  # Set to False if using filter_solar_limb
+
+# Apply NaN filtering: remove magnetograms with too many NaN values
+# WARNING: This is computationally expensive (requires loading all FITS files)
+APPLY_NAN_FILTER = False
+NAN_THRESHOLD = 0.05  # Maximum allowed fraction of NaN values (5%)

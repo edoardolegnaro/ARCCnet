@@ -95,7 +95,7 @@ UNDERSAMPLE = False  # Whether to undersample the dataset
 
 # Data paths
 DATA_FOLDER = os.getenv("ARCAFF_DATA_FOLDER", "/ARCAFF/data")
-DATASET_FOLDER = "arccnet-v20251017/04_final"
+DATASET_FOLDER = "arcnet-v20251017/04_final"
 DF_FILE_NAME = "data/cutout_classification/region_classification.parq"
 
 # Label mapping based on selected classes

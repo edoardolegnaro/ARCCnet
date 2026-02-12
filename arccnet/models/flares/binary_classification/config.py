@@ -23,7 +23,7 @@ CHECKPOINT_METRIC = "val_f1"
 # - "cpu": force CPU training
 # - "gpu": force GPU training (will raise if CUDA cannot be initialized)
 ACCELERATOR = "auto"
-DEVICES = "auto"
+DEVICES = 1
 PRECISION = "16-mixed"
 CPU_PRECISION = "32-true"
 FALLBACK_TO_CPU_ON_CUDA_ERROR = False
@@ -93,3 +93,20 @@ DATALOADER_MULTIPROCESSING_CONTEXT = None
 ENABLE_COMET_LOGGING = False  # Set to True to enable Comet logging
 COMET_PROJECT_NAME = "ars-flare-classification"
 COMET_WORKSPACE = "arcaff"
+# =============================================================================
+# Data Preprocessing Parameters (from cutouts pipeline)
+# =============================================================================
+# Apply quality filtering: remove low-quality magnetograms based on quality flags
+APPLY_QUALITY_FILTER = True
+
+# Apply path filtering: remove rows where both HMI and MDI paths are missing
+APPLY_PATH_FILTER = True
+
+# Apply longitude filtering: keep only front-hemisphere observations
+APPLY_LONGITUDE_FILTER = True
+MAX_LONGITUDE = 65.0  # Maximum absolute longitude in degrees
+
+# Apply NaN filtering: remove magnetograms with too many NaN values
+# WARNING: This is computationally expensive (requires loading all FITS files)
+APPLY_NAN_FILTER = False
+NAN_THRESHOLD = 0.05  # Maximum allowed fraction of NaN values (5%)
