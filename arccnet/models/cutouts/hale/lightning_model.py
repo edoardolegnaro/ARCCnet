@@ -2,6 +2,8 @@
 PyTorch Lightning model for Hale classification.
 """
 
+import heapq
+
 import numpy as np
 import pytorch_lightning as pl
 import torch
@@ -199,7 +201,7 @@ class HaleLightningModel(pl.LightningModule):
         return cm, class_report
 
     def _update_top_misclassified_samples(self, images, labels, preds, logits, batch_idx: int) -> None:
-        """Track top-confidence misclassifications during the existing test pass."""
+        """Track top-confidence misclassifications during the existing test pass using a heap for efficiency."""
         misclassified_mask = preds != labels
         if not misclassified_mask.any():
             return
@@ -210,33 +212,44 @@ class HaleLightningModel(pl.LightningModule):
         misclassified_true = labels[misclassified_mask].detach().cpu()
         misclassified_pred = preds[misclassified_mask].detach().cpu()
 
-        for i in range(len(misclassified_images)):
-            self.test_misclassified_samples.append(
-                {
-                    "image": misclassified_images[i],
-                    "true_label": misclassified_true[i].item(),
-                    "pred_label": misclassified_pred[i].item(),
-                    "confidence": wrong_confidences[i].detach().cpu().item(),
-                    "batch_idx": batch_idx,
-                    "sample_idx": i,
-                }
-            )
-
         max_samples = max(1, int(getattr(config, "MISCLASSIFIED_SAMPLES_TO_LOG", 10)))
-        self.test_misclassified_samples.sort(key=lambda x: x["confidence"], reverse=True)
-        if len(self.test_misclassified_samples) > max_samples:
-            self.test_misclassified_samples = self.test_misclassified_samples[:max_samples]
+
+        for i in range(len(misclassified_images)):
+            sample = {
+                "image": misclassified_images[i],
+                "true_label": misclassified_true[i].item(),
+                "pred_label": misclassified_pred[i].item(),
+                "confidence": wrong_confidences[i].detach().cpu().item(),
+                "batch_idx": batch_idx,
+                "sample_idx": i,
+            }
+
+            # Use heap to maintain only top-K samples without sorting every batch
+            if len(self.test_misclassified_samples) < max_samples:
+                # Negative confidence for max-heap behavior (Python has min-heap by default)
+                heapq.heappush(self.test_misclassified_samples, (sample["confidence"], sample))
+            elif sample["confidence"] > self.test_misclassified_samples[0][0]:
+                heapq.heapreplace(self.test_misclassified_samples, (sample["confidence"], sample))
 
     def get_top_misclassified_samples(self, num_samples: int = 10) -> list[dict]:
-        """Return cached misclassified samples sorted by confidence descending."""
-        return self.test_misclassified_samples[:num_samples]
+        """Return cached misclassified samples sorted by confidence descending.
+
+        Extracts samples from heap and sorts them once at the end.
+        """
+        if not self.test_misclassified_samples:
+            return []
+
+        # Extract samples from heap and sort by confidence (highest first)
+        samples = [sample for _, sample in self.test_misclassified_samples]
+        samples.sort(key=lambda x: x["confidence"], reverse=True)
+        return samples[:num_samples]
 
     def reset_test_collections(self):
         """Reset the test predictions and targets collections."""
         self.test_predictions = []
         self.test_targets = []
         self.test_logits = []
-        self.test_misclassified_samples = []
+        self.test_misclassified_samples = []  # Reset heap
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(
