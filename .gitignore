@@ -237,3 +237,8 @@ data/**
 arccnet/models/temp
 arccnet/models/weights
 arccnet/models/trained_models
+
+# YOLO temporary files (models, configs, runs)
+arccnet/models/fulldisk/yolo/temp/
+arccnet/models/fulldisk/yolo/runs/
+arccnet/models/fulldisk/yolo/*_temp.yaml
