@@ -1,6 +1,4 @@
-"""
-Utility functions for working with full-disk solar observations and annotations.
-"""
+"""Utilities for working with full-disk observations and annotations."""
 
 from __future__ import annotations
 
@@ -21,7 +19,8 @@ from p_tqdm import p_map
 import astropy.units as u
 from astropy.time import Time
 
-from arccnet.visualisation.EDA_utils import create_solar_grid
+from arccnet.models import preprocessing_common as pp_common
+from arccnet.visualisation.utils import create_solar_grid
 
 FitsPath = str | Path
 LabelFormatter = Callable[[Any], str]
@@ -175,6 +174,9 @@ def compute_widths_heights(
     size_map: Mapping[str, int] | None = None,
 ) -> tuple[tuple[float, ...], tuple[float, ...], tuple[Any, ...], tuple[pd.Timestamp, ...]]:
     """Return normalised bounding-box dimensions with associated class and datetime."""
+    if df.empty:
+        return (), (), (), ()
+
     size_map = dict(size_map or IMG_SIZE_BY_INSTRUMENT)
 
     def _process(row: pd.Series) -> tuple[float, float, Any, pd.Timestamp]:
@@ -188,6 +190,9 @@ def compute_widths_heights(
         return width, height, row["magnetic_class"], row["datetime"]
 
     results = p_map(_process, [row for _, row in df.iterrows()])
+    if not results:
+        return (), (), (), ()
+
     widths, heights, magnetic_classes, datetimes = zip(*results)
     return widths, heights, magnetic_classes, datetimes
 
@@ -286,17 +291,28 @@ def calculate_region_sizes(df: pd.DataFrame, img_size_dic: Mapping[str, int] | N
     """Calculate normalized width and height for each region."""
     img_size_dic = dict(img_size_dic or IMG_SIZE_BY_INSTRUMENT)
     result_df = df.copy()
+    if result_df.empty:
+        result_df["width"] = pd.Series(dtype=float)
+        result_df["height"] = pd.Series(dtype=float)
+        return result_df
 
-    for idx, row in result_df.iterrows():
-        x_min, y_min = row["bottom_left_cutout"]
-        x_max, y_max = row["top_right_cutout"]
-        img_sz = img_size_dic.get(row["instrument"])
-        if img_sz is None:
-            raise ValueError(f"Unknown instrument: {row['instrument']}")
+    image_sizes = result_df["instrument"].map(img_size_dic)
+    if image_sizes.isna().any():
+        unknown = sorted(result_df.loc[image_sizes.isna(), "instrument"].astype(str).unique().tolist())
+        raise ValueError(f"Unknown instrument(s): {unknown}")
 
-        result_df.at[idx, "width"] = (x_max - x_min) / img_sz
-        result_df.at[idx, "height"] = (y_max - y_min) / img_sz
+    try:
+        bottom_left = np.asarray(result_df["bottom_left_cutout"].tolist(), dtype=np.float64)
+        top_right = np.asarray(result_df["top_right_cutout"].tolist(), dtype=np.float64)
+    except Exception as exc:
+        raise ValueError("Invalid cutout coordinate format; expected iterable (x, y) pairs.") from exc
 
+    if bottom_left.ndim != 2 or top_right.ndim != 2 or bottom_left.shape[1] != 2 or top_right.shape[1] != 2:
+        raise ValueError("Invalid cutout coordinate shape; expected arrays with shape (n_rows, 2).")
+
+    sizes = image_sizes.to_numpy(dtype=np.float64)
+    result_df["width"] = (top_right[:, 0] - bottom_left[:, 0]) / sizes
+    result_df["height"] = (top_right[:, 1] - bottom_left[:, 1]) / sizes
     return result_df
 
 
@@ -311,8 +327,6 @@ def filter_by_minimum_size(
 def filter_by_data_quality(df: pd.DataFrame) -> pd.DataFrame:
     """Filter out regions with bad data quality or excessive NaN values."""
     initial_count = len(df)
-
-    # Filter by existing quality flags
     df_filtered = df[~df["filtered"]].copy() if "filtered" in df.columns else df.copy()
 
     filtered_count = len(df_filtered)
@@ -337,25 +351,16 @@ def prepare_fulldisk_dataset(
     """Load and prepare a full-disk dataset with quality filtering using Astropy Table."""
     from astropy.table import Table
 
-    # Load as Astropy Table
     tab = Table.read(data_folder / dataset_folder / df_name)
-
-    # Filter by quality first (using Astropy Table)
     if filter_selected:
         good_quality_tab = tab[~tab["filtered"]]
     else:
         good_quality_tab = tab
-
-    # Convert only 1D columns to DataFrame
     names_1d = [name for name in good_quality_tab.colnames if len(good_quality_tab[name].shape) <= 1]
     df = good_quality_tab[names_1d].to_pandas()
-
-    # Add multidimensional columns as lists
     for col in ["top_right_cutout", "bottom_left_cutout"]:
         if col in good_quality_tab.colnames:
             df[col] = list(good_quality_tab[col])
-
-    # Replace 0.0 and NaN in magnetic_class with 'IA'
     if "magnetic_class" in df.columns:
         df["magnetic_class"] = df["magnetic_class"].apply(lambda x: "IA" if x == 0.0 or pd.isna(x) else x)
 
@@ -368,7 +373,11 @@ def prepare_fulldisk_dataset(
 
 def get_fits_statistics(img_path: str, data_folder: Path, dataset_root: Path) -> list[float]:
     """Extract statistical properties from a FITS file using SunPy Map."""
-    local_path = img_path.replace("/mnt/ARCAFF/v0.3.0/", str(data_folder / dataset_root) + "/")
+    local_root = pp_common.dataset_root_path(data_folder, dataset_root)
+    local_path = pp_common.resolve_project_path(img_path, local_root=local_root)
+    if local_path is None:
+        return [np.nan, np.nan, np.nan, np.nan, 0.0, 0.0]
+
     try:
         sun_map = sunpy.map.Map(local_path)
         data = sun_map.data
@@ -400,9 +409,15 @@ def identify_outliers(
     max_visualize: int = 10,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Identify outliers using z-score method and optionally visualize them."""
+    if values.size == 0:
+        return np.array([], dtype=int), np.array([], dtype=float)
+
     mean = np.mean(values)
     std = np.std(values)
-    z_scores = np.abs((values - mean) / std)
+    if std == 0 or not np.isfinite(std):
+        z_scores = np.zeros_like(values, dtype=float)
+    else:
+        z_scores = np.abs((values - mean) / std)
     outliers = z_scores > threshold
     outlier_indices = np.where(outliers)[0]
 
@@ -421,7 +436,12 @@ def identify_outliers(
 
             for i, idx in enumerate(outlier_indices[:n_to_show]):
                 img_path = paths[idx]
-                local_path = img_path.replace("/mnt/ARCAFF/v0.3.0/", str(data_folder / dataset_root) + "/")
+                local_root = pp_common.dataset_root_path(data_folder, dataset_root)
+                local_path = pp_common.resolve_project_path(img_path, local_root=local_root)
+                if local_path is None:
+                    axes[i].text(0.5, 0.5, "Missing file", ha="center", va="center")
+                    axes[i].axis("off")
+                    continue
                 try:
                     sun_map = sunpy.map.Map(local_path)
                     data = sun_map.data
@@ -442,7 +462,5 @@ def identify_outliers(
 
 def check_file_exists(path: str, data_folder: Path, dataset_root: Path) -> bool:
     """Check if file exists after path conversion."""
-    if pd.isna(path):
-        return False
-    local_path = path.replace("/mnt/ARCAFF/v0.3.0/", str(data_folder / dataset_root) + "/")
-    return Path(local_path).exists()
+    local_root = pp_common.dataset_root_path(data_folder, dataset_root)
+    return pp_common.resolve_project_path(path, local_root=local_root) is not None

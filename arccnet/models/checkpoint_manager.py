@@ -138,6 +138,19 @@ class CheckpointManager:
         with open(report_path, "w") as f:
             json.dump(report, f, indent=2, default=str)
 
+    def save_threshold_tuning_report(self, report: dict[str, Any]) -> None:
+        """
+        Save threshold tuning report to JSON.
+
+        Parameters:
+        -----------
+        report : Dict[str, Any]
+            Threshold tuning data including selected threshold and validation metrics.
+        """
+        report_path = self.checkpoint_dir / "threshold_tuning.json"
+        with open(report_path, "w") as f:
+            json.dump(report, f, indent=2, default=str)
+
     def save_config(self, config_vars: dict[str, Any]) -> None:
         """
         Save configuration used for training.

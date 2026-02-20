@@ -24,7 +24,6 @@ class HaleDataModule(pl.LightningDataModule):
         self.train_dataset = None
         self.val_dataset = None
         self.test_dataset = None
-        self.label_mapping = None
 
     def setup(self, stage: str = None):
         """Set up datasets for different stages."""

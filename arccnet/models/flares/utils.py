@@ -1,9 +1,12 @@
-import os
+"""Utility helpers for flare datasets."""
+
 import re
-import glob
 import logging
+from pathlib import Path
 
 from sklearn.model_selection import train_test_split
+
+from arccnet.models import preprocessing_common as pp_common
 
 logger = logging.getLogger(__name__)
 
@@ -16,115 +19,88 @@ MAG_CLASS_MAPPING = {
     "Beta-Gamma-Delta": "β-γ-δ",
     "Gamma": "γ",
     "Gamma-Delta": "γ-δ",
-}  # Mapping to Greek letters
-MAG_CLASS_ORDER = ["α", "β", "β-δ", "β-γ", "β-γ-δ", "γ", "γ-δ"]  # Order for display
+}
+MAG_CLASS_ORDER = ["α", "β", "β-δ", "β-γ", "β-γ-δ", "γ", "γ-δ"]
+
+_CUTOUT_KEY_PATTERN = re.compile(r"(\d{8})_\d{6}_[A-Z]+-(\d+).*_([A-Z]+)(?:_SIDE\d+)?\.fits")
 
 
-def check_fits_file_existence(df, data_folder, dataset_folder):
-    """
-    Iterates through rows of a DataFrame, checks if a corresponding FITS file exists,
-    adds a column indicating existence, and collects indices where path info is missing.
-
-    Args:
-        df (pd.DataFrame): The DataFrame containing potential paths to FITS files
-                                        in columns like 'path_image_cutout_hmi' or 'path_image_cutout_mdi'.
-        data_folder (str): The base directory where the data is stored.
-        dataset_folder (str): The subdirectory within data_folder where the dataset is located.
-
-    Returns:
-        tuple: A tuple containing:
-                - pd.DataFrame: The DataFrame with a new column 'file_exists' (boolean).
-                - list: A list of indices from the original DataFrame where both
-                            'path_image_cutout_hmi' and 'path_image_cutout_mdi' were missing.
-    """
-
-    def is_missing(value):
-        """Check if a path value is missing or invalid."""
-        if value is None:
-            return True
-        if isinstance(value, str):
-            return value == "" or value == "None"
-        # Check for NaN values
-        try:
-            import pandas as pd
-
-            return pd.isna(value)
-        except ImportError:
-            return False
-
-    def extract_key_info(filename):
-        """Extract date, AR number, and instrument from filename.
-        Returns tuple of (date, ar_number, instrument) or None if pattern doesn't match.
-        """
-        # Pattern: YYYYMMDD_HHMMSS_[prefix]-[AR_number]_..._[instrument][_SIDE1].fits
-        # Examples:
-        #   19960604_000130_I-7968_mag_MDI.fits
-        #   19961212_235945_I-8003_MDI.fits
-        #   20100407_235819_I-11060_HMI_SIDE1.fits
-        # Match and extract: date, AR number, and instrument (before optional _SIDE1)
-        match = re.match(r"(\d{8})_\d{6}_[A-Z]+-(\d+).*_([A-Z]+)(?:_SIDE\d+)?\.fits", filename)
-        if match:
-            date, ar_number, instrument = match.groups()
-            return (date, ar_number, instrument)
+def _extract_cutout_key(filename: str) -> tuple[str, str, str] | None:
+    match = _CUTOUT_KEY_PATTERN.match(filename)
+    if not match:
         return None
+    return match.groups()
 
-    # Pre-compute mapping based on (date, ar_number, instrument) to actual files
-    fits_dir = os.path.join(data_folder, dataset_folder, "data/cutout_classification/fits")
-    all_fits_files = glob.glob(os.path.join(fits_dir, "*.fits"))
 
-    logger.info(f"Looking for FITS files in: {fits_dir}")
-    logger.info(f"Found {len(all_fits_files)} FITS files")
+def _build_cutout_key_map(
+    data_folder: str, dataset_folder: str, image_type: str = "magnetograms"
+) -> dict[tuple[str, str, str], Path]:
+    """Build a mapping from cutout keys to FITS file paths."""
+    key_to_path: dict[tuple[str, str, str], Path] = {}
+    scanned_files = 0
+    prefer_magnetogram = image_type == "magnetograms"
 
-    key_to_file = {}
-    for fits_file in all_fits_files:
-        filename = os.path.basename(fits_file)
-        key = extract_key_info(filename)
+    for fits_dir in pp_common.candidate_cutout_fits_dirs(data_folder, dataset_folder):
+        if not fits_dir.exists():
+            continue
+        for path in fits_dir.glob("*.fits"):
+            scanned_files += 1
+            key = _extract_cutout_key(path.name)
+            if key is None:
+                continue
+            existing = key_to_path.get(key)
+            is_mag = "_mag_" in path.name.lower()
+            if existing is None or (prefer_magnetogram and is_mag) or (not prefer_magnetogram and not is_mag):
+                key_to_path[key] = path
 
-        if key:
-            # Prefer _mag_ files over _cont_ files
-            if key not in key_to_file or "_mag_" in filename:
-                key_to_file[key] = filename
-        else:
-            logger.debug(f"Could not extract key from filename: {filename}")
+    logger.info("%d FITS files present. %d key mappings considered (%s)", scanned_files, len(key_to_path), image_type)
+    return key_to_path
 
-    logger.info(f"Successfully mapped {len(key_to_file)} unique (date, AR, instrument) keys")
 
+def check_fits_file_existence(df, data_folder, dataset_folder, image_type: str = "magnetograms"):
+    """Add resolved FITS paths and a boolean existence flag to the dataframe."""
+    df = df.copy()
     df["file_exists"] = False
+    df["resolved_path"] = None
     missing_path_indices = []
 
+    hmi_col = "path_image_cutout_hmi"
+    mdi_col = "path_image_cutout_mdi"
+    key_to_file = _build_cutout_key_map(data_folder, dataset_folder, image_type)
+
     for index, row in df.iterrows():
-        hmi_path = row.get("path_image_cutout_hmi")
-        mdi_path = row.get("path_image_cutout_mdi")
+        hmi_path = row.get(hmi_col)
+        mdi_path = row.get(mdi_col)
 
-        hmi_missing = is_missing(hmi_path)
-        mdi_missing = is_missing(mdi_path)
-
-        # If both paths are missing, record the index and continue
-        if hmi_missing and mdi_missing:
+        if pp_common.is_missing_path_value(hmi_path) and pp_common.is_missing_path_value(mdi_path):
             missing_path_indices.append(index)
             continue
 
-        # Prefer HMI path if available, otherwise use MDI path
-        if not hmi_missing:
-            path_value = hmi_path
-            path_column = "path_image_cutout_hmi"
-        else:
-            path_value = mdi_path
-            path_column = "path_image_cutout_mdi"
+        resolved = None
+        resolved_col = None
+        for col, value in ((hmi_col, hmi_path), (mdi_col, mdi_path)):
+            if pp_common.is_missing_path_value(value):
+                continue
+            value_text = str(value).strip()
+            candidate = pp_common.resolve_cutout_fits_path(
+                value,
+                data_folder=data_folder,
+                dataset_folder=dataset_folder,
+            )
+            if candidate is None:
+                key = _extract_cutout_key(Path(value_text).name)
+                if key is not None:
+                    candidate = key_to_file.get(key)
+            if candidate is not None:
+                resolved = candidate
+                resolved_col = col
+                break
 
-        base_filename = os.path.basename(path_value)
-        key = extract_key_info(base_filename)
-
-        if not key:
-            logger.debug(f"Row {index}: Could not extract key from dataframe filename: {base_filename}")
-
-        # Look up the file by key (date, ar_number, instrument)
-        if key and key in key_to_file:
+        if resolved is not None:
             df.loc[index, "file_exists"] = True
-            # Update the path column to point to the actual file found
-            df.loc[index, path_column] = key_to_file[key]
-        elif key:
-            logger.debug(f"Row {index}: No matching file for key {key} (from {base_filename})")
+            df.loc[index, "resolved_path"] = str(resolved)
+            if resolved_col is not None:
+                df.loc[index, resolved_col] = resolved.name
 
     files_found = df["file_exists"].sum()
     logger.info(f"Found existing files for {files_found}/{len(df)} rows")
@@ -133,44 +109,19 @@ def check_fits_file_existence(df, data_folder, dataset_folder):
 
 
 def split_dataframe(df, stratify_col, test_size=0.1, val_size=0.2, random_state=42):
-    """
-    Split dataframe into train, validation, and test sets with stratification,
-    while keeping Active Regions (AR) together.
-
-    Parameters:
-    -----------
-    df : pandas.DataFrame
-        Input dataframe to be split
-    stratify_col : str
-        Column name to use for stratification (e.g., 'flares_above_C')
-    test_size : float, optional (default=0.1)
-        Proportion of dataset to include in test split
-    val_size : float, optional (default=0.2)
-        Proportion of dataset to include in validation split
-    random_state : int, optional (default=42)
-        Controls the shuffling applied to the data before splitting
-
-    Returns:
-    --------
-    tuple of pandas.DataFrame
-        (train_df, val_df, test_df)
-    """
-    # Validate inputs
+    """Split dataframe into train/val/test with AR-aware stratification."""
     if test_size + val_size >= 1:
         raise ValueError("Combined test and validation sizes must be less than 1")
     if stratify_col not in df.columns:
         raise ValueError(f"Stratification column '{stratify_col}' not found in dataframe")
 
-    # Get unique ARs and their stratification labels
     ar_groups = df["number"].unique()
     ar_labels = df.groupby("number")[stratify_col].max().loc[ar_groups].values
 
-    # First split: train_val (will be split further) vs test
     train_val_ars, test_ars = train_test_split(
         ar_groups, test_size=test_size, stratify=ar_labels, random_state=random_state
     )
 
-    # Second split: split train_val into train and validation
     train_val_labels = df.groupby("number")[stratify_col].max().loc[train_val_ars].values
     adjusted_val_size = val_size / (1 - test_size)  # Relative to train_val size
 
@@ -178,19 +129,21 @@ def split_dataframe(df, stratify_col, test_size=0.1, val_size=0.2, random_state=
         train_val_ars, test_size=adjusted_val_size, stratify=train_val_labels, random_state=random_state
     )
 
-    # Create final splits using AR numbers
     train_df = df[df["number"].isin(train_ars)]
     val_df = df[df["number"].isin(val_ars)]
     test_df = df[df["number"].isin(test_ars)]
 
-    # Verification
-    logger.info("Unique ARs in Train: %s", train_df["number"].nunique())
-    logger.info("Unique ARs in Validation: %s", val_df["number"].nunique())
-    logger.info("Unique ARs in Test: %s", test_df["number"].nunique())
-
-    logger.info("AR Overlap Check:")
-    logger.info("Train vs Val AR Overlap: %s", len(set(train_ars) & set(val_ars)))
-    logger.info("Train vs Test AR Overlap: %s", len(set(train_ars) & set(test_ars)))
-    logger.info("Val vs Test AR Overlap: %s", len(set(val_ars) & set(test_ars)))
+    overlap_tv = len(set(train_ars) & set(val_ars))
+    overlap_tt = len(set(train_ars) & set(test_ars))
+    overlap_vt = len(set(val_ars) & set(test_ars))
+    logger.info(
+        "ARs - Train: %d, Val: %d, Test: %d | Overlaps - Train/Val: %d, Train/Test: %d, Val/Test: %d",
+        train_df["number"].nunique(),
+        val_df["number"].nunique(),
+        test_df["number"].nunique(),
+        overlap_tv,
+        overlap_tt,
+        overlap_vt,
+    )
 
     return train_df, val_df, test_df

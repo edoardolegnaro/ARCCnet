@@ -3,6 +3,7 @@ Dataset utilities for Hale classification using existing ARCCNet utilities.
 """
 
 import logging
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -11,9 +12,8 @@ from torch.utils.data import Dataset
 from torchvision import transforms
 from torchvision.transforms import v2
 
-from astropy.io import fits
-
 import arccnet.models.cutouts.hale.config as config
+from arccnet.models import preprocessing_common as pp_common
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -25,8 +25,8 @@ def get_transforms(is_training: bool = False):
     return (
         v2.Compose(
             [
-                v2.RandomVerticalFlip(),
-                v2.RandomHorizontalFlip(),
+                v2.RandomVerticalFlip(p=config.VERTICAL_FLIP_PROB),
+                v2.RandomHorizontalFlip(p=config.HORIZONTAL_FLIP_PROB),
                 v2.RandomPerspective(distortion_scale=config.PERSPECTIVE_DISTORTION_SCALE, p=config.PERSPECTIVE_PROB),
                 v2.RandomAffine(
                     degrees=config.ROTATION_DEGREES,
@@ -46,40 +46,58 @@ def get_fold_data(df: pd.DataFrame, fold_num: int) -> tuple[pd.DataFrame, pd.Dat
     return tuple(df[df[f"Fold {fold_num}"] == split].copy() for split in ("train", "val", "test"))
 
 
-def convert_old_path_to_new(old_path: str) -> str:
-    """Convert old absolute paths to new relative paths."""
-    return (
-        f"{config.DATA_FOLDER}/{config.DATASET_FOLDER}/{old_path.replace('/mnt/ARCAFF/v0.3.0/04_final/', '')}"
-        if old_path.startswith("/mnt/ARCAFF/v0.3.0/04_final/")
-        else old_path
-    )
-
-
 def load_image(row, data_type="magnetogram"):
     """Load magnetogram or continuum FITS file as np.ndarray."""
+    magnetogram_path = pp_common.resolve_preferred_cutout_fits_path(
+        row,
+        data_folder=config.DATA_FOLDER,
+        dataset_folder=config.DATASET_FOLDER,
+    )
+    if magnetogram_path is None:
+        raise RuntimeError(f"No cutout FITS path available for row index {getattr(row, 'name', 'unknown')}")
+
     if data_type == "magnetogram":
-        fits_file_path = convert_old_path_to_new(row["path_image_cutout_hmi"] or row["path_image_cutout_mdi"])
+        fits_file_path = magnetogram_path
     elif data_type == "continuum":
-        # Derive continuum path by replacing '_mag_' with '_cont_' in filename
-        mag_path = row["path_image_cutout_hmi"] or row["path_image_cutout_mdi"]
-        fits_file_path = convert_old_path_to_new(mag_path.replace("_mag_", "_cont_"))
+        mag_name = Path(magnetogram_path).name
+        continuum_names = [
+            mag_name.replace("_mag_", "_cont_"),
+            mag_name.replace(".magnetogram.", ".continuum."),
+        ]
+        continuum_names = list(dict.fromkeys(continuum_names))
+
+        fits_file_path = None
+        for continuum_name in continuum_names:
+            candidate = Path(magnetogram_path).with_name(continuum_name)
+            if candidate.exists():
+                fits_file_path = candidate
+                break
+            resolved = pp_common.resolve_cutout_fits_path(
+                continuum_name,
+                data_folder=config.DATA_FOLDER,
+                dataset_folder=config.DATASET_FOLDER,
+            )
+            if resolved is not None:
+                fits_file_path = resolved
+                break
+
+        if fits_file_path is None:
+            raise RuntimeError(f"Failed to resolve continuum FITS for magnetogram {magnetogram_path}")
     else:
         raise ValueError(f"Unsupported data_type: {data_type}")
+
     try:
-        with fits.open(fits_file_path, memmap=True) as img_fits:
-            return img_fits[1].data.astype(np.float32)
-    except Exception as e:
-        raise RuntimeError(f"Failed to load FITS file {fits_file_path}: {e}")
+        return pp_common.load_fits_hdu_data(fits_file_path, hdu_index=1, dtype=np.float32)
+    except Exception as exc:
+        raise RuntimeError(f"Failed to load FITS file {fits_file_path}: {exc}") from exc
 
 
 def normalize_continuum(image: np.ndarray) -> np.ndarray:
     """
     Normalize continuum image using inverted min-max scaling.
-    c_out = 1 - (c_in - min) / (max - min)
-    Output is in [0, 1], with background near 0 and brightest points near 1.
+    Output is in [0, 1] with background near 0 and brightest points near 1.
     NaNs are set to 0.
     """
-    # Mask out NaNs for min/max computation
     finite = np.isfinite(image)
     if not np.any(finite):
         return np.zeros_like(image, dtype=np.float32)
@@ -123,9 +141,9 @@ class HaleDataset(Dataset):
             )
         if not hasattr(HaleDataset, "_logged_labels"):
             logger.info(f"Dataset using model_labels: {[int(label) for label in unique_labels]}")
-            logger.info(
-                "Original grouped_labels mapping: {k: v for k, v in self.df.groupby('model_labels')['grouped_labels'].first().items()}"
-            )
+            if "grouped_labels" in self.df.columns:
+                grouped_mapping = self.df.groupby("model_labels")["grouped_labels"].first().sort_index().to_dict()
+                logger.info("Original grouped_labels mapping: %s", grouped_mapping)
             HaleDataset._logged_labels = True
 
     def __len__(self):

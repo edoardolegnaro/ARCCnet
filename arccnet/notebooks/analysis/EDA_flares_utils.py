@@ -1,6 +1,5 @@
 import numpy as np
 import pandas as pd
-import seaborn as sns
 from matplotlib import pyplot as plt
 
 from arccnet.models import labels
@@ -113,46 +112,6 @@ def create_stacked_bar_chart(
         ax.set_ylim(0, 105)
 
     return ax
-
-
-def analyze_flares_by_magnetic_class(df):
-    """Analyze relationship between magnetic classes and flare production"""
-    mag_flare_data = get_flare_data_by_magnetic_class(df)
-
-    with plt.style.context("seaborn-v0_8-darkgrid"):
-        plt.figure(figsize=(13, 5))
-        create_stacked_bar_chart(
-            mag_flare_data,
-            "magnetic_class",
-            FLARE_CLASSES,
-            colors=dict(zip(FLARE_CLASSES, sns.color_palette("Blues", len(FLARE_CLASSES)))),
-            title="Solar Flare Distribution by Magnetic Class",
-            xlabel="Magnetic Class",
-            ylabel="Number of Flares",
-        )
-        plt.legend(title="Flare Class", fontsize=12)
-        plt.tight_layout()
-        plt.show()
-
-    # 2. Create summary table
-    table = mag_flare_data.copy()
-    table["Total"] = table["total_flares"]
-    table["Percentage"] = (table["Total"] / table["Total"].sum() * 100).round(2).astype(str) + "%"
-
-    # Add totals row
-    totals = {cls: table[cls].sum() for cls in FLARE_CLASSES}
-    totals["magnetic_class"] = "Total"
-    totals["Total"] = table["Total"].sum()
-    totals["Percentage"] = "100.00%"
-
-    table = pd.concat([table, pd.DataFrame([totals])], ignore_index=True)
-    table = table.rename(columns={"magnetic_class": "Magnetic Class"})
-
-    # Format integer columns
-    for col in FLARE_CLASSES + ["Total"]:
-        table[col] = table[col].astype(int)
-
-    return table[["Magnetic Class"] + FLARE_CLASSES + ["Total", "Percentage"]]
 
 
 def analyze_flaring_vs_nonflaring(df):

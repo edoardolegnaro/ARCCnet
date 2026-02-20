@@ -10,12 +10,10 @@ import argparse
 from dataclasses import dataclass
 
 import matplotlib.pyplot as plt
-import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
-from astropy.io import fits
-
+from arccnet.models import preprocessing_common as pp_common
 from arccnet.models.flares import utils as flare_utils
 from arccnet.models.flares.binary_classification import config
 
@@ -25,32 +23,34 @@ logger = logging.getLogger("prefilter_fits_report")
 
 @dataclass
 class ValidationResult:
+    path: str
     filename: str
     ok: bool
     error: str = ""
 
 
-def _resolved_filename(row: pd.Series) -> str | None:
-    """Resolve preferred filename from mapped dataframe row."""
-    hmi = row.get("path_image_cutout_hmi")
-    mdi = row.get("path_image_cutout_mdi")
+def _resolved_path(row: pd.Series) -> str | None:
+    """Resolve preferred mapped FITS path from dataframe row."""
+    resolved = row.get("resolved_path")
+    if not pp_common.is_missing_path_value(resolved):
+        return str(resolved)
 
-    if pd.notna(hmi):
-        return os.path.basename(str(hmi))
-    if pd.notna(mdi):
-        return os.path.basename(str(mdi))
+    for column in ("path_image_cutout_hmi", "path_image_cutout_mdi"):
+        value = row.get(column)
+        if not pp_common.is_missing_path_value(value):
+            return str(value)
+
     return None
 
 
 def _validate_fits_file(path: str) -> ValidationResult:
-    """Try opening and fully decoding HDU1 data to catch compressed-stream corruption."""
+    """Try decoding FITS data to catch compressed-stream corruption."""
     name = os.path.basename(path)
     try:
-        with fits.open(path, memmap=True) as hdul:
-            _ = np.array(hdul[1].data, dtype=np.float32)
-        return ValidationResult(filename=name, ok=True)
+        _ = pp_common.load_fits_hdu_data(path, hdu_index=1)
+        return ValidationResult(path=path, filename=name, ok=True)
     except Exception as exc:  # noqa: BLE001
-        return ValidationResult(filename=name, ok=False, error=f"{type(exc).__name__}: {exc}")
+        return ValidationResult(path=path, filename=name, ok=False, error=f"{type(exc).__name__}: {exc}")
 
 
 def _save_plot(report_dir: str, metrics: dict[str, int]) -> str:
@@ -114,31 +114,30 @@ def main() -> None:
     mapped_df = mapped_df[mapped_df["file_exists"]].copy()
     rows_mapped_exists = len(mapped_df)
 
-    mapped_df["resolved_filename"] = mapped_df.apply(_resolved_filename, axis=1)
-    mapped_df = mapped_df[mapped_df["resolved_filename"].notna()].copy()
+    mapped_df["resolved_path"] = mapped_df.apply(_resolved_path, axis=1)
+    mapped_df = mapped_df[mapped_df["resolved_path"].notna()].copy()
 
-    unique_files = sorted(mapped_df["resolved_filename"].unique().tolist())
+    unique_files = sorted(mapped_df["resolved_path"].unique().tolist())
     if args.max_files is not None:
         unique_files = unique_files[: args.max_files]
         logger.warning("--max-files set: validating only first %d unique files", len(unique_files))
 
-    fits_base = os.path.join(args.data_folder, args.dataset_folder, "data", "cutout_classification", "fits")
-    logger.info("Validating %d unique FITS files under %s", len(unique_files), fits_base)
+    logger.info("Validating %d unique FITS files", len(unique_files))
 
     bad_records: list[dict[str, str]] = []
-    for name in tqdm(unique_files, desc="Validating FITS files", unit="file"):
-        result = _validate_fits_file(os.path.join(fits_base, name))
+    for path in tqdm(unique_files, desc="Validating FITS files", unit="file"):
+        result = _validate_fits_file(path)
         if not result.ok:
-            bad_records.append({"filename": result.filename, "error": result.error})
+            bad_records.append({"path": result.path, "filename": result.filename, "error": result.error})
 
-    bad_df = pd.DataFrame(bad_records, columns=["filename", "error"])
-    bad_file_set = set(bad_df["filename"].tolist())
+    bad_df = pd.DataFrame(bad_records, columns=["path", "filename", "error"])
+    bad_file_set = set(bad_df["path"].tolist())
 
-    filtered_df = mapped_df[~mapped_df["resolved_filename"].isin(bad_file_set)].copy()
+    filtered_df = mapped_df[~mapped_df["resolved_path"].isin(bad_file_set)].copy()
     rows_filtered = len(filtered_df)
     rows_corrupted = rows_mapped_exists - rows_filtered
 
-    filtered_df = filtered_df.drop(columns=["resolved_filename"], errors="ignore")
+    filtered_df = filtered_df.drop(columns=["resolved_path"], errors="ignore")
 
     logger.info("Saving filtered parquet to %s", output_path)
     filtered_df.to_parquet(output_path, index=False)

@@ -1,3 +1,5 @@
+"""Quick visual checks for YOLO label overlays."""
+
 # %%
 import os
 import random
@@ -17,7 +19,6 @@ YOLO_root_path = os.path.join(data_folder, "YOLO/mag")
 YOLO_cont_root_path = os.path.join(data_folder, "YOLO/cont")
 
 # %%
-# # Visualize magnetogram
 mag_image_dir = os.path.join(YOLO_root_path, "images", "train")
 mag_images = [f for f in os.listdir(mag_image_dir) if f.endswith(".png")]
 image_name = random.choice(mag_images)
@@ -31,7 +32,6 @@ plt.show()
 
 
 # %%
-# Visualize continuum
 cont_image_dir = os.path.join(YOLO_cont_root_path, "images", "train")
 cont_image_path = os.path.join(cont_image_dir, image_name)
 img_cont = ut.draw_yolo_labels_on_image(cont_image_path)

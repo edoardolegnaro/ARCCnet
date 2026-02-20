@@ -16,6 +16,22 @@ from sklearn.metrics import auc, roc_curve
 from sklearn.preprocessing import label_binarize
 
 
+def _normalize_to_uint8(image: np.ndarray) -> np.ndarray:
+    """Map any numeric image array to uint8 [0, 255] safely."""
+    image = np.nan_to_num(image, nan=0.0)
+    min_val = float(np.min(image))
+    max_val = float(np.max(image))
+    if max_val <= min_val:
+        return np.zeros_like(image, dtype=np.uint8)
+    normalized = (image - min_val) / (max_val - min_val)
+    return np.clip(normalized * 255.0, 0.0, 255.0).astype(np.uint8)
+
+
+def _class_name_for_index(class_names: list[str], index: int) -> str:
+    """Return a safe class name for a numeric label index."""
+    return class_names[index] if 0 <= index < len(class_names) else f"Class_{index}"
+
+
 def generate_roc_curves(
     y_true: np.ndarray, y_pred_proba: np.ndarray, class_names: list[str], fold_num: int | None = None
 ) -> tuple[Image.Image, dict[str, dict[str, list[float] | float]]]:
@@ -48,8 +64,14 @@ def generate_roc_curves(
         color = colors[i] if i < len(colors) else f"C{i}"
 
         # Calculate ROC curve and AUC for this class
-        fpr, tpr, _ = roc_curve(y_true_bin[:, i], y_pred_proba[:, i])
-        roc_auc = auc(fpr, tpr)
+        class_targets = y_true_bin[:, i]
+        if np.unique(class_targets).size < 2:
+            roc_data[class_name] = {"fpr": [], "tpr": [], "auc": float("nan")}
+            plt.plot([], [], color=color, lw=2, label=f"{class_name} (AUC = N/A)")
+            continue
+
+        fpr, tpr, _ = roc_curve(class_targets, y_pred_proba[:, i])
+        roc_auc = float(auc(fpr, tpr))
 
         # Store data for later use
         roc_data[class_name] = {"fpr": fpr.tolist(), "tpr": tpr.tolist(), "auc": roc_auc}
@@ -177,17 +199,15 @@ def _log_to_comet_ml(logger, misclassified_data: list[dict], fold_num: int, clas
         # Handle single channel or multi-channel images
         if img_tensor.dim() == 3 and img_tensor.shape[0] == 1:
             # Single channel - squeeze and convert to grayscale
-            img_np = img_tensor.squeeze(0).numpy()
-            img_np = ((img_np - img_np.min()) / (img_np.max() - img_np.min()) * 255).astype(np.uint8)
+            img_np = _normalize_to_uint8(img_tensor.squeeze(0).numpy())
             img_pil = Image.fromarray(img_np, mode="L")
         else:
             # Multi-channel - assume RGB
-            img_np = img_tensor.permute(1, 2, 0).numpy()
-            img_np = ((img_np - img_np.min()) / (img_np.max() - img_np.min()) * 255).astype(np.uint8)
+            img_np = _normalize_to_uint8(img_tensor.permute(1, 2, 0).numpy())
             img_pil = Image.fromarray(img_np)
 
-        true_class = class_names[sample["true_label"]]
-        pred_class = class_names[sample["pred_label"]]
+        true_class = _class_name_for_index(class_names, int(sample["true_label"]))
+        pred_class = _class_name_for_index(class_names, int(sample["pred_label"]))
         confidence = sample["confidence"]
 
         logger.experiment.log_image(
@@ -210,8 +230,8 @@ def _log_to_tensorboard(logger, misclassified_data: list[dict], fold_num: int, c
         # Ensure tensor is in correct format for TensorBoard (C, H, W)
         display_tensor = img_tensor
 
-        true_class = class_names[sample["true_label"]]
-        pred_class = class_names[sample["pred_label"]]
+        true_class = _class_name_for_index(class_names, int(sample["true_label"]))
+        pred_class = _class_name_for_index(class_names, int(sample["pred_label"]))
 
         logger.experiment.add_image(
             f"fold_{fold_num}/misclassified_{i + 1}_true_{true_class}_pred_{pred_class}",
@@ -249,9 +269,13 @@ def _log_roc_to_comet_ml(logger, roc_image: Image.Image, roc_data: dict, fold_nu
 
     # Log AUC values as metrics
     for class_name, data in roc_data.items():
-        logger.experiment.log_metric(
-            f"fold_{fold_num}_auc_{class_name.lower().replace('-', '_')}", data["auc"], step=fold_num
-        )
+        auc_value = data.get("auc")
+        if isinstance(auc_value, (int, float)) and np.isfinite(float(auc_value)):
+            logger.experiment.log_metric(
+                f"fold_{fold_num}_auc_{class_name.lower().replace('-', '_')}",
+                float(auc_value),
+                step=fold_num,
+            )
 
 
 def _log_roc_to_tensorboard(logger, roc_image: Image.Image, roc_data: dict, fold_num: int) -> None:
@@ -260,18 +284,20 @@ def _log_roc_to_tensorboard(logger, roc_image: Image.Image, roc_data: dict, fold
         return
 
     # Convert PIL image to tensor for TensorBoard
-    img_array = np.array(roc_image)
+    img_array = np.array(roc_image.convert("RGB"))
     img_tensor = torch.from_numpy(img_array).permute(2, 0, 1)  # HWC to CHW
 
     logger.experiment.add_image(f"fold_{fold_num}/roc_curves", img_tensor, global_step=fold_num, dataformats="CHW")
 
     # Log AUC values as scalars
     for class_name, data in roc_data.items():
-        logger.experiment.add_scalar(
-            f"fold_{fold_num}/auc_{class_name.lower().replace('-', '_')}",
-            data["auc"],
-            global_step=fold_num,
-        )
+        auc_value = data.get("auc")
+        if isinstance(auc_value, (int, float)) and np.isfinite(float(auc_value)):
+            logger.experiment.add_scalar(
+                f"fold_{fold_num}/auc_{class_name.lower().replace('-', '_')}",
+                float(auc_value),
+                global_step=fold_num,
+            )
 
 
 def log_confusion_matrix_and_classification_report(
@@ -313,7 +339,7 @@ def _log_confusion_matrix_to_console(cm, class_report, class_names: list[str] | 
     logging.info("Confusion Matrix (rows=true, cols=predicted):")
 
     for i, row in enumerate(cm):
-        class_name = class_names[i] if class_names else f"Class_{i}"
+        class_name = class_names[i] if class_names and i < len(class_names) else f"Class_{i}"
         logging.info(f"{class_name:>12}: {row}")
 
     logging.info("=" * 50)

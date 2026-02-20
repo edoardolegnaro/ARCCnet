@@ -1,78 +1,45 @@
-# Hale Classification with PyTorch Lightning
+# Hale Classification (Cutouts)
 
-This directory contains a minimal PyTorch Lightning implementation for Hale classification (Alpha, Beta, Beta-Gamma).
+This directory contains the Hale cutout classification pipeline (data prep, training, evaluation, and inference) built on PyTorch Lightning.
 
-## Files
+## Core Files
 
-- `config.py` - Configuration parameters for training
-- `data_preparation.py` - Dataset preparation (existing)
-- `dataset.py` - PyTorch dataset class for Hale data
-- `lightning_model.py` - Lightning model definition
-- `lightning_data.py` - Lightning data module
-- `train.py` - Main training script
-- `test_setup.py` - Setup verification script
+- `config.py`: training/data configuration
+- `data_preparation.py`: preprocessing pipeline (cleanup, label mapping, NaN filtering, CV fold creation)
+- `dataset.py`: `HaleDataset` and transforms
+- `lightning_data.py`: `HaleDataModule`
+- `lightning_model.py`: Lightning model (ResNet backbone)
+- `trainer.py`: single-fold training/evaluation orchestration
+- `cross_validation.py`: multi-fold orchestration and aggregation
+- `train.py`: CLI entrypoint for training
+- `evaluation.py`: confusion matrix, ROC, and misclassification logging
+- `logging_utils.py`: logger setup and experiment logging helpers
+- `inference.py`: model download + single FITS inference
+- `test_setup.py`: consolidated environment/data setup verification
 
 ## Quick Start
 
-1. **Install dependencies:**
+1. Install dependencies:
    ```bash
    pip install -e .[models]
    ```
-
-2. **Verify setup:**
+2. Verify setup:
    ```bash
    python arccnet/models/cutouts/hale/test_setup.py
    ```
-
-3. **Run training:**
+3. Run training:
    ```bash
    python arccnet/models/cutouts/hale/train.py
    ```
 
-## Features
+## Dataset Output
 
-- ✅ Simple ResNet-based architecture
-- ✅ Cross-validation support (8 folds)
-- ✅ Class weight balancing
-- ✅ TensorBoard logging
-- ✅ Early stopping and checkpointing
-- ✅ Proper AR number separation (no data leakage)
+Processed parquet includes:
+- `grouped_labels`: mapped Hale classes used for training
+- `model_labels`: contiguous integer labels (`0..N-1`)
+- `Fold 1..N`: train/val/test assignments with AR-number group separation
 
-## Configuration
+## Notes
 
-Key parameters in `config.py`:
-- `BATCH_SIZE`: Batch size for training (default: 32)
-- `LEARNING_RATE`: Learning rate (default: 1e-3)
-- `MAX_EPOCHS`: Maximum training epochs (default: 50)
-- `MODEL_NAME`: ResNet variant (default: "resnet18")
-
-## Dataset Structure
-
-The processed dataset includes:
-- `grouped_labels`: Alpha, Beta, Beta-Gamma
-- `encoded_labels`: 2, 3, 4 (numeric labels)
-- `Fold 1-8`: Cross-validation splits (train/val/test)
-
-## Usage Examples
-
-```python
-# Train on single fold
-trainer, model = train_single_fold(df_processed, fold_num=1)
-
-# Train on all folds (cross-validation)
-results = train_all_folds(df_processed)
-```
-
-## Monitoring
-
-Training progress can be monitored via TensorBoard:
-```bash
-tensorboard --logdir logs
-```
-
-## Next Steps
-
-- Add data augmentation transforms
-- Implement ensemble methods
-- Add confusion matrix logging
-- Optimize hyperparameters
+- Redundant helper scripts were consolidated into `test_setup.py`.
+- Exploratory EDA script files were removed from this runtime directory to keep the training path focused and maintainable.

@@ -14,6 +14,26 @@ from arccnet.models import labels
 magnetic_map = matplotlib.colormaps["hmimag"]
 
 
+def create_solar_grid(ax, num_meridians=12, num_parallels=12, num_points=300):
+    """
+    Add meridian and parallel grid lines to a solar disc plot.
+    """
+    phis = np.linspace(0, 2 * np.pi, num_meridians, endpoint=False)
+    lats = np.linspace(-np.pi / 2, np.pi / 2, num_parallels)
+    theta = np.linspace(-np.pi / 2, np.pi / 2, num_points)
+
+    # Meridians
+    for phi in phis:
+        y, z = np.cos(theta) * np.sin(phi), np.sin(theta)
+        ax.plot(y, z, "k-", linewidth=0.2)
+
+    # Parallels
+    for lat in lats:
+        y = np.cos(lat) * np.sin(theta)
+        z = np.full(num_points, np.sin(lat))
+        ax.plot(y, z, "k-", linewidth=0.2)
+
+
 def pad_resize_normalize(image, target_height=224, target_width=224):
     """
     Adds padding to and resizes an image to specified target height and width.

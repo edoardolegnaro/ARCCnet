@@ -140,13 +140,23 @@ def setup_loggers(experiment_name: str, fold_num: int | None = None) -> list:
 
 def _setup_comet_logger(experiment_name: str) -> CometLogger | None:
     """Set up Comet ML logger if credentials are available."""
+    project_name = getattr(config, "COMET_PROJECT_NAME", getattr(config, "PROJECT_NAME", ""))
+    common_kwargs = {
+        "name": f"{experiment_name}_rs{config.RANDOM_STATE}",
+        "offline_directory": getattr(config, "LOG_DIR", "logs"),
+    }
+    workspace = getattr(config, "COMET_WORKSPACE", None)
+    if workspace:
+        common_kwargs["workspace"] = workspace
+
     try:
-        comet_logger = CometLogger(
-            project=getattr(config, "COMET_PROJECT_NAME", config.PROJECT_NAME),
-            name=f"{experiment_name}_rs{config.RANDOM_STATE}",
-            offline_directory=getattr(config, "LOG_DIR", "logs"),
-        )
-        return comet_logger
+        return CometLogger(project=project_name, **common_kwargs)
+    except TypeError:
+        try:
+            return CometLogger(project_name=project_name, **common_kwargs)
+        except Exception as e:
+            logging.warning(f"Could not initialize Comet ML logger: {e}")
+            return None
     except Exception as e:
         logging.warning(f"Could not initialize Comet ML logger: {e}")
         return None
@@ -361,8 +371,14 @@ def log_test_results(test_metrics: dict[str, float], best_model_path: str) -> No
     logging.info("=" * 50)
     logging.info("FINAL TEST RESULTS")
     logging.info("=" * 50)
-    logging.info(f"Test Loss: {test_metrics.get('test_loss', 'N/A'):.4f}")
-    logging.info(f"Test Accuracy: {test_metrics.get('test_acc', 'N/A'):.4f}")
-    logging.info(f"Test F1: {test_metrics.get('test_f1', 'N/A'):.4f}")
+    test_loss = test_metrics.get("test_loss")
+    test_acc = test_metrics.get("test_acc")
+    test_f1 = test_metrics.get("test_f1")
+    loss_str = f"{float(test_loss):.4f}" if isinstance(test_loss, int | float) else "N/A"
+    acc_str = f"{float(test_acc):.4f}" if isinstance(test_acc, int | float) else "N/A"
+    f1_str = f"{float(test_f1):.4f}" if isinstance(test_f1, int | float) else "N/A"
+    logging.info(f"Test Loss: {loss_str}")
+    logging.info(f"Test Accuracy: {acc_str}")
+    logging.info(f"Test F1: {f1_str}")
     logging.info(f"Best model checkpoint: {best_model_path}")
     logging.info("=" * 50)

@@ -61,6 +61,8 @@ class HaleTrainer:
         """
         self.class_names = class_names or config.class_names
         self._setup_warnings()
+        self.seed = int(getattr(config, "RANDOM_STATE", 42))
+        self._seed_everything(self.seed)
         self.precision = self._get_precision()
 
     def _setup_warnings(self) -> None:
@@ -76,9 +78,23 @@ class HaleTrainer:
         clash with the deprecated `torch.set_float32_matmul_precision` helper.
         Let PyTorch keep its defaults and just report the precision Lightning will use.
         """
-        precision = "16-mixed"
+        accelerator = str(getattr(config, "ACCELERATOR", "auto")).lower()
+        use_mixed_precision = torch.cuda.is_available() and accelerator != "cpu"
+        precision = "16-mixed" if use_mixed_precision else "32-true"
         logging.info(f"Using precision: {precision}")
         return precision
+
+    def _seed_everything(self, seed: int) -> None:
+        """Seed all RNGs used by Lightning/PyTorch for reproducibility."""
+        pl.seed_everything(seed, workers=True)
+        if hasattr(torch.backends, "cudnn"):
+            torch.backends.cudnn.deterministic = True
+            torch.backends.cudnn.benchmark = False
+        try:
+            torch.use_deterministic_algorithms(True, warn_only=True)
+        except Exception:
+            pass
+        logging.info("Global seed set to %d", seed)
 
     def prepare_dataset_once(self) -> pd.DataFrame:
         """
@@ -87,7 +103,7 @@ class HaleTrainer:
         Returns:
             Processed DataFrame with encoded labels
         """
-        filename = f"processed_dataset_{config.classes}_{config.N_FOLDS}-splits_rs-{config.RANDOM_STATE}.parquet"
+        filename = config.PROCESSED_DATASET_FILENAME
         processed_data_path = Path(config.DATA_FOLDER) / filename
 
         if processed_data_path.exists():
@@ -189,8 +205,22 @@ class HaleTrainer:
         # Compute class weights
         train_labels = data_module.get_train_labels()
         unique_labels = np.unique(train_labels)
-        class_weights = compute_class_weight("balanced", classes=unique_labels, y=train_labels)
-        class_weights = torch.FloatTensor(class_weights)
+        num_classes = int(config.NUM_CLASSES)
+        class_weights_np = np.ones(num_classes, dtype=np.float32)
+
+        if unique_labels.size > 0:
+            present_weights = compute_class_weight("balanced", classes=unique_labels, y=train_labels)
+            class_weights_np[unique_labels.astype(int)] = present_weights.astype(np.float32)
+
+        missing_labels = sorted(set(range(num_classes)) - set(unique_labels.tolist()))
+        if missing_labels:
+            logging.warning(
+                "Training fold is missing classes %s. Assigning zero loss weight for those classes in this fold.",
+                missing_labels,
+            )
+            class_weights_np[missing_labels] = 0.0
+
+        class_weights = torch.tensor(class_weights_np, dtype=torch.float32)
 
         logging.info(f"Class weights: {class_weights}")
 
@@ -237,7 +267,8 @@ class HaleTrainer:
             log_every_n_steps=config.LOG_EVERY_N_STEPS,
             enable_progress_bar=True,
             enable_model_summary=getattr(config, "ENABLE_MODEL_SUMMARY", True),
-            deterministic=False,
+            deterministic=True,
+            benchmark=False,
         )
 
     def _create_callbacks(self, fold_num: int) -> list:

@@ -36,9 +36,9 @@ class CrossValidationManager:
         Initialize the CrossValidationManager.
 
         Args:
-            class_names: List of class names (defaults to Alpha, Beta, Beta-Gamma)
+            class_names: List of class names (defaults to configured classes)
         """
-        self.class_names = class_names or ["Alpha", "Beta", "Beta-Gamma"]
+        self.class_names = class_names or config.class_names
         self.trainer = HaleTrainer(class_names=self.class_names)
         setup_basic_logging()
 

@@ -1,22 +1,20 @@
+"""Configuration for full-disk YOLO dataset generation."""
+
 import os
 from pathlib import Path
 
-# Data paths
 DATA_FOLDER = Path(os.getenv("ARCAFF_DATA_FOLDER", "/ARCAFF/data/"))
 DATASET_ROOT = Path("arccnet-v20251017")
 DATASET_FOLDER = DATASET_ROOT / "04_final"
 DATAFRAME_NAME = "data/region_detection/region_detection_noaa-xarp.parq"
 
-# Output paths: DATA_FOLDER/YOLO/{mag,cont}/{images,labels}/{train,val}
 YOLO_OUTPUT_MAG = DATA_FOLDER / "YOLO" / "mag"
 YOLO_OUTPUT_CONT = DATA_FOLDER / "YOLO" / "cont"
 
-# Filtering
-LONGITUDE_THRESHOLD = 65.0  # Front-side: |longitude| < threshold
-MIN_SIZE = 0.03  # Minimum normalized region size
-FILTER_SELECTED = True  # Only non-filtered items
+LONGITUDE_THRESHOLD = 65.0
+MIN_SIZE = 0.03
+FILTER_SELECTED = True
 
-# Magnetic class mapping (classes mapped to "None" are excluded)
 LABEL_MAPPING = {
     "IA": "None",
     "Alpha": "Alpha",
@@ -28,12 +26,10 @@ LABEL_MAPPING = {
     "Gamma-Delta": "None",
 }
 
-# Dataset split
 TRAIN_SPLIT_RATIO = 0.8
-TEMPORAL_GAP_DAYS = 14  # Days gap between train and val to prevent temporal leakage
-INCLUDE_EMPTY_LABELS = True  # Include images with no valid regions as negative examples
+TEMPORAL_GAP_DAYS = 14
+INCLUDE_EMPTY_LABELS = True
 
-# Image processing
 RESIZE_DIM = (1024, 1024)
-USE_COLORMAP_MAG = False  # False is grayscale
+USE_COLORMAP_MAG = False
 NUM_CPUS = 30

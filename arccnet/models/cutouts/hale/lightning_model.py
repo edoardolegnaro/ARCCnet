@@ -3,6 +3,7 @@ PyTorch Lightning model for Hale classification.
 """
 
 import heapq
+import logging
 
 import numpy as np
 import pytorch_lightning as pl
@@ -14,6 +15,8 @@ from torchmetrics import Accuracy, F1Score
 
 import arccnet.models.cutouts.hale.config as config
 from arccnet.models.train_utils import replace_activations
+
+logger = logging.getLogger(__name__)
 
 
 class HaleLightningModel(pl.LightningModule):
@@ -43,15 +46,24 @@ class HaleLightningModel(pl.LightningModule):
         else:
             input_channels = 1  # magnetogram or continuum only
 
-        # Load pretrained ResNet and modify for our input channels
-        if model_name == "resnet18":
-            self.backbone = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
-        elif model_name == "resnet34":
-            self.backbone = models.resnet34(weights=models.ResNet34_Weights.DEFAULT)
-        elif model_name == "resnet50":
-            self.backbone = models.resnet50(weights=models.ResNet50_Weights.DEFAULT)
-        else:
+        # Load pretrained ResNet and fall back to random init if weights are unavailable.
+        resnet_configs = {
+            "resnet18": (models.resnet18, models.ResNet18_Weights.DEFAULT),
+            "resnet34": (models.resnet34, models.ResNet34_Weights.DEFAULT),
+            "resnet50": (models.resnet50, models.ResNet50_Weights.DEFAULT),
+        }
+        if model_name not in resnet_configs:
             raise ValueError(f"Unsupported model: {model_name}")
+        model_fn, pretrained_weights = resnet_configs[model_name]
+        try:
+            self.backbone = model_fn(weights=pretrained_weights)
+        except Exception as exc:
+            logger.warning(
+                "Could not load pretrained weights for %s (%s). Falling back to random initialization.",
+                model_name,
+                exc,
+            )
+            self.backbone = model_fn(weights=None)
 
         # Replace ReLU with LeakyReLU activations
         replace_activations(self.backbone, nn.ReLU, nn.LeakyReLU, negative_slope=config.LEAKY_RELU_NEGATIVE_SLOPE)
@@ -107,21 +119,24 @@ class HaleLightningModel(pl.LightningModule):
 
         # Calculate metrics
         preds = torch.argmax(logits, dim=1)
-        acc = self.train_accuracy(preds, labels)
-        f1 = self.train_f1(preds, labels)
+        self.train_accuracy.update(preds, labels)
+        self.train_f1.update(preds, labels)
 
         # Log metrics
-        self.log("train_loss", loss, prog_bar=True)
-        self.log("train_acc", acc, prog_bar=True)
-        self.log("train_f1", f1)
+        batch_size = labels.size(0)
+        self.log("train_loss", loss, on_step=False, on_epoch=True, prog_bar=True, batch_size=batch_size)
 
         return loss
 
     def on_train_epoch_end(self):
         """Log training epoch summary."""
-        train_acc = self.train_accuracy.compute()
-        train_f1 = self.train_f1.compute()
+        train_acc = float(self.train_accuracy.compute().detach().cpu())
+        train_f1 = float(self.train_f1.compute().detach().cpu())
+        self.log("train_acc", train_acc, prog_bar=True)
+        self.log("train_f1", train_f1)
         print(f"Training Epoch {self.current_epoch} completed - Acc: {train_acc:.4f}, F1: {train_f1:.4f}")
+        self.train_accuracy.reset()
+        self.train_f1.reset()
 
     def validation_step(self, batch, batch_idx):
         images, labels = batch
@@ -130,21 +145,24 @@ class HaleLightningModel(pl.LightningModule):
 
         # Calculate metrics
         preds = torch.argmax(logits, dim=1)
-        acc = self.val_accuracy(preds, labels)
-        f1 = self.val_f1(preds, labels)
+        self.val_accuracy.update(preds, labels)
+        self.val_f1.update(preds, labels)
 
         # Log metrics
-        self.log("val_loss", loss, prog_bar=True)
-        self.log("val_acc", acc, prog_bar=True)
-        self.log("val_f1", f1)
+        batch_size = labels.size(0)
+        self.log("val_loss", loss, on_step=False, on_epoch=True, prog_bar=True, batch_size=batch_size)
 
         return loss
 
     def on_validation_epoch_end(self):
         """Log validation epoch summary."""
-        val_acc = self.val_accuracy.compute()
-        val_f1 = self.val_f1.compute()
+        val_acc = float(self.val_accuracy.compute().detach().cpu())
+        val_f1 = float(self.val_f1.compute().detach().cpu())
+        self.log("val_acc", val_acc, prog_bar=True)
+        self.log("val_f1", val_f1)
         print(f"Validation Epoch {self.current_epoch} completed - Acc: {val_acc:.4f}, F1: {val_f1:.4f}")
+        self.val_accuracy.reset()
+        self.val_f1.reset()
 
     def test_step(self, batch, batch_idx):
         images, labels = batch
@@ -153,8 +171,8 @@ class HaleLightningModel(pl.LightningModule):
 
         # Calculate metrics
         preds = torch.argmax(logits, dim=1)
-        acc = self.test_accuracy(preds, labels)
-        f1 = self.test_f1(preds, labels)
+        self.test_accuracy.update(preds, labels)
+        self.test_f1.update(preds, labels)
 
         # Store predictions and targets for confusion matrix and classification report
         self.test_predictions.extend(preds.cpu().numpy())
@@ -163,11 +181,19 @@ class HaleLightningModel(pl.LightningModule):
         self._update_top_misclassified_samples(images, labels, preds, logits, batch_idx)
 
         # Log metrics
-        self.log("test_loss", loss)
-        self.log("test_acc", acc)
-        self.log("test_f1", f1)
+        batch_size = labels.size(0)
+        self.log("test_loss", loss, on_step=False, on_epoch=True, batch_size=batch_size)
 
         return {"test_loss": loss, "preds": preds, "targets": labels}
+
+    def on_test_epoch_end(self) -> None:
+        """Reset aggregated test metrics after epoch end."""
+        test_acc = float(self.test_accuracy.compute().detach().cpu())
+        test_f1 = float(self.test_f1.compute().detach().cpu())
+        self.log("test_acc", test_acc)
+        self.log("test_f1", test_f1)
+        self.test_accuracy.reset()
+        self.test_f1.reset()
 
     def get_confusion_matrix_and_classification_report(self, class_names=None):
         """
@@ -186,16 +212,21 @@ class HaleLightningModel(pl.LightningModule):
         y_true = np.array(self.test_targets)
         y_pred = np.array(self.test_predictions)
 
-        # Compute confusion matrix
-        cm = confusion_matrix(y_true, y_pred)
+        labels_idx = list(range(self.num_classes))
+        cm = confusion_matrix(y_true, y_pred, labels=labels_idx)
 
         # Compute classification report
-        if class_names is None:
+        if class_names is None or len(class_names) != self.num_classes:
             class_names = [f"Class_{i}" for i in range(self.num_classes)]
 
         # Get classification report as dictionary for better logging
         class_report = classification_report(
-            y_true, y_pred, target_names=class_names, output_dict=True, zero_division=0
+            y_true,
+            y_pred,
+            labels=labels_idx,
+            target_names=class_names,
+            output_dict=True,
+            zero_division=0,
         )
 
         return cm, class_report

@@ -3,6 +3,23 @@
 from pathlib import Path
 from collections import Counter
 
+import yaml
+
+
+def load_expected_class_range(config_path: Path) -> tuple[int, int] | None:
+    """Read expected class-id range from generated YOLO config.yaml."""
+    if not config_path.exists():
+        return None
+
+    with open(config_path, encoding="utf-8") as stream:
+        config = yaml.safe_load(stream) or {}
+
+    nc = config.get("nc")
+    if not isinstance(nc, int) or nc < 1:
+        return None
+
+    return 0, nc - 1
+
 
 def check_labels(yolo_root: Path, split: str = "train"):
     """Check label distribution in YOLO dataset."""
@@ -36,7 +53,7 @@ def check_labels(yolo_root: Path, split: str = "train"):
 
 
 if __name__ == "__main__":
-    # Check both mag and cont datasets
+    expected_range = load_expected_class_range(Path(__file__).with_name("config.yaml"))
     for data_type in ["mag", "cont"]:
         print(f"\n{'=' * 60}")
         print(f"{data_type.upper()} Dataset")
@@ -59,9 +76,11 @@ if __name__ == "__main__":
                 max_class = max(all_classes)
                 min_class = min(all_classes)
                 print(f"\n  Class ID range: {min_class} to {max_class}")
-                if max_class > 2:
-                    print("  ⚠️  WARNING: Found class IDs > 2 (expected 0-2)")
-                if min_class < 0:
-                    print("  ⚠️  WARNING: Found negative class IDs")
+                if expected_range is not None:
+                    expected_min, expected_max = expected_range
+                    if min_class < expected_min or max_class > expected_max:
+                        print(f"  WARNING: Found out-of-range class IDs; expected {expected_min} to {expected_max}.")
+                elif min_class < 0:
+                    print("  WARNING: Found negative class IDs")
         else:
             print(f"  Dataset not found at {yolo_root}")

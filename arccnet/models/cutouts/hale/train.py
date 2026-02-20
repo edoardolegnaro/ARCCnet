@@ -1,16 +1,15 @@
+"""
+Training script for Hale classification with cross-validation support.
+"""
+
 import logging
-import warnings
+import argparse
 from pathlib import Path
 from datetime import datetime
 
 import arccnet.models.cutouts.hale.config as config
 from arccnet.models.cutouts.hale.cross_validation import CrossValidationManager
 from arccnet.models.cutouts.hale.trainer import HaleTrainer
-
-# Suppress common warnings at the module level
-warnings.filterwarnings("ignore", category=UserWarning, message=".*hipBLASLt.*")
-warnings.filterwarnings("ignore", category=UserWarning, message=".*Precision.*not supported by the model summary.*")
-warnings.filterwarnings("ignore", category=UserWarning, message=".*does not have many workers.*")
 
 
 def log_section(title: str, width: int = 50) -> None:
@@ -27,12 +26,18 @@ def log_metric_summary(label: str, stats: dict) -> None:
     logging.info(f"{label}: {mean:.4f} ± {std:.4f}")
 
 
+def _format_metric_value(metrics: dict, key: str) -> str:
+    """Format a metric value safely for logging output."""
+    value = metrics.get(key)
+    return f"{float(value):.4f}" if isinstance(value, int | float) else "N/A"
+
+
 def train_single_fold_mode(df) -> None:
     """
     Train on a single fold for quick testing.
 
     Args:
-        df: Processed dataset DataFrame
+        df: Processed dataset
     """
     logging.info("Starting training on fold 1 (single fold mode)...")
 
@@ -45,19 +50,19 @@ def train_single_fold_mode(df) -> None:
     if test_results:
         test_metrics = test_results[0]
         log_section("SINGLE FOLD TRAINING COMPLETED")
-        logging.info(f"Final Test Accuracy: {test_metrics.get('test_acc', 'N/A'):.4f}")
-        logging.info(f"Final Test F1: {test_metrics.get('test_f1', 'N/A'):.4f}")
-        logging.info(f"Final Test Loss: {test_metrics.get('test_loss', 'N/A'):.4f}")
+        logging.info(f"Final Test Accuracy: {_format_metric_value(test_metrics, 'test_acc')}")
+        logging.info(f"Final Test F1: {_format_metric_value(test_metrics, 'test_f1')}")
+        logging.info(f"Final Test Loss: {_format_metric_value(test_metrics, 'test_loss')}")
         logging.info(f"Best checkpoint: {trainer_obj.checkpoint_callback.best_model_path}")
         logging.info("=" * 50)
 
 
 def train_cross_validation_mode(df) -> None:
     """
-    Train on all folds for comprehensive cross-validation.
+    Train on all folds for cross-validation.
 
     Args:
-        df: Processed dataset DataFrame
+        df: Processed dataset
     """
     logging.info("Starting cross-validation training on all folds...")
 
@@ -86,11 +91,45 @@ def train_cross_validation_mode(df) -> None:
         logging.info("=" * 50)
 
 
+def run_training(config_module=config, args: argparse.Namespace | None = None) -> None:
+    """
+    Backward-compatible entry point for package CLI.
+
+    Applies CLI argument overrides to config, then runs training.
+    """
+    global config
+    config = config_module
+
+    if args is not None:
+        overrides = {
+            "model_name": "MODEL_NAME",
+            "batch_size": "BATCH_SIZE",
+            "num_workers": "NUM_WORKERS",
+            "num_epochs": "MAX_EPOCHS",
+            "patience": "EARLY_STOPPING_PATIENCE",
+            "learning_rate": "LEARNING_RATE",
+            "data_folder": "DATA_FOLDER",
+            "dataset_folder": "DATASET_FOLDER",
+            "df_file_name": "DF_FILE_NAME",
+        }
+        for arg_name, config_name in overrides.items():
+            value = getattr(args, arg_name, None)
+            if value is not None:
+                setattr(config, config_name, value)
+
+        gpu_index = getattr(args, "gpu_index", None)
+        if gpu_index is not None:
+            config.ACCELERATOR = "gpu"
+            config.DEVICES = [int(gpu_index)]
+
+    main()
+
+
 def main() -> None:
     """
     Main execution function.
 
-    Prepares the dataset and runs training according to configuration.
+    Prepares dataset and runs training.
     """
     log_dir = Path(getattr(config, "LOG_DIR", Path(__file__).parent / "logs"))
     log_dir.mkdir(parents=True, exist_ok=True)

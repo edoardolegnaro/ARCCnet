@@ -18,9 +18,8 @@
 # %load_ext autoreload
 # %autoreload 2
 
-import os
 from datetime import datetime
-from collections import defaultdict
+from functools import partial
 
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
@@ -31,21 +30,22 @@ from p_tqdm import p_map
 
 from arccnet import load_config
 from arccnet.models import dataset_utils as ut_d
-from arccnet.visualisation import utils as ut_v
-from arccnet.visualisation.EDA_utils import (
+from arccnet.models import preprocessing_common as pp_common
+from arccnet.notebooks.analysis.EDA_utils import (
     analyze_quality_flags,
     create_solar_grid,
     load_and_analyze_fits_pair,
     process_row,
 )
+from arccnet.visualisation import utils as ut_v
 
 pd.set_option("display.max_columns", None)
 pd.set_option("display.max_colwidth", None)
 config = load_config()
 
 # %%
-data_folder = os.getenv("ARCAFF_DATA_FOLDER", "/ARCAFF/data")
-dataset_folder = "arccnet-v20251017/04_final"
+data_folder = "/ARCAFF/data"
+dataset_folder = "arcnet-v20251017/04_final"
 df_file_name = "data/cutout_classification/region_classification.parq"
 dataset_title = "arccnet v20251017"
 
@@ -78,37 +78,32 @@ quality_hmi_df
 # ## Data Filtering
 
 # %%
-# Remove bad quality data
-hmi_good_flags = ["", "0x00000000", "0x00000400"]
-mdi_good_flags = ["", "00000000", "00000200"]
-
-df_clean = df[df["QUALITY_hmi"].isin(hmi_good_flags) & df["QUALITY_mdi"].isin(mdi_good_flags)]
-df_HMI_clean = df_HMI[df_HMI["QUALITY_hmi"].isin(hmi_good_flags)]
-df_MDI_clean = df_MDI[df_MDI["QUALITY_mdi"].isin(mdi_good_flags)]
+# Use shared preprocessing to keep notebook behavior aligned with training pipelines.
+df_clean = ut_d.cleanup_df(df, log_level=None)
+hmi_available_orig = pp_common.nonempty_path_mask(df["path_image_cutout_hmi"])
+mdi_available_orig = pp_common.nonempty_path_mask(df["path_image_cutout_mdi"])
+hmi_available_clean = pp_common.nonempty_path_mask(df_clean["path_image_cutout_hmi"])
+mdi_available_clean = pp_common.nonempty_path_mask(df_clean["path_image_cutout_mdi"])
 
 print("DATA FILTERING Stats")
 print("-" * 40)
-hmi_orig, hmi_clean = len(df_HMI), len(df_HMI_clean)
-mdi_orig, mdi_clean = len(df_MDI), len(df_MDI_clean)
+hmi_orig, hmi_clean = int(hmi_available_orig.sum()), int(hmi_available_clean.sum())
+mdi_orig, mdi_clean = int(mdi_available_orig.sum()), int(mdi_available_clean.sum())
 total_orig, total_clean = len(df), len(df_clean)
+hmi_pct = (hmi_clean / hmi_orig * 100) if hmi_orig else 0.0
+mdi_pct = (mdi_clean / mdi_orig * 100) if mdi_orig else 0.0
+total_pct = (total_clean / total_orig * 100) if total_orig else 0.0
 
-print(f"HMI: {hmi_clean:,}/{hmi_orig:,} ({hmi_clean / hmi_orig * 100:.1f}% retained)")
-print(f"MDI: {mdi_clean:,}/{mdi_orig:,} ({mdi_clean / mdi_orig * 100:.1f}% retained)")
-print(f"Total: {total_clean:,}/{total_orig:,} ({total_clean / total_orig * 100:.1f}% retained)")
+print(f"HMI: {hmi_clean:,}/{hmi_orig:,} ({hmi_pct:.1f}% retained)")
+print(f"MDI: {mdi_clean:,}/{mdi_orig:,} ({mdi_pct:.1f}% retained)")
+print(f"Total: {total_clean:,}/{total_orig:,} ({total_pct:.1f}% retained)")
 print("-" * 40)
 
 
 # %%
-# Path Analysis - Check for None, empty strings, and 'None' strings
-def is_missing(series):
-    """
-    Check if file paths are missing or invalid.
-    """
-    return series.isna() | (series == "") | (series == "None")
-
-
-hmi_missing = is_missing(df_clean["path_image_cutout_hmi"])
-mdi_missing = is_missing(df_clean["path_image_cutout_mdi"])
+# Path Analysis
+hmi_missing = ~pp_common.nonempty_path_mask(df_clean["path_image_cutout_hmi"])
+mdi_missing = ~pp_common.nonempty_path_mask(df_clean["path_image_cutout_mdi"])
 both_missing = hmi_missing & mdi_missing
 
 # Count statistics
@@ -128,14 +123,9 @@ print("-" * 40)
 print(f"Total rows in df_clean: {stats['total']:,}")
 print(f"HMI paths - None: {stats['hmi_none']:,}, Empty: {stats['hmi_empty']:,}")
 print(f"MDI paths - None: {stats['mdi_none']:,}, Empty: {stats['mdi_empty']:,}")
-print(f"Both paths missing: {stats['both_missing']:,} ({stats['both_missing'] / stats['total'] * 100:.1f}%)")
+print(f"Both paths missing: {stats['both_missing']:,} ({stats['both_missing'] / max(stats['total'], 1) * 100:.1f}%)")
 print(f"At least one path exists: {stats['at_least_one']:,}")
 print(f"Both paths exist: {stats['both_exist']:,}")
-
-# Remove rows where both paths are missing
-df_clean = df_clean[~both_missing].copy()
-
-df_clean = df_clean.reset_index(drop=True)
 
 
 # %% [markdown]
@@ -151,13 +141,6 @@ plt.show()
 
 
 # %%
-def get_coordinates(df, coord_type):
-    """Extract longitude or latitude coordinates"""
-    hmi_col = f"{coord_type}_hmi"
-    mdi_col = f"{coord_type}_mdi"
-    return np.deg2rad(np.where(df["path_image_cutout_hmi"] != "", df[hmi_col], df[mdi_col]))
-
-
 def plot_histogram(ax, data, degree_ticks, title, color="#4C72B0"):
     """Plot histogram with degree labels."""
     rad_ticks = np.deg2rad(degree_ticks)
@@ -169,8 +152,8 @@ def plot_histogram(ax, data, degree_ticks, title, color="#4C72B0"):
 
 
 # Get coordinates
-lonV = get_coordinates(AR_IA_df, "longitude")
-latV = get_coordinates(AR_IA_df, "latitude")
+lonV = np.deg2rad(pp_common.select_longitude_series(AR_IA_df).to_numpy(dtype=np.float64))
+latV = np.deg2rad(pp_common.select_latitude_series(AR_IA_df).to_numpy(dtype=np.float64))
 degree_ticks = np.arange(-90, 91, 15)
 
 # Plot histograms
@@ -184,10 +167,6 @@ with plt.style.context("seaborn-v0_8-darkgrid"):
 
 # %%
 results = ut_d.filter_by_location(AR_IA_df, lon_limit_deg=65)
-
-# Get coordinates for visualization
-lonV = get_coordinates(AR_IA_df, "longitude")
-latV = get_coordinates(AR_IA_df, "latitude")
 
 # Calculate y, z coordinates for plotting
 yV = np.cos(latV) * np.sin(lonV)
@@ -320,28 +299,20 @@ for comp, mapping in mappings.items():
 
 
 # %%
-def group_and_sort_classes(class_list):
-    """
-    Group classes by their initial letter and display them.
-    """
-    # Group classes by their initial letter
-    grouped_classes = defaultdict(list)
-    for cls in sorted(class_list):  # Sort the entire list alphabetically first
-        grouped_classes[cls[0]].append(cls)
-
-    # Format the output
-    for letter, classes in grouped_classes.items():
-        print(f"{letter}: {', '.join(classes)}")
-
-
 print("------ McIntosh Classes ------")
-group_and_sort_classes(list(AR_df["mcintosh_class"].unique()))
+mcintosh_classes = sorted(AR_df["mcintosh_class"].unique())
+for letter in sorted({cls[0] for cls in mcintosh_classes}):
+    classes = [cls for cls in mcintosh_classes if cls.startswith(letter)]
+    print(f"{letter}: {', '.join(classes)}")
 print(f"\nn° of classes: {len(AR_df['mcintosh_class'].unique())}")
 print("\n------ Grouped McIntosh Classes ------")
 grouped_classes = list(
     (AR_df["Z_component_grouped"] + AR_df["p_component_grouped"] + AR_df["c_component_grouped"]).unique()
 )
-group_and_sort_classes(grouped_classes)
+grouped_classes_sorted = sorted(grouped_classes)
+for letter in sorted({cls[0] for cls in grouped_classes_sorted}):
+    classes = [cls for cls in grouped_classes_sorted if cls.startswith(letter)]
+    print(f"{letter}: {', '.join(classes)}")
 print(f"\nn° of classes: {len(grouped_classes)}")
 # %% [markdown]
 # # Pixel Values
@@ -389,12 +360,8 @@ print(f"{'Max':<12} {data['mag_stats']['max']:<12.2f} {data['cont_stats']['max']
 
 
 # %%
-def process_row_wrapper(idx):
-    """Wrapper function that uses global variables for parallel processing."""
-    return process_row(idx, AR_IA_df, data_folder, dataset_folder)
-
-
-results = p_map(process_row_wrapper, range(len(AR_IA_df)))
+process_row_fn = partial(process_row, df_clean=AR_IA_df, data_folder=data_folder, dataset_folder=dataset_folder)
+results = p_map(process_row_fn, range(len(AR_IA_df)))
 
 # %%
 flat_stats = []

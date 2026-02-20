@@ -14,10 +14,37 @@ from sklearn.utils.class_weight import compute_class_weight
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
-from astropy.io import fits
-
 import arccnet.visualisation.utils as ut
 from arccnet.models import labels as lbs
+from arccnet.models import preprocessing_common as pp_common
+
+
+def set_global_seed(seed: int, deterministic: bool = True) -> None:
+    """
+    Set process-wide random seeds for reproducible experiments.
+
+    Parameters
+    ----------
+    seed : int
+        Base random seed value.
+    deterministic : bool, optional
+        If True, enable deterministic backend settings where available.
+    """
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+    if deterministic:
+        if hasattr(torch.backends, "cudnn"):
+            torch.backends.cudnn.deterministic = True
+            torch.backends.cudnn.benchmark = False
+        try:
+            torch.use_deterministic_algorithms(True, warn_only=True)
+        except Exception:
+            pass
 
 
 class FITSDataset(Dataset):
@@ -91,10 +118,15 @@ class FITSDataset(Dataset):
         self.divisor = divisor
 
     def _load_image(self, row):
-        path = "path_image_cutout_hmi" if row["path_image_cutout_hmi"] != "" else "path_image_cutout_mdi"
-        fits_file_path = os.path.join(self.data_folder, self.dataset_folder, row[path])
-        with fits.open(fits_file_path, memmap=True) as img_fits:
-            image_data = np.array(img_fits[1].data, dtype=np.float32)
+        fits_file_path = pp_common.resolve_preferred_cutout_fits_path(
+            row,
+            data_folder=self.data_folder,
+            dataset_folder=self.dataset_folder,
+        )
+        if fits_file_path is None:
+            raise FileNotFoundError(f"No valid cutout FITS path found for row index {row.name}")
+
+        image_data = pp_common.load_fits_hdu_data(fits_file_path, hdu_index=1, dtype=np.float32)
         image_data = np.nan_to_num(image_data, nan=0.0)
         image_data = ut.hardtanh_transform_npy(image_data, divisor=self.divisor, min_val=-1.0, max_val=1.0)
         image_data = ut.pad_resize_normalize(
@@ -163,7 +195,11 @@ def generate_run_id(config):
     """
     t = time.localtime()
     current_time = time.strftime("%Y%m%d-%H%M%S", t)
-    run_id = f"{current_time}_{config.model_name}_GPU{torch.cuda.get_device_name()}_{socket.gethostname()}"
+    if torch.cuda.is_available():
+        gpu_name = torch.cuda.get_device_name().replace(" ", "_")
+    else:
+        gpu_name = "CPU"
+    run_id = f"{current_time}_{config.model_name}_{gpu_name}_{socket.gethostname()}"
     script_dir = os.path.dirname(os.path.abspath(__file__))
     try:
         weights_dir = os.path.join(script_dir, "weights", f"{run_id}")
