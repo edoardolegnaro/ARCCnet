@@ -24,14 +24,14 @@ torch.set_float32_matmul_precision("medium")
 if __name__ == "__main__" and __package__ is None:
     # Add parent directory to path for direct execution
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent))
-    from arccnet.models.timeseries.config import *
+    import arccnet.models.timeseries.config as ts_config
     from arccnet.models.timeseries.data_module import FlareDataModule
     from arccnet.models.timeseries.dataset import SDOTimeseriesDataset
     from arccnet.models.timeseries.lightning_module import FlareForecasterLightning
     from arccnet.models.timeseries.manifest import build_dataset
     from arccnet.models.timeseries.splitters import get_split
 else:
-    from .config import *
+    from . import config as ts_config
     from .data_module import FlareDataModule
     from .dataset import SDOTimeseriesDataset
     from .lightning_module import FlareForecasterLightning
@@ -40,6 +40,102 @@ else:
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
+
+SEED = ts_config.SEED
+RESIZE = ts_config.RESIZE
+NUM_CHANNELS = ts_config.NUM_CHANNELS
+NUM_TIMESTEPS = ts_config.NUM_TIMESTEPS
+GPU_ID = ts_config.GPU_ID
+TASK_TYPE = ts_config.TASK_TYPE
+SPLIT_STRATEGY = ts_config.SPLIT_STRATEGY
+TRAIN_FRAC = ts_config.TRAIN_FRAC
+VAL_FRAC = ts_config.VAL_FRAC
+TRAIN_YEARS = ts_config.TRAIN_YEARS
+VAL_YEARS = ts_config.VAL_YEARS
+TEST_YEARS = ts_config.TEST_YEARS
+NUM_CLASSES = ts_config.NUM_CLASSES
+BATCH_SIZE = ts_config.BATCH_SIZE
+NUM_WORKERS = ts_config.NUM_WORKERS
+USE_AUGMENTATION = ts_config.USE_AUGMENTATION
+HFLIP_PROB = ts_config.HFLIP_PROB
+VFLIP_PROB = ts_config.VFLIP_PROB
+ROTATION_DEGREES = ts_config.ROTATION_DEGREES
+REGRESSION_TARGETS = ts_config.REGRESSION_TARGETS
+LEARNING_RATE = ts_config.LEARNING_RATE
+WEIGHT_DECAY = ts_config.WEIGHT_DECAY
+SPATIAL_FEATURE_DIM = ts_config.SPATIAL_FEATURE_DIM
+TEMPORAL_NUM_LAYERS = ts_config.TEMPORAL_NUM_LAYERS
+TEMPORAL_NUM_HEADS = ts_config.TEMPORAL_NUM_HEADS
+TEMPORAL_DIM_FEEDFORWARD = ts_config.TEMPORAL_DIM_FEEDFORWARD
+TEMPORAL_DROPOUT = ts_config.TEMPORAL_DROPOUT
+TEMPORAL_POOLING = ts_config.TEMPORAL_POOLING
+PRETRAINED_SPATIAL = ts_config.PRETRAINED_SPATIAL
+FREEZE_SPATIAL = ts_config.FREEZE_SPATIAL
+HIDDEN_DIMS = ts_config.HIDDEN_DIMS
+DROPOUT = ts_config.DROPOUT
+EARLY_STOPPING_PATIENCE = ts_config.EARLY_STOPPING_PATIENCE
+FIND_LR = ts_config.FIND_LR
+LR_FIND_MIN = ts_config.LR_FIND_MIN
+LR_FIND_MAX = ts_config.LR_FIND_MAX
+LR_FIND_NUM_STEPS = ts_config.LR_FIND_NUM_STEPS
+ACCELERATOR = ts_config.ACCELERATOR
+MAX_EPOCHS = ts_config.MAX_EPOCHS
+DEVICES = ts_config.DEVICES
+GRAD_CLIP_MAX_NORM = ts_config.GRAD_CLIP_MAX_NORM
+LOG_EVERY_N_STEPS = ts_config.LOG_EVERY_N_STEPS
+TIMESERIES_ROOT = ts_config.TIMESERIES_ROOT
+MANIFEST_PATH = ts_config.MANIFEST_PATH
+
+
+def _preflight_data_availability(manifest_df, task_type, sample_count=32):
+    """
+    Check whether referenced FITS files are physically available before training.
+
+    This catches cases where 04_final cutout files are broken symlinks to missing
+    03_processed archives and avoids multi-worker error spam during training.
+    """
+    if len(manifest_df) == 0:
+        raise RuntimeError("Manifest is empty after dataset build/load.")
+
+    probe = manifest_df.sample(min(sample_count, len(manifest_df)), random_state=SEED)
+    dataset_probe = SDOTimeseriesDataset(
+        probe.reset_index(drop=True),
+        split="test",
+        task_type=task_type,
+        resize=RESIZE,
+        augment=False,
+        norm_stats={"mean": [0.0] * NUM_CHANNELS, "std": [1.0] * NUM_CHANNELS},
+    )
+
+    checked = 0
+    missing = 0
+    for _, row in probe.iterrows():
+        paths = dataset_probe._parse_paths(row["paths"])
+        for t_paths in paths[:NUM_TIMESTEPS]:
+            for c_path in t_paths[:NUM_CHANNELS]:
+                if c_path is None or c_path == "None":
+                    continue
+                checked += 1
+                resolved = dataset_probe._resolve_existing_path(c_path)
+                if not Path(resolved).exists():
+                    missing += 1
+
+    if checked == 0:
+        raise RuntimeError("Preflight could not find any FITS paths to validate.")
+
+    missing_ratio = missing / checked
+    logger.info(f"Data preflight: checked={checked}, missing={missing}, missing_ratio={missing_ratio:.3f}")
+
+    if missing_ratio >= 0.2:
+        raise RuntimeError(
+            "Data preflight failed: too many missing FITS files.\n"
+            f"Checked {checked} paths, {missing} missing ({missing_ratio:.1%}).\n"
+            "Likely cause: broken symlinks from 04_final/data/* to missing 03_processed files.\n"
+            "If your processed archive exists elsewhere, set:\n"
+            "  export ARCAFF_TIMESERIES_PROCESSED_ROOT=/absolute/path/to/03_processed\n"
+            "or restore/create the expected path:\n"
+            "  /ARCAFF/data/timeseries/03_processed"
+        )
 
 
 def main(args):
@@ -58,12 +154,21 @@ def main(args):
     task_type = args.task_type if args.task_type else TASK_TYPE
     logger.info(f"Task type: {task_type}")
 
+    # Setup checkpoint manager early so run artifacts can default to checkpoint directory.
+    checkpoint_mgr = CheckpointManager(
+        root_name=f"timeseries/{task_type}",
+        data_folder="/ARCAFF/data",
+        model_name="resnet34_transformer",
+        loss_function="cross_entropy" if task_type == "multiclass" else "mse",
+    )
+
     # Build or load dataset manifest
     data_root = Path(args.data_root)
-    output_dir = Path(args.output_dir)
+    output_dir = Path(args.output_dir) if args.output_dir else checkpoint_mgr.checkpoint_dir
     output_dir.mkdir(parents=True, exist_ok=True)
+    logger.info(f"Run artifacts directory: {output_dir}")
 
-    manifest_path = Path(args.manifest_path) if args.manifest_path else output_dir / "manifest.parq"
+    manifest_path = Path(args.manifest_path)
 
     if manifest_path.exists():
         logger.info(f"Loading existing manifest from {manifest_path}")
@@ -73,14 +178,44 @@ def main(args):
         manifest_df = build_dataset(data_root, output_path=manifest_path)
 
     logger.info(f"Total samples: {len(manifest_df)}")
+    _preflight_data_availability(manifest_df, task_type=task_type)
 
     # Split dataset
-    train_mask, val_mask, test_mask = get_split(manifest_df, strategy="noaa", train_frac=0.65, val_frac=0.15, seed=SEED)
+    split_strategy = SPLIT_STRATEGY
+    split_kwargs = {"seed": SEED}
+    if split_strategy == "noaa":
+        split_kwargs.update({"train_frac": TRAIN_FRAC, "val_frac": VAL_FRAC})
+    elif split_strategy == "time":
+        split_kwargs.update({"train_years": TRAIN_YEARS, "val_years": VAL_YEARS, "test_years": TEST_YEARS})
+    else:
+        raise ValueError(f"Unsupported split strategy in config: {split_strategy}")
 
-    logger.info("NOAA-based split:")
+    split_data = get_split(manifest_df, strategy=split_strategy, **split_kwargs)
+    train_mask = split_data["train_mask"]
+    val_mask = split_data["val_mask"]
+    test_mask = split_data["test_mask"]
+
+    logger.info(f"{split_strategy.upper()} split:")
     logger.info(f"  Train: {train_mask.sum()} samples from {manifest_df[train_mask]['noaa_ar'].nunique()} ARs")
     logger.info(f"  Val:   {val_mask.sum()} samples from {manifest_df[val_mask]['noaa_ar'].nunique()} ARs")
     logger.info(f"  Test:  {test_mask.sum()} samples from {manifest_df[test_mask]['noaa_ar'].nunique()} ARs")
+
+    if split_strategy == "noaa":
+        train_noaa = set(manifest_df[train_mask]["noaa_ar"].unique().tolist())
+        val_noaa = set(manifest_df[val_mask]["noaa_ar"].unique().tolist())
+        test_noaa = set(manifest_df[test_mask]["noaa_ar"].unique().tolist())
+        assert train_noaa.isdisjoint(val_noaa), "Leakage detected: train/val NOAA overlap"
+        assert train_noaa.isdisjoint(test_noaa), "Leakage detected: train/test NOAA overlap"
+        assert val_noaa.isdisjoint(test_noaa), "Leakage detected: val/test NOAA overlap"
+
+    split_assignments = manifest_df[["sample_id", "noaa_ar", "date"]].copy()
+    split_assignments["split"] = "unassigned"
+    split_assignments.loc[train_mask, "split"] = "train"
+    split_assignments.loc[val_mask, "split"] = "val"
+    split_assignments.loc[test_mask, "split"] = "test"
+    split_assignments_path = output_dir / "split_assignments.parquet"
+    split_assignments.to_parquet(split_assignments_path, index=False)
+    logger.info(f"Saved split assignments to {split_assignments_path}")
 
     # Compute class weights from training data for multiclass task
     class_weights_computed = None
@@ -110,9 +245,11 @@ def main(args):
     logger.info("Computing normalization stats from training set...")
     train_dataset_temp = SDOTimeseriesDataset(
         manifest_df[train_mask].reset_index(drop=True),
-        data_root,
+        split="train",
         norm_stats=None,
         task_type=task_type,
+        resize=RESIZE,
+        augment=False,
     )
     norm_stats = train_dataset_temp.get_norm_stats()
 
@@ -133,6 +270,11 @@ def main(args):
         task_type=task_type,
         batch_size=BATCH_SIZE,
         num_workers=NUM_WORKERS,
+        resize=RESIZE,
+        use_augmentation=USE_AUGMENTATION,
+        hflip_prob=HFLIP_PROB,
+        vflip_prob=VFLIP_PROB,
+        rotation_degrees=ROTATION_DEGREES,
     )
 
     # Create Lightning model
@@ -156,23 +298,17 @@ def main(args):
         dropout=DROPOUT,
     )
 
-    # Setup checkpoint manager
-    checkpoint_mgr = CheckpointManager(
-        root_name=f"timeseries/{task_type}",
-        data_folder="/ARCAFF/data",
-        model_name="resnet34_transformer",
-        loss_function="cross_entropy" if task_type == "multiclass" else "mse",
+    # Callbacks
+    checkpoint_callback = checkpoint_mgr.get_checkpoint_callback(
+        monitor="val/primary_metric",
+        mode="max",
     )
 
-    # Callbacks
     callbacks = [
-        checkpoint_mgr.get_checkpoint_callback(
-            monitor="val/primary_metric",
-            mode="max",
-        ),
+        checkpoint_callback,
         EarlyStopping(
             monitor="val/primary_metric",
-            patience=15,
+            patience=EARLY_STOPPING_PATIENCE,
             mode="max",
             verbose=True,
         ),
@@ -200,15 +336,21 @@ def main(args):
         tb_logger = None
         logger.warning("TensorBoard not available - logging to CSV only")
 
+    trainer_accelerator = ACCELERATOR
+    if trainer_accelerator == "gpu" and not torch.cuda.is_available():
+        logger.warning("ACCELERATOR set to 'gpu' but CUDA not available; falling back to CPU")
+        trainer_accelerator = "cpu"
+
     # Create Trainer
     trainer = pl.Trainer(
         max_epochs=MAX_EPOCHS,
         callbacks=callbacks,
         logger=tb_logger,
-        accelerator="auto",
-        devices=1,  # Use single device to avoid distributed training issues
+        accelerator=trainer_accelerator,
+        devices=DEVICES,
         precision="16-mixed" if torch.cuda.is_available() else "32-true",
-        log_every_n_steps=10,
+        gradient_clip_val=GRAD_CLIP_MAX_NORM,
+        log_every_n_steps=LOG_EVERY_N_STEPS,
         deterministic=True,
     )
 
@@ -220,11 +362,17 @@ def main(args):
     logger.info("Evaluating best model on test set...")
     trainer.test(model, datamodule, ckpt_path="best")
 
+    best_checkpoint_path = checkpoint_callback.best_model_path or str(checkpoint_mgr.checkpoint_dir / "best.ckpt")
+
     # Save final results summary
     results = {
         "task_type": task_type,
+        "split_strategy": split_strategy,
+        "manifest_path": str(manifest_path),
+        "norm_stats_path": str(norm_stats_path),
+        "split_assignments_path": str(split_assignments_path),
         "checkpoint_dir": str(checkpoint_mgr.checkpoint_dir),
-        "best_checkpoint": str(checkpoint_mgr.checkpoint_dir / "best.ckpt"),
+        "best_checkpoint": str(best_checkpoint_path),
     }
 
     results_path = output_dir / "training_summary.json"
@@ -232,7 +380,7 @@ def main(args):
         json.dump(results, f, indent=2)
 
     logger.info(f"Training complete! Results saved to {results_path}")
-    logger.info(f"Best checkpoint: {checkpoint_mgr.checkpoint_dir / 'best.ckpt'}")
+    logger.info(f"Best checkpoint: {best_checkpoint_path}")
 
 
 if __name__ == "__main__":
@@ -246,14 +394,25 @@ if __name__ == "__main__":
         help="Task type (default: from config.TASK_TYPE)",
     )
     parser.add_argument(
-        "--data_root", type=str, default="/ARCAFF/data/04_final/data", help="Root directory containing sample folders"
+        "--data_root",
+        type=str,
+        default=TIMESERIES_ROOT,
+        help="Root directory containing sample folders",
     )
-    parser.add_argument("--manifest_path", type=str, default=None, help="Path to pre-built manifest file (optional)")
+    parser.add_argument(
+        "--manifest_path",
+        type=str,
+        default=MANIFEST_PATH,
+        help="Path to pre-built manifest file (built here if missing)",
+    )
     parser.add_argument(
         "--output_dir",
         type=str,
-        default="/ARCAFF/ARCCnet/outputs/timeseries",
-        help="Directory for outputs (checkpoints, logs, etc.)",
+        default=None,
+        help=(
+            "Directory for run artifacts (split assignments, norm stats, logs, summary). "
+            "Defaults to the checkpoint run folder under /ARCAFF/data/checkpoints/timeseries."
+        ),
     )
 
     args = parser.parse_args()

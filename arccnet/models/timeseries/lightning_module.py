@@ -6,14 +6,15 @@ import torch
 import torch.nn as nn
 from sklearn.metrics import (
     accuracy_score,
+    average_precision_score,
     balanced_accuracy_score,
     confusion_matrix,
     mean_absolute_error,
     mean_squared_error,
     r2_score,
+    roc_auc_score,
 )
 
-from .config import *
 from .flare_forecaster import FlareForecaster
 
 
@@ -74,15 +75,18 @@ class FlareForecasterLightning(pl.LightningModule):
         self.validation_step_outputs = []
         self.test_step_outputs = []
 
-    def forward(self, x):
+    def forward(self, x, mask=None):
         """Forward pass."""
-        return self.model(x)
+        return self.model(x, mask=mask)
 
     def training_step(self, batch, batch_idx):
         """Training step."""
         x = batch["x"]
         y = batch["y"]
-        output = self(x)
+        mask = batch.get("mask")
+        if mask is not None:
+            mask = mask.to(x.device)
+        output = self(x, mask=mask)
         loss = self.criterion(output, y)
 
         # Log training loss
@@ -95,7 +99,10 @@ class FlareForecasterLightning(pl.LightningModule):
         """Validation step."""
         x = batch["x"]
         y = batch["y"]
-        output = self(x)
+        mask = batch.get("mask")
+        if mask is not None:
+            mask = mask.to(x.device)
+        output = self(x, mask=mask)
         loss = self.criterion(output, y)
 
         # Store predictions for metric computation
@@ -105,6 +112,9 @@ class FlareForecasterLightning(pl.LightningModule):
 
     def on_validation_epoch_end(self):
         """Compute validation metrics at the end of epoch."""
+        if not self.validation_step_outputs:
+            return
+
         # Aggregate outputs
         avg_loss = torch.stack([x["loss"] for x in self.validation_step_outputs]).mean()
         all_preds = torch.cat([x["preds"] for x in self.validation_step_outputs])
@@ -117,7 +127,7 @@ class FlareForecasterLightning(pl.LightningModule):
         # Compute task-specific metrics
         if self.task_type == "multiclass":
             metrics = self._compute_multiclass_metrics(all_targets, all_preds)
-            primary_metric = metrics["balanced_accuracy"]
+            primary_metric = metrics.get("m_plus_tss", metrics["balanced_accuracy"])
         else:  # regression
             metrics = self._compute_regression_metrics(all_targets, all_preds)
             primary_metric = -metrics["rmse"]  # negative RMSE for maximization
@@ -137,7 +147,10 @@ class FlareForecasterLightning(pl.LightningModule):
         """Test step."""
         x = batch["x"]
         y = batch["y"]
-        output = self(x)
+        mask = batch.get("mask")
+        if mask is not None:
+            mask = mask.to(x.device)
+        output = self(x, mask=mask)
         loss = self.criterion(output, y)
 
         # Store predictions for metric computation
@@ -147,6 +160,9 @@ class FlareForecasterLightning(pl.LightningModule):
 
     def on_test_epoch_end(self):
         """Compute test metrics at the end of testing."""
+        if not self.test_step_outputs:
+            return
+
         # Aggregate outputs
         avg_loss = torch.stack([x["loss"] for x in self.test_step_outputs]).mean()
         all_preds = torch.cat([x["preds"] for x in self.test_step_outputs])
@@ -192,10 +208,12 @@ class FlareForecasterLightning(pl.LightningModule):
 
     def _compute_multiclass_metrics(self, y_true, y_pred):
         """Compute metrics for multiclass classification."""
-        y_pred_class = np.argmax(y_pred, axis=1)
+        y_true = np.asarray(y_true, dtype=np.int64)
+        logits = np.asarray(y_pred, dtype=np.float32)
+        probs = torch.softmax(torch.from_numpy(logits), dim=1).numpy()
+        y_pred_class = np.argmax(probs, axis=1)
 
         # Get unique classes present in data
-        unique_classes = np.unique(np.concatenate([y_true, y_pred_class]))
         all_classes = [0, 1, 2]
 
         acc = accuracy_score(y_true, y_pred_class)
@@ -205,12 +223,66 @@ class FlareForecasterLightning(pl.LightningModule):
         # Per-class accuracy
         per_class_acc = cm.diagonal() / cm.sum(axis=1).clip(min=1)
 
-        return {
+        metrics = {
             "accuracy": float(acc),
             "balanced_accuracy": float(bal_acc),
             "class_0_acc": float(per_class_acc[0]) if len(per_class_acc) > 0 else 0.0,
             "class_1_acc": float(per_class_acc[1]) if len(per_class_acc) > 1 else 0.0,
             "class_2_acc": float(per_class_acc[2]) if len(per_class_acc) > 2 else 0.0,
+        }
+
+        m_plus_true = (y_true >= 1).astype(int)
+        m_plus_score = probs[:, 1] + probs[:, 2]
+        x_plus_true = (y_true == 2).astype(int)
+        x_plus_score = probs[:, 2]
+
+        for prefix, y_bin, y_score in [
+            ("m_plus", m_plus_true, m_plus_score),
+            ("x_plus", x_plus_true, x_plus_score),
+        ]:
+            skill = self._compute_binary_skill(y_bin, y_score, threshold=0.5)
+            metrics[f"{prefix}_tss"] = skill["tss"]
+            metrics[f"{prefix}_hss"] = skill["hss"]
+            metrics[f"{prefix}_tpr"] = skill["tpr"]
+            metrics[f"{prefix}_fpr"] = skill["fpr"]
+            metrics[f"{prefix}_pr_auc"] = skill["pr_auc"] if skill["pr_auc"] is not None else 0.0
+            metrics[f"{prefix}_roc_auc"] = skill["roc_auc"] if skill["roc_auc"] is not None else 0.0
+
+        return metrics
+
+    @staticmethod
+    def _compute_binary_skill(y_true, y_score, threshold=0.5):
+        """Compute operational binary skill metrics from score outputs."""
+        y_true = np.asarray(y_true).astype(int)
+        y_pred = (np.asarray(y_score) >= threshold).astype(int)
+
+        tp = int(((y_true == 1) & (y_pred == 1)).sum())
+        tn = int(((y_true == 0) & (y_pred == 0)).sum())
+        fp = int(((y_true == 0) & (y_pred == 1)).sum())
+        fn = int(((y_true == 1) & (y_pred == 0)).sum())
+
+        tpr = tp / (tp + fn + 1e-8)
+        fpr = fp / (fp + tn + 1e-8)
+        tss = tpr - fpr
+
+        hss_num = 2.0 * (tp * tn - fp * fn)
+        hss_den = ((tp + fn) * (fn + tn)) + ((tp + fp) * (fp + tn)) + 1e-8
+        hss = hss_num / hss_den
+
+        if len(np.unique(y_true)) > 1:
+            roc_auc = float(roc_auc_score(y_true, y_score))
+            pr_auc = float(average_precision_score(y_true, y_score))
+        else:
+            roc_auc = None
+            pr_auc = None
+
+        return {
+            "tss": float(tss),
+            "hss": float(hss),
+            "tpr": float(tpr),
+            "fpr": float(fpr),
+            "roc_auc": roc_auc,
+            "pr_auc": pr_auc,
         }
 
     def _compute_regression_metrics(self, y_true, y_pred):
@@ -229,7 +301,7 @@ class FlareForecasterLightning(pl.LightningModule):
             try:
                 r2 = r2_score(y_true[:, i], y_pred[:, i])
                 r2_scores.append(float(r2))
-            except:
+            except Exception:
                 r2_scores.append(0.0)
 
         return {

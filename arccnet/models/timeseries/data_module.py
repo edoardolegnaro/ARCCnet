@@ -3,7 +3,16 @@
 import pytorch_lightning as pl
 from torch.utils.data import DataLoader
 
-from .config import *
+from .config import (
+    HFLIP_PROB,
+    NUM_WORKERS,
+    PERSISTENT_WORKERS,
+    PIN_MEMORY,
+    RESIZE,
+    ROTATION_DEGREES,
+    USE_AUGMENTATION,
+    VFLIP_PROB,
+)
 from .dataset import SDOTimeseriesDataset
 
 
@@ -20,7 +29,12 @@ class FlareDataModule(pl.LightningDataModule):
         norm_stats=None,
         task_type="multiclass",
         batch_size=32,
-        num_workers=4,
+        num_workers=NUM_WORKERS,
+        resize=RESIZE,
+        use_augmentation=USE_AUGMENTATION,
+        hflip_prob=HFLIP_PROB,
+        vflip_prob=VFLIP_PROB,
+        rotation_degrees=ROTATION_DEGREES,
     ):
         """
         Initialize the data module.
@@ -56,6 +70,11 @@ class FlareDataModule(pl.LightningDataModule):
         self.task_type = task_type
         self.batch_size = batch_size
         self.num_workers = num_workers
+        self.resize = resize
+        self.use_augmentation = use_augmentation
+        self.hflip_prob = hflip_prob
+        self.vflip_prob = vflip_prob
+        self.rotation_degrees = rotation_degrees
 
         self.train_dataset = None
         self.val_dataset = None
@@ -63,26 +82,55 @@ class FlareDataModule(pl.LightningDataModule):
 
     def setup(self, stage=None):
         """Setup datasets for each stage."""
-        # Create datasets
+        train_df = self.manifest_df[self.train_mask].reset_index(drop=True)
+        val_df = self.manifest_df[self.val_mask].reset_index(drop=True)
+        test_df = self.manifest_df[self.test_mask].reset_index(drop=True)
+
+        if self.norm_stats is None:
+            temp_train = SDOTimeseriesDataset(
+                train_df,
+                split="train",
+                task_type=self.task_type,
+                resize=self.resize,
+                augment=False,
+                norm_stats=None,
+            )
+            self.norm_stats = temp_train.get_norm_stats()
+
         self.train_dataset = SDOTimeseriesDataset(
-            self.manifest_df[self.train_mask].reset_index(drop=True),
-            self.data_dir,
-            norm_stats=self.norm_stats,
+            train_df,
+            split="train",
             task_type=self.task_type,
+            resize=self.resize,
+            augment=self.use_augmentation,
+            norm_stats=self.norm_stats,
+            hflip_prob=self.hflip_prob,
+            vflip_prob=self.vflip_prob,
+            rotation_degrees=self.rotation_degrees,
         )
 
         self.val_dataset = SDOTimeseriesDataset(
-            self.manifest_df[self.val_mask].reset_index(drop=True),
-            self.data_dir,
-            norm_stats=self.norm_stats,
+            val_df,
+            split="val",
             task_type=self.task_type,
+            resize=self.resize,
+            augment=False,
+            norm_stats=self.norm_stats,
+            hflip_prob=self.hflip_prob,
+            vflip_prob=self.vflip_prob,
+            rotation_degrees=self.rotation_degrees,
         )
 
         self.test_dataset = SDOTimeseriesDataset(
-            self.manifest_df[self.test_mask].reset_index(drop=True),
-            self.data_dir,
-            norm_stats=self.norm_stats,
+            test_df,
+            split="test",
             task_type=self.task_type,
+            resize=self.resize,
+            augment=False,
+            norm_stats=self.norm_stats,
+            hflip_prob=self.hflip_prob,
+            vflip_prob=self.vflip_prob,
+            rotation_degrees=self.rotation_degrees,
         )
 
     def train_dataloader(self):
@@ -92,7 +140,8 @@ class FlareDataModule(pl.LightningDataModule):
             batch_size=self.batch_size,
             shuffle=True,
             num_workers=self.num_workers,
-            pin_memory=True,
+            pin_memory=PIN_MEMORY,
+            persistent_workers=PERSISTENT_WORKERS if self.num_workers > 0 else False,
         )
 
     def val_dataloader(self):
@@ -102,7 +151,8 @@ class FlareDataModule(pl.LightningDataModule):
             batch_size=self.batch_size,
             shuffle=False,
             num_workers=self.num_workers,
-            pin_memory=True,
+            pin_memory=PIN_MEMORY,
+            persistent_workers=PERSISTENT_WORKERS if self.num_workers > 0 else False,
         )
 
     def test_dataloader(self):
@@ -112,5 +162,6 @@ class FlareDataModule(pl.LightningDataModule):
             batch_size=self.batch_size,
             shuffle=False,
             num_workers=self.num_workers,
-            pin_memory=True,
+            pin_memory=PIN_MEMORY,
+            persistent_workers=PERSISTENT_WORKERS if self.num_workers > 0 else False,
         )

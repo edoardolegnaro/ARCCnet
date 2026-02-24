@@ -1,3 +1,8 @@
+import os
+import ast
+import json
+from pathlib import Path
+
 import numpy as np
 import torch
 import torchvision.transforms.functional as TF
@@ -5,7 +10,7 @@ from torch.utils.data import Dataset
 
 from astropy.io import fits
 
-from .config import TASK_TYPE
+from .config import NUM_CHANNELS, NUM_TIMESTEPS, TASK_TYPE
 
 
 class SDOTimeseriesDataset(Dataset):
@@ -45,9 +50,13 @@ class SDOTimeseriesDataset(Dataset):
         self.task_type = task_type or TASK_TYPE
         self.resize = resize
         self.augment = augment and (split == "train")
+        self.expected_timesteps = NUM_TIMESTEPS
         self.hflip_prob = hflip_prob
         self.vflip_prob = vflip_prob
         self.rotation_degrees = rotation_degrees
+        self.processed_roots = self._discover_processed_roots()
+        self._missing_file_log_limit = 25
+        self._missing_file_log_count = 0
 
         if norm_stats is None:
             print(f"Computing normalization stats for {split} split...")
@@ -61,12 +70,16 @@ class SDOTimeseriesDataset(Dataset):
     def __getitem__(self, idx):
         row = self.manifest.iloc[idx]
 
-        paths = eval(row["paths"]) if isinstance(row["paths"], str) else row["paths"]
+        paths = self._parse_paths(row["paths"])
 
         timesteps = []
-        for t_paths in paths:
+        timestep_mask = []
+        for t_paths in paths[: self.expected_timesteps]:
+            if isinstance(t_paths, np.ndarray):
+                t_paths = t_paths.tolist()
             channels = []
-            for c_path in t_paths:
+            has_valid_channel = False
+            for c_path in t_paths[:NUM_CHANNELS]:
                 if c_path is None or c_path == "None":
                     if self.resize:
                         channels.append(np.zeros((self.resize[0], self.resize[1]), dtype=np.float32))
@@ -75,10 +88,26 @@ class SDOTimeseriesDataset(Dataset):
                 else:
                     img = self._load_fits(c_path)
                     channels.append(img)
+                    has_valid_channel = True
+            while len(channels) < NUM_CHANNELS:
+                if self.resize:
+                    channels.append(np.zeros((self.resize[0], self.resize[1]), dtype=np.float32))
+                else:
+                    channels.append(np.zeros((400, 800), dtype=np.float32))
             timesteps.append(np.stack(channels, axis=0))
+            timestep_mask.append(bool(has_valid_channel))
+
+        while len(timesteps) < self.expected_timesteps:
+            if self.resize:
+                blank = np.zeros((NUM_CHANNELS, self.resize[0], self.resize[1]), dtype=np.float32)
+            else:
+                blank = np.zeros((NUM_CHANNELS, 400, 800), dtype=np.float32)
+            timesteps.append(blank)
+            timestep_mask.append(False)
 
         x = np.stack(timesteps, axis=0)  # (T, C, H, W)
         x = torch.from_numpy(x).float()
+        mask = torch.tensor(timestep_mask, dtype=torch.bool)
 
         x = self._normalize(x)
 
@@ -105,13 +134,135 @@ class SDOTimeseriesDataset(Dataset):
             "ca": row["ca"],
         }
 
-        return {"x": x, "y": y, "meta": meta}
+        return {"x": x, "y": y, "mask": mask, "meta": meta}
+
+    def _parse_paths(self, raw_paths):
+        """Safely parse serialized path grids from manifest."""
+        if isinstance(raw_paths, str):
+            try:
+                parsed = json.loads(raw_paths)
+            except json.JSONDecodeError:
+                parsed = ast.literal_eval(raw_paths)
+        else:
+            parsed = raw_paths
+
+        if isinstance(parsed, np.ndarray):
+            parsed = parsed.tolist()
+
+        normalized = []
+        for t_paths in parsed:
+            if isinstance(t_paths, np.ndarray):
+                t_paths = t_paths.tolist()
+            normalized.append(list(t_paths))
+        return normalized
+
+    def _discover_processed_roots(self):
+        """
+        Find candidate 03_processed roots to repair broken symlink targets.
+
+        This handles datasets where cutout symlinks point to ../../../../03_processed/*
+        but the actual processed tree lives under a nested folder, e.g.
+        /ARCAFF/data/timeseries/arcnet-timeseries-*/03_processed.
+        """
+        roots = []
+        if self.manifest.empty or "sample_path" not in self.manifest.columns:
+            return roots
+
+        sample_path = Path(str(self.manifest.iloc[0]["sample_path"]))
+        timeseries_root = None
+        for parent in sample_path.parents:
+            if parent.name == "timeseries":
+                timeseries_root = parent
+                break
+
+        if timeseries_root is None:
+            timeseries_root = sample_path
+
+        direct = timeseries_root / "03_processed"
+        if direct.exists():
+            roots.append(direct)
+
+        for candidate in sorted(timeseries_root.glob("*/03_processed")):
+            if candidate.exists():
+                roots.append(candidate)
+
+        # Optional explicit override(s), colon-separated.
+        env_roots = os.getenv("ARCAFF_TIMESERIES_PROCESSED_ROOT", "")
+        for token in env_roots.split(":"):
+            token = token.strip()
+            if not token:
+                continue
+            candidate = Path(token)
+            if candidate.exists():
+                roots.append(candidate)
+
+        # Broader fallback search under /ARCAFF/data for relocated processed archives.
+        data_root = Path("/ARCAFF/data")
+        if data_root.exists():
+            for pattern in ("*/03_processed", "*/*/03_processed"):
+                for candidate in sorted(data_root.glob(pattern)):
+                    if candidate.exists():
+                        roots.append(candidate)
+
+        # De-duplicate while preserving order.
+        dedup = []
+        seen = set()
+        for root in roots:
+            root_str = str(root)
+            if root_str not in seen:
+                dedup.append(root)
+                seen.add(root_str)
+        return dedup
+
+    def _resolve_existing_path(self, path):
+        """
+        Resolve potentially broken symlink paths into existing files.
+        """
+        p = Path(str(path))
+        if p.exists():
+            return p
+
+        # For broken symlinks, inspect target path and try alternate 03_processed roots.
+        if p.is_symlink():
+            try:
+                link_target = p.readlink()
+                candidate = (p.parent / link_target).resolve(strict=False)
+                if candidate.exists():
+                    return candidate
+                repaired = self._repair_processed_root(candidate)
+                if repaired is not None:
+                    return repaired
+            except Exception:
+                pass
+
+        # Non-symlink path fallback.
+        repaired = self._repair_processed_root(p)
+        if repaired is not None:
+            return repaired
+
+        return p
+
+    def _repair_processed_root(self, candidate):
+        """Repair paths containing /03_processed/ by redirecting to discovered roots."""
+        candidate_str = str(candidate)
+        token = f"{Path('/').as_posix()}03_processed{Path('/').as_posix()}"
+        if token not in candidate_str:
+            return None
+
+        suffix = candidate_str.split(token, 1)[1]
+        for processed_root in self.processed_roots:
+            repaired = processed_root / suffix
+            if repaired.exists():
+                return repaired
+        return None
 
     def _load_fits(self, path):
         """Load FITS file and return 2D array."""
+        resolved_path = self._resolve_existing_path(path)
         try:
-            with fits.open(path) as hdul:
-                data = hdul[1].data.astype(np.float32)
+            with fits.open(resolved_path) as hdul:
+                hdu_index = 1 if len(hdul) > 1 and hdul[1].data is not None else 0
+                data = hdul[hdu_index].data.astype(np.float32)
                 data = np.nan_to_num(data, nan=0.0, posinf=0.0, neginf=0.0)
 
                 if self.resize:
@@ -121,16 +272,22 @@ class SDOTimeseriesDataset(Dataset):
 
                 return data
         except Exception as e:
-            print(f"Error loading {path}: {e}")
+            if self._missing_file_log_count < self._missing_file_log_limit:
+                print(f"Error loading {path} (resolved: {resolved_path}): {e}")
+                self._missing_file_log_count += 1
+                if self._missing_file_log_count == self._missing_file_log_limit:
+                    print("Further FITS load errors suppressed for this dataset instance.")
             if self.resize:
                 return np.zeros((self.resize[0], self.resize[1]), dtype=np.float32)
             return np.zeros((400, 800), dtype=np.float32)
 
     def _compute_norm_stats(self, max_samples=50):
         """Compute per-channel mean and std from subset of data."""
-        num_channels = 10
+        num_channels = NUM_CHANNELS
         channel_means = []
         channel_stds = []
+        clip_lows = []
+        clip_highs = []
 
         sample_indices = np.random.choice(len(self), min(max_samples, len(self)), replace=False)
 
@@ -138,10 +295,10 @@ class SDOTimeseriesDataset(Dataset):
             values = []
             for idx in sample_indices:
                 row = self.manifest.iloc[idx]
-                paths = eval(row["paths"]) if isinstance(row["paths"], str) else row["paths"]
+                paths = self._parse_paths(row["paths"])
 
                 for t_paths in paths[:2]:  # Sample first 2 timesteps
-                    if t_paths[c] and t_paths[c] != "None":
+                    if c < len(t_paths) and t_paths[c] and t_paths[c] != "None":
                         img = self._load_fits(t_paths[c])
                         values.append(img.flatten())
 
@@ -151,13 +308,23 @@ class SDOTimeseriesDataset(Dataset):
                 clipped = np.clip(all_values, p1, p99)
                 channel_means.append(float(np.mean(clipped)))
                 channel_stds.append(float(np.std(clipped)) + 1e-6)
+                if c == 9:
+                    # Preserve signed magnetic structure from HMI with symmetric clip.
+                    abs_clip = float(max(abs(p1), abs(p99)))
+                    p1, p99 = -abs_clip, abs_clip
+                clip_lows.append(float(p1))
+                clip_highs.append(float(p99))
             else:
                 channel_means.append(0.0)
                 channel_stds.append(1.0)
+                clip_lows.append(-1.0)
+                clip_highs.append(1.0)
 
         stats = {
             "mean": channel_means,
             "std": channel_stds,
+            "clip_low": clip_lows,
+            "clip_high": clip_highs,
         }
         print(f"Normalization stats computed: {len(channel_means)} channels")
         return stats
@@ -168,9 +335,11 @@ class SDOTimeseriesDataset(Dataset):
         for c in range(C):
             mean = self.norm_stats["mean"][c]
             std = self.norm_stats["std"][c]
+            clip_low = self.norm_stats.get("clip_low", [None] * C)[c]
+            clip_high = self.norm_stats.get("clip_high", [None] * C)[c]
 
-            p1, p99 = torch.quantile(x[:, c].flatten(), torch.tensor([0.01, 0.99]))
-            x[:, c] = torch.clamp(x[:, c], p1, p99)
+            if clip_low is not None and clip_high is not None:
+                x[:, c] = torch.clamp(x[:, c], clip_low, clip_high)
             x[:, c] = (x[:, c] - mean) / std
 
         return x

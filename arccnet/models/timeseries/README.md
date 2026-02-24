@@ -9,15 +9,14 @@ This module implements a spatiotemporal deep learning approach for predicting so
 **Architecture:**
 1. **Spatial Encoder** (ResNet34-based CNN) - Extracts features from each timestep independently
 2. **Temporal Transformer** - Processes the sequence of spatial features with multi-head self-attention
-3. **Classification Head** - Multi-label predictions for C+, M+, and X+ class flares
+3. **Prediction Head** - Supports multiclass max-flare prediction (C/M/X) or regression of log flare counts
 
 **Dataset:**
 - Input: 6 timesteps (hourly cadence) × 10 channels (9 AIA wavelengths + 1 HMI magnetogram)
 - Spatial resolution: 400×800 pixels (resized to 256×512 for training)
-- Labels: Multi-label binary classification [C+, M+, X+]
-  - C+: C-class or higher flare within 24h
-  - M+: M-class or higher flare within 24h
-  - X+: X-class flare within 24h
+- Labels:
+  - Multiclass: highest flare class in next 24h (`0=C`, `1=M`, `2=X`)
+  - Regression: `[log10(Ca+1), log10(Ma+1), log10(Xa+1)]`
 
 ## Directory Structure
 
@@ -65,11 +64,11 @@ python -m arccnet.models.timeseries.train \
 ```
 
 Training outputs:
-- `checkpoints/best.pt` - Best model checkpoint (highest validation TSS)
-- `checkpoints/latest.pt` - Latest checkpoint
+- `.../best-epoch-metric.ckpt` - Best Lightning checkpoint (highest validation primary metric)
+- `.../last.ckpt` - Latest checkpoint
 - `norm_stats.json` - Normalization statistics
 - `tensorboard/` - TensorBoard logs
-- `results.json` - Final test results
+- `training_summary.json` - Final training summary
 
 ### 3. Evaluate Model
 
@@ -77,8 +76,9 @@ Evaluate on test set:
 
 ```bash
 python -m arccnet.models.timeseries.evaluate \
-    --checkpoint_path /ARCAFF/ARCCnet/outputs/timeseries/run_001/checkpoints/best.pt \
+    --checkpoint_path /ARCAFF/data/checkpoints/timeseries/multiclass/<run>/best-*.ckpt \
     --manifest_path /ARCAFF/ARCCnet/outputs/timeseries/manifest.parq \
+    --split_assignments_path /ARCAFF/ARCCnet/outputs/timeseries/run_001/split_assignments.parquet \
     --split test \
     --output_dir /ARCAFF/ARCCnet/outputs/timeseries/eval \
     --save_predictions
@@ -163,7 +163,9 @@ The CSV is organized with all wavelengths for timestep 0, then all wavelengths f
 
 - **Input**: 512-dimensional temporal feature
 - **Hidden**: [256] with ReLU and 0.3 dropout
-- **Output**: 3 logits for C+, M+, X+ predictions (BCEWithLogitsLoss)
+- **Output**:
+  - Multiclass: 3 logits for C/M/X classes (CrossEntropyLoss)
+  - Regression: 3 values for log flare-count targets (MSELoss)
 
 ## Configuration
 
@@ -201,13 +203,14 @@ Two splitting strategies are available to prevent data leakage:
 ### 1. NOAA-based (Recommended)
 Groups samples by NOAA Active Region number to ensure the same AR never appears in multiple splits:
 ```python
-splits = get_split(manifest, strategy='noaa', train_frac=0.7, val_frac=0.15, seed=42)
+split_data = get_split(manifest, strategy='noaa', train_frac=0.7, val_frac=0.15, seed=42)
+train_df = split_data['train_df']
 ```
 
 ### 2. Time-based
 Splits by year for temporal validation (simulates operational deployment):
 ```python
-splits = get_split(
+split_data = get_split(
     manifest,
     strategy='time',
     train_years=[2011, 2017, 2018, 2019, 2020],
@@ -254,20 +257,20 @@ Metrics are computed per class (C+, M+, X+) and aggregated.
 
 ```python
 from arccnet.models.timeseries import (
-    build_manifest,
+    build_dataset,
     get_split,
     SDOTimeseriesDataset,
     FlareForecaster,
 )
 
 # Build manifest
-manifest = build_manifest('/path/to/data')
+manifest = build_dataset('/path/to/data')
 
 # Split data
-splits = get_split(manifest, strategy='noaa')
+split_data = get_split(manifest, strategy='noaa')
 
 # Create dataset
-dataset = SDOTimeseriesDataset(splits['train'], augment=True)
+dataset = SDOTimeseriesDataset(split_data['train_df'], split='train', augment=True)
 
 # Create model
 model = FlareForecaster(

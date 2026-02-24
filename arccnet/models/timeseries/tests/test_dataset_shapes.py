@@ -55,13 +55,18 @@ def test_dataset_shapes():
     assert len(dataset_multiclass) == 1, f"Length mismatch: {len(dataset_multiclass)}"
 
     sample = dataset_multiclass[0]
-    assert "x" in sample and "y" in sample and "meta" in sample
+    assert "x" in sample
+    assert "y" in sample
+    assert "mask" in sample
+    assert "meta" in sample
 
     x = sample["x"]
     y = sample["y"]
+    mask = sample["mask"]
 
-    print(f"  Multiclass - x: {x.shape}, y: {y.shape} (scalar class label)")
+    print(f"  Multiclass - x: {x.shape}, mask: {mask.shape}, y: {y.shape} (scalar class label)")
     assert x.shape == (6, 10, 256, 512), f"x shape mismatch: {x.shape}"
+    assert mask.shape == (6,), f"mask shape mismatch: {mask.shape}"
     assert y.shape == (), f"y should be scalar for multiclass, got {y.shape}"
 
     # Test regression dataset

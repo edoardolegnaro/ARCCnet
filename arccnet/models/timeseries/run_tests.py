@@ -15,7 +15,7 @@ print("TIMESERIES PIPELINE TEST SUITE")
 print("=" * 60)
 
 # Test 1: Dataset building
-print("\n[1/3] Testing dataset building...")
+print("\n[1/5] Testing dataset building...")
 try:
     from arccnet.models.timeseries.tests.test_dataset_build import (
         test_build_dataset_smoke,
@@ -30,7 +30,7 @@ except Exception as e:
     sys.exit(1)
 
 # Test 2: Dataset shapes
-print("\n[2/3] Testing dataset shapes...")
+print("\n[2/5] Testing dataset shapes...")
 try:
     from arccnet.models.timeseries.tests.test_dataset_shapes import test_dataset_shapes
 
@@ -40,8 +40,34 @@ except Exception as e:
     print(f"❌ Dataset shape tests failed: {e}")
     sys.exit(1)
 
-# Test 3: Model forward pass
-print("\n[3/3] Testing model forward pass...")
+# Test 3: Splitters + DataModule integration
+print("\n[3/5] Testing splitters/datamodule integration...")
+try:
+    from arccnet.models.timeseries.tests.test_splitters_datamodule import (
+        test_datamodule_dataset_wiring,
+        test_splitter_contract,
+    )
+
+    test_splitter_contract()
+    test_datamodule_dataset_wiring()
+    print("✅ Splitters/DataModule tests passed!")
+except Exception as e:
+    print(f"❌ Splitters/DataModule tests failed: {e}")
+    sys.exit(1)
+
+# Test 4: Evaluation metrics
+print("\n[4/5] Testing evaluation metrics...")
+try:
+    from arccnet.models.timeseries.tests.test_evaluate_metrics import test_multiclass_metric_contract
+
+    test_multiclass_metric_contract()
+    print("✅ Evaluation metric tests passed!")
+except Exception as e:
+    print(f"❌ Evaluation metric tests failed: {e}")
+    sys.exit(1)
+
+# Test 5: Model forward pass
+print("\n[5/5] Testing model forward pass...")
 try:
     from arccnet.models.timeseries.tests.test_model_forward import (
         test_flare_forecaster_forward,

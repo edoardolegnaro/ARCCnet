@@ -86,7 +86,7 @@ LR_FIND_MAX = 1.0
 LR_FIND_NUM_STEPS = 100
 
 DATA_FOLDER = os.getenv("ARCAFF_DATA_FOLDER", "/ARCAFF/data")
-TIMESERIES_ROOT = os.path.join(DATA_FOLDER, "04_final", "data")
+TIMESERIES_ROOT = os.path.join(DATA_FOLDER, "timeseries", "04_final", "data")
 MANIFEST_PATH = os.path.join(DATA_FOLDER, "timeseries_manifest.parquet")
 
 PROJECT_NAME = "arcaff-timeseries-flare-forecasting"

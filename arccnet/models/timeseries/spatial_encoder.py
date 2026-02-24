@@ -1,5 +1,7 @@
 """Spatial encoder for timeseries images using CNN backbone."""
 
+import warnings
+
 import torch
 import torch.nn as nn
 from torchvision.models import ResNet34_Weights, resnet34
@@ -36,8 +38,14 @@ class SpatialEncoder(nn.Module):
 
         # Load pretrained ResNet34
         if pretrained:
-            weights = ResNet34_Weights.IMAGENET1K_V1
-            backbone = resnet34(weights=weights)
+            try:
+                weights = ResNet34_Weights.IMAGENET1K_V1
+                backbone = resnet34(weights=weights)
+            except Exception as exc:
+                warnings.warn(
+                    f"Could not load pretrained ResNet34 weights ({exc}). Falling back to random initialization."
+                )
+                backbone = resnet34(weights=None)
         else:
             backbone = resnet34(weights=None)
 

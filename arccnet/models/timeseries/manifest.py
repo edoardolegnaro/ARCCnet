@@ -5,6 +5,8 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
+REQUIRED_TIMESTEPS = 6
+
 
 def parse_sample_dirname(dirname):
     """
@@ -78,6 +80,12 @@ def build_sample_record(sample_dir):
     if timestep_count == 0:
         print(f"Warning: No valid timesteps for {sample_id}")
         return None
+    if timestep_count < REQUIRED_TIMESTEPS:
+        print(
+            f"Warning: Incomplete sample {sample_id} has {timestep_count} timesteps (<{REQUIRED_TIMESTEPS}), skipping"
+        )
+        return None
+    timestep_count = REQUIRED_TIMESTEPS
 
     for t in range(timestep_count):
         timestep_paths = []
@@ -101,14 +109,17 @@ def build_sample_record(sample_dir):
     mplus = int(metadata["ma"] > 0 or metadata["xa"] > 0)
     xplus = int(metadata["xa"] > 0)
 
-    # Multiclass label: Highest flare class in 24h window
-    # 0 = C-class only, 1 = M-class (or higher), 2 = X-class
+    # Multiclass label: Highest flare class in 24h window.
+    # If no C/M/X event exists, sample is skipped (current model uses 3 classes C/M/X).
+    if (metadata["ca"] + metadata["ma"] + metadata["xa"]) == 0:
+        print(f"Warning: No post-window flares found for {sample_id}; skipping for 3-class setup")
+        return None
     if metadata["xa"] > 0:
         flare_class = 2  # X-class
     elif metadata["ma"] > 0:
         flare_class = 1  # M-class
     else:
-        flare_class = 0  # C-class (all samples have at least C)
+        flare_class = 0  # C-class only
 
     # Regression targets: log10 of flare counts (with smoothing)
     # Adding 1 to avoid log(0), then taking log10
@@ -197,6 +208,11 @@ def build_dataset(root_dir, output_path=None, max_samples=None):
         print(f"\nDataset manifest saved to: {output_path}")
 
     return df
+
+
+def build_manifest(root_dir, output_path=None, max_samples=None):
+    """Backward-compatible alias for build_dataset."""
+    return build_dataset(root_dir=root_dir, output_path=output_path, max_samples=max_samples)
 
 
 if __name__ == "__main__":

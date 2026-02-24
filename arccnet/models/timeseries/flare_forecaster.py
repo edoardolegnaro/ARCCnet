@@ -129,13 +129,13 @@ class FlareForecaster(nn.Module):
 
         # Encode each timestep independently
         # Reshape to (B*T, C, H, W)
-        x_flat = x.view(B * T, C, H, W)
+        x_flat = x.reshape(B * T, C, H, W)
 
         # Extract spatial features
         spatial_features = self.spatial_encoder(x_flat)  # (B*T, feature_dim)
 
         # Reshape back to (B, T, feature_dim)
-        spatial_features = spatial_features.view(B, T, self.spatial_feature_dim)
+        spatial_features = spatial_features.reshape(B, T, self.spatial_feature_dim)
 
         # Process temporal sequence
         temporal_features = self.temporal_transformer(spatial_features, mask=mask)  # (B, feature_dim)
@@ -180,7 +180,7 @@ def test_flare_forecaster():
         temporal_num_layers=4,
         temporal_num_heads=8,
         temporal_pooling="mean",
-        num_classes=3,
+        output_dim=3,
         pretrained_spatial=True,
         hidden_dims=[256],
     )
@@ -208,7 +208,8 @@ def test_flare_forecaster():
 
     assert logits.shape == (batch_size, 3), f"Logits shape mismatch: {logits.shape}"
     assert probs.shape == (batch_size, 3), f"Probs shape mismatch: {probs.shape}"
-    assert (probs >= 0).all() and (probs <= 1).all(), "Probabilities out of range"
+    assert (probs >= 0).all(), "Probabilities below 0"
+    assert (probs <= 1).all(), "Probabilities above 1"
 
     # Test with mask
     mask = torch.ones(batch_size, timesteps, dtype=torch.bool)
