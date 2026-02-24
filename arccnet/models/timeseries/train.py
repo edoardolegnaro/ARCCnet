@@ -87,6 +87,49 @@ TIMESERIES_ROOT = ts_config.TIMESERIES_ROOT
 MANIFEST_PATH = ts_config.MANIFEST_PATH
 
 
+def _resolve_data_root(data_root):
+    """
+    Resolve data root across legacy and namespaced layouts.
+
+    Supports:
+    - /ARCAFF/data/04_final/data
+    - /ARCAFF/data/timeseries/04_final/data
+    """
+    requested = Path(data_root)
+    if requested.exists():
+        return requested
+
+    candidates = []
+    requested_str = str(requested)
+
+    if "/timeseries/04_final/data" in requested_str:
+        candidates.append(Path(requested_str.replace("/timeseries/04_final/data", "/04_final/data")))
+    elif requested_str.endswith("/04_final/data"):
+        candidates.append(Path(requested_str.replace("/04_final/data", "/timeseries/04_final/data")))
+
+    candidates.extend(
+        [
+            Path(ts_config.TIMESERIES_ROOT),
+            Path("/ARCAFF/data/timeseries/04_final/data"),
+            Path("/ARCAFF/data/04_final/data"),
+        ]
+    )
+
+    seen = set()
+    for candidate in candidates:
+        candidate_resolved = str(candidate)
+        if candidate_resolved in seen:
+            continue
+        seen.add(candidate_resolved)
+        if candidate.exists():
+            logger.warning(f"Data root not found at {requested}; using existing path {candidate} instead.")
+            return candidate
+
+    raise FileNotFoundError(
+        f"Data root not found: {requested}. Checked fallbacks: {', '.join(str(c) for c in candidates)}"
+    )
+
+
 def _preflight_data_availability(manifest_df, task_type, sample_count=32):
     """
     Check whether referenced FITS files are physically available before training.
@@ -163,9 +206,10 @@ def main(args):
     )
 
     # Build or load dataset manifest
-    data_root = Path(args.data_root)
+    data_root = _resolve_data_root(args.data_root)
     output_dir = Path(args.output_dir) if args.output_dir else checkpoint_mgr.checkpoint_dir
     output_dir.mkdir(parents=True, exist_ok=True)
+    logger.info(f"Using data root: {data_root}")
     logger.info(f"Run artifacts directory: {output_dir}")
 
     manifest_path = Path(args.manifest_path)
