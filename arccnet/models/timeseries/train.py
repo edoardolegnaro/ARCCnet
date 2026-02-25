@@ -85,6 +85,9 @@ GRAD_CLIP_MAX_NORM = ts_config.GRAD_CLIP_MAX_NORM
 LOG_EVERY_N_STEPS = ts_config.LOG_EVERY_N_STEPS
 TIMESERIES_ROOT = ts_config.TIMESERIES_ROOT
 MANIFEST_PATH = ts_config.MANIFEST_PATH
+LOSS_FUNCTION = ts_config.LOSS_FUNCTION
+FOCAL_LOSS_ALPHA = ts_config.FOCAL_LOSS_ALPHA
+FOCAL_LOSS_GAMMA = ts_config.FOCAL_LOSS_GAMMA
 
 
 def _resolve_data_root(data_root):
@@ -198,11 +201,12 @@ def main(args):
     logger.info(f"Task type: {task_type}")
 
     # Setup checkpoint manager early so run artifacts can default to checkpoint directory.
+    loss_fn = LOSS_FUNCTION if task_type == "multiclass" else "mse"
     checkpoint_mgr = CheckpointManager(
         root_name=f"timeseries/{task_type}",
         data_folder="/ARCAFF/data",
         model_name="resnet34_transformer",
-        loss_function="cross_entropy" if task_type == "multiclass" else "mse",
+        loss_function=loss_fn,
     )
 
     # Build or load dataset manifest
@@ -329,6 +333,9 @@ def main(args):
         learning_rate=LEARNING_RATE,
         weight_decay=WEIGHT_DECAY,
         class_weights=class_weights_computed if task_type == "multiclass" else None,
+        loss_function=LOSS_FUNCTION if task_type == "multiclass" else "mse",
+        focal_alpha=FOCAL_LOSS_ALPHA,
+        focal_gamma=FOCAL_LOSS_GAMMA,
         # Model architecture parameters
         spatial_feature_dim=SPATIAL_FEATURE_DIM,
         temporal_num_layers=TEMPORAL_NUM_LAYERS,

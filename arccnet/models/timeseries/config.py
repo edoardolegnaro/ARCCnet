@@ -49,6 +49,11 @@ MAX_EPOCHS = 100
 EARLY_STOPPING_PATIENCE = 15
 GRAD_CLIP_MAX_NORM = 1.0
 
+# Loss function
+LOSS_FUNCTION = "focal"  # Options: "cross_entropy", "focal"
+FOCAL_LOSS_ALPHA = 0.25  # Weighting factor for focal loss
+FOCAL_LOSS_GAMMA = 2.0  # Focusing parameter for focal loss
+
 # Data splitting
 SPLIT_STRATEGY = "noaa"  # Options: "noaa", "time"
 TRAIN_FRAC = 0.7
@@ -86,7 +91,7 @@ LR_FIND_MAX = 1.0
 LR_FIND_NUM_STEPS = 100
 
 DATA_FOLDER = os.getenv("ARCAFF_DATA_FOLDER", "/ARCAFF/data")
-TIMESERIES_ROOT = os.path.join(DATA_FOLDER, "timeseries", "04_final", "data")
+TIMESERIES_ROOT = os.path.join(DATA_FOLDER, "04_final", "data")
 MANIFEST_PATH = os.path.join(DATA_FOLDER, "timeseries_manifest.parquet")
 
 PROJECT_NAME = "arcaff-timeseries-flare-forecasting"

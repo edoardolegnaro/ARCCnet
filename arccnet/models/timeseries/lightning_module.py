@@ -16,6 +16,7 @@ from sklearn.metrics import (
 )
 
 from .flare_forecaster import FlareForecaster
+from .focal_loss import FocalLoss
 
 
 class FlareForecasterLightning(pl.LightningModule):
@@ -29,6 +30,9 @@ class FlareForecasterLightning(pl.LightningModule):
         learning_rate=1e-4,
         weight_decay=1e-5,
         class_weights=None,
+        loss_function="cross_entropy",
+        focal_alpha=0.25,
+        focal_gamma=2.0,
         **kwargs,
     ):
         """
@@ -48,6 +52,12 @@ class FlareForecasterLightning(pl.LightningModule):
             Weight decay for optimizer
         class_weights : list or None
             Class weights for multiclass classification
+        loss_function : str
+            Loss function to use: 'cross_entropy' or 'focal'
+        focal_alpha : float
+            Alpha parameter for focal loss
+        focal_gamma : float
+            Gamma parameter for focal loss
         **kwargs
             Additional parameters for FlareForecaster
         """
@@ -57,17 +67,26 @@ class FlareForecasterLightning(pl.LightningModule):
         self.task_type = task_type
         self.learning_rate = learning_rate
         self.weight_decay = weight_decay
+        self.loss_function = loss_function
 
         # Create model
         self.model = FlareForecaster(task_type=task_type, num_channels=num_channels, output_dim=output_dim, **kwargs)
 
         # Loss function
         if task_type == "multiclass":
-            if class_weights is not None:
-                weight = torch.tensor(class_weights, dtype=torch.float32)
-                self.criterion = nn.CrossEntropyLoss(weight=weight)
-            else:
-                self.criterion = nn.CrossEntropyLoss()
+            if loss_function == "focal":
+                # For focal loss, convert class weights to alpha if provided
+                if class_weights is not None:
+                    weight = torch.tensor(class_weights, dtype=torch.float32)
+                else:
+                    weight = None
+                self.criterion = FocalLoss(alpha=focal_alpha, gamma=focal_gamma, weight=weight)
+            else:  # cross_entropy
+                if class_weights is not None:
+                    weight = torch.tensor(class_weights, dtype=torch.float32)
+                    self.criterion = nn.CrossEntropyLoss(weight=weight)
+                else:
+                    self.criterion = nn.CrossEntropyLoss()
         else:  # regression
             self.criterion = nn.MSELoss()
 
