@@ -101,6 +101,7 @@ COMET_PROJECT_NAME = getattr(ts_config, "COMET_PROJECT_NAME", PROJECT_NAME)
 COMET_WORKSPACE = getattr(ts_config, "COMET_WORKSPACE", None)
 COMET_OFFLINE = bool(getattr(ts_config, "COMET_OFFLINE", False))
 COMET_OFFLINE_DIRECTORY = Path(getattr(ts_config, "COMET_OFFLINE_DIRECTORY", "/tmp/comet_offline"))
+MIN_AVAILABLE_PATH_FRACTION = float(os.getenv("ARCAFF_TS_MIN_AVAILABLE_PATH_FRACTION", "1.0"))
 
 VALID_PRECISIONS = ("auto", "16-mixed", "bf16-mixed", "32-true", "64-true")
 
@@ -209,6 +210,97 @@ def _preflight_data_availability(manifest_df, task_type, sample_count=32):
             "or restore/create the expected path:\n"
             "  /ARCAFF/data/timeseries/03_processed"
         )
+
+
+def _filter_manifest_by_data_availability(manifest_df, task_type, min_available_path_fraction=1.0):
+    """
+    Keep only samples whose referenced FITS paths are available on disk.
+
+    Parameters
+    ----------
+    manifest_df : pd.DataFrame
+        Built manifest with serialized per-sample path grids.
+    task_type : str
+        Active task type for dataset probe construction.
+    min_available_path_fraction : float
+        Minimum required fraction of resolvable paths per sample.
+        1.0 means all referenced paths must exist.
+
+    Returns
+    -------
+    tuple[pd.DataFrame, pd.DataFrame]
+        (filtered_manifest, dropped_samples_report)
+    """
+    if len(manifest_df) == 0:
+        raise RuntimeError("Manifest is empty after dataset build/load.")
+    if not (0.0 < float(min_available_path_fraction) <= 1.0):
+        raise ValueError("min_available_path_fraction must be in (0, 1].")
+
+    dataset_probe = SDOTimeseriesDataset(
+        manifest_df.head(1).reset_index(drop=True),
+        split="test",
+        task_type=task_type,
+        resize=RESIZE,
+        augment=False,
+        norm_stats={"mean": [0.0] * NUM_CHANNELS, "std": [1.0] * NUM_CHANNELS},
+    )
+
+    total_samples = len(manifest_df)
+    checked_counts = np.zeros(total_samples, dtype=np.int32)
+    available_counts = np.zeros(total_samples, dtype=np.int32)
+
+    for row_pos, (_, row) in enumerate(manifest_df.iterrows()):
+        checked = 0
+        available = 0
+        paths = dataset_probe._parse_paths(row["paths"])
+        for t_paths in paths[:NUM_TIMESTEPS]:
+            for c_path in t_paths[:NUM_CHANNELS]:
+                if c_path is None or c_path == "None":
+                    continue
+                checked += 1
+                resolved = dataset_probe._resolve_existing_path(c_path)
+                if Path(resolved).exists():
+                    available += 1
+        checked_counts[row_pos] = checked
+        available_counts[row_pos] = available
+
+    available_fraction = np.divide(
+        available_counts,
+        checked_counts,
+        out=np.zeros_like(available_counts, dtype=np.float32),
+        where=checked_counts > 0,
+    )
+    keep_mask = (checked_counts > 0) & (available_fraction >= float(min_available_path_fraction))
+
+    filtered_manifest = manifest_df.loc[keep_mask].reset_index(drop=True)
+    dropped_report = manifest_df.loc[~keep_mask, ["sample_id", "noaa_ar", "date", "flare_class"]].copy()
+    dropped_report["available_paths"] = available_counts[~keep_mask]
+    dropped_report["checked_paths"] = checked_counts[~keep_mask]
+    dropped_report["available_fraction"] = available_fraction[~keep_mask]
+
+    kept = len(filtered_manifest)
+    dropped = len(dropped_report)
+    logger.info(
+        "Availability filtering: kept=%d/%d samples (dropped=%d, min_available_path_fraction=%.3f)",
+        kept,
+        total_samples,
+        dropped,
+        float(min_available_path_fraction),
+    )
+
+    if dropped > 0:
+        worst_missing_paths = int((dropped_report["checked_paths"] - dropped_report["available_paths"]).max())
+        logger.warning(
+            "Dropped %d sample(s) with unavailable FITS paths. Worst sample missing %d/%d paths.",
+            dropped,
+            worst_missing_paths,
+            int(dropped_report["checked_paths"].max()),
+        )
+
+    if kept == 0:
+        raise RuntimeError("All samples were dropped by availability filtering; cannot continue training.")
+
+    return filtered_manifest, dropped_report
 
 
 def _resolve_precision(requested_precision, trainer_accelerator):
@@ -435,7 +527,31 @@ def main(args):
     logger.info(f"Building dataset manifest from {data_root}")
     manifest_df = build_dataset(data_root, output_path=manifest_path)
 
-    logger.info(f"Total samples: {len(manifest_df)}")
+    total_manifest_samples = len(manifest_df)
+    logger.info(f"Total samples before availability filtering: {total_manifest_samples}")
+
+    manifest_df, dropped_unavailable_samples = _filter_manifest_by_data_availability(
+        manifest_df,
+        task_type=task_type,
+        min_available_path_fraction=args.min_available_path_fraction,
+    )
+    available_manifest_samples = len(manifest_df)
+    dropped_manifest_samples = int(total_manifest_samples - available_manifest_samples)
+
+    dropped_samples_path = None
+    if dropped_manifest_samples > 0:
+        dropped_samples_path = output_dir / "dropped_unavailable_samples.parquet"
+        dropped_unavailable_samples.to_parquet(dropped_samples_path, index=False)
+        logger.warning(
+            "Dropped unavailable samples report saved to %s (n=%d)",
+            dropped_samples_path,
+            dropped_manifest_samples,
+        )
+
+    # Persist the filtered manifest used for this run so evaluation reproduces exact sample set.
+    manifest_df.to_parquet(manifest_path, index=False)
+    logger.info(f"Filtered manifest saved to {manifest_path} ({available_manifest_samples} samples)")
+
     _preflight_data_availability(manifest_df, task_type=task_type)
 
     # Split dataset
@@ -634,6 +750,10 @@ def main(args):
         "project_name": PROJECT_NAME,
         "data_root": str(data_root),
         "manifest_path": str(manifest_path),
+        "manifest_samples_total": total_manifest_samples,
+        "manifest_samples_available": available_manifest_samples,
+        "manifest_samples_dropped_unavailable": dropped_manifest_samples,
+        "min_available_path_fraction": float(args.min_available_path_fraction),
         "output_dir": str(output_dir),
         "split_strategy": split_strategy,
         "train_samples": int(train_mask.sum()),
@@ -713,6 +833,11 @@ def main(args):
         "task_type": task_type,
         "split_strategy": split_strategy,
         "manifest_path": str(manifest_path),
+        "manifest_samples_total": total_manifest_samples,
+        "manifest_samples_available": available_manifest_samples,
+        "manifest_samples_dropped_unavailable": dropped_manifest_samples,
+        "min_available_path_fraction": float(args.min_available_path_fraction),
+        "dropped_unavailable_samples_path": str(dropped_samples_path) if dropped_samples_path else None,
         "norm_stats_path": str(norm_stats_path),
         "split_assignments_path": str(split_assignments_path),
         "checkpoint_dir": str(checkpoint_mgr.checkpoint_dir),
@@ -734,16 +859,16 @@ def main(args):
         if not logged_model:
             _safe_comet_call(comet_logger, "checkpoint asset logging", "log_asset", str(best_checkpoint))
 
-    _log_comet_artifacts(
-        comet_logger,
-        artifacts=[
-            manifest_path,
-            split_assignments_path,
-            norm_stats_path,
-            results_path,
-            best_checkpoint,
-        ],
-    )
+    run_artifacts = [
+        manifest_path,
+        split_assignments_path,
+        norm_stats_path,
+        results_path,
+        best_checkpoint,
+    ]
+    if dropped_samples_path is not None:
+        run_artifacts.append(dropped_samples_path)
+    _log_comet_artifacts(comet_logger, artifacts=run_artifacts)
     _safe_comet_call(comet_logger, "run finalization", "end")
 
     logger.info(f"Training complete! Results saved to {results_path}")
@@ -796,6 +921,15 @@ if __name__ == "__main__":
         type=int,
         default=None,
         help="Override DataLoader worker count (defaults to config.NUM_WORKERS).",
+    )
+    parser.add_argument(
+        "--min_available_path_fraction",
+        type=float,
+        default=MIN_AVAILABLE_PATH_FRACTION,
+        help=(
+            "Drop samples with fewer than this fraction of resolvable FITS paths. "
+            "Default 1.0 keeps only fully available samples."
+        ),
     )
     parser.add_argument(
         "--enable_comet",
