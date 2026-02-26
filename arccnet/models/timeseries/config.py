@@ -104,6 +104,13 @@ MANIFEST_PATH = os.path.join(DATA_FOLDER, "timeseries_manifest.parquet")
 PRECISION = os.getenv("ARCAFF_TS_PRECISION", "32-true")
 SAFE_GPU_MODE = os.getenv("ARCAFF_TS_SAFE_GPU_MODE", "true").strip().lower() in {"1", "true", "yes", "on"}
 
-PROJECT_NAME = "arcaff-timeseries-flare-forecasting"
-ENABLE_COMET = False
+PROJECT_NAME = "arcaff-timeseries"
+ENABLE_COMET = True
+COMET_PROJECT_NAME = "arcaff-timeseries"
+COMET_WORKSPACE = "arcaff"
+COMET_OFFLINE = os.getenv("ARCAFF_TS_COMET_OFFLINE", "false").strip().lower() in {"1", "true", "yes", "on"}
+COMET_OFFLINE_DIRECTORY = os.getenv(
+    "ARCAFF_TS_COMET_OFFLINE_DIR",
+    os.path.join(DATA_FOLDER, "timeseries", "comet_offline"),
+)
 LOG_EVERY_N_STEPS = 10

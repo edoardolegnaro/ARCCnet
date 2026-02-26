@@ -11,11 +11,16 @@ import numpy as np
 import pytorch_lightning as pl
 import torch
 from pytorch_lightning.callbacks import EarlyStopping, LearningRateFinder
-from pytorch_lightning.loggers import TensorBoardLogger
+from pytorch_lightning.loggers import CSVLogger, TensorBoardLogger
 from sklearn.utils.class_weight import compute_class_weight
 
 from arccnet.models import train_utils
 from arccnet.models.checkpoint_manager import CheckpointManager
+
+try:
+    from pytorch_lightning.loggers.comet import CometLogger
+except Exception:  # pragma: no cover - optional dependency
+    CometLogger = None
 
 torch.set_float32_matmul_precision("medium")
 
@@ -90,8 +95,26 @@ FOCAL_LOSS_ALPHA = ts_config.FOCAL_LOSS_ALPHA
 FOCAL_LOSS_GAMMA = ts_config.FOCAL_LOSS_GAMMA
 PRECISION = getattr(ts_config, "PRECISION", "auto")
 SAFE_GPU_MODE = bool(getattr(ts_config, "SAFE_GPU_MODE", True))
+PROJECT_NAME = getattr(ts_config, "PROJECT_NAME", "arcaff-timeseries-flare-forecasting")
+ENABLE_COMET = bool(getattr(ts_config, "ENABLE_COMET", False))
+COMET_PROJECT_NAME = getattr(ts_config, "COMET_PROJECT_NAME", PROJECT_NAME)
+COMET_WORKSPACE = getattr(ts_config, "COMET_WORKSPACE", None)
+COMET_OFFLINE = bool(getattr(ts_config, "COMET_OFFLINE", False))
+COMET_OFFLINE_DIRECTORY = Path(getattr(ts_config, "COMET_OFFLINE_DIRECTORY", "/tmp/comet_offline"))
 
 VALID_PRECISIONS = ("auto", "16-mixed", "bf16-mixed", "32-true", "64-true")
+
+
+def _str2bool(value):
+    """Robust argparse bool parser supporting True/False, 1/0, yes/no."""
+    if isinstance(value, bool):
+        return value
+    normalized = str(value).strip().lower()
+    if normalized in {"true", "t", "yes", "y", "1"}:
+        return True
+    if normalized in {"false", "f", "no", "n", "0"}:
+        return False
+    raise argparse.ArgumentTypeError(f"Invalid boolean value: {value}")
 
 
 def _resolve_data_root(data_root):
@@ -208,6 +231,170 @@ def _looks_like_worker_permission_error(exc):
     """Detect restricted multiprocessing environments (e.g., SemLock permission denied)."""
     msg = str(exc)
     return "[Errno 13]" in msg and "Permission denied" in msg
+
+
+def _setup_comet_logger(
+    run_name: str,
+    output_dir: Path,
+    enable_comet: bool,
+    comet_project_name: str,
+    comet_workspace: str | None,
+    comet_offline: bool,
+):
+    """Create a Comet logger with compatibility fallbacks across Lightning versions."""
+    if not enable_comet:
+        return None
+
+    if CometLogger is None:
+        logger.warning("Comet logging enabled but Comet dependencies are unavailable; skipping Comet logger.")
+        return None
+
+    output_dir = Path(output_dir)
+    save_dir = COMET_OFFLINE_DIRECTORY if comet_offline else (output_dir / "comet")
+    save_dir.mkdir(parents=True, exist_ok=True)
+
+    common_kwargs = {
+        "save_dir": str(save_dir),
+        "offline": bool(comet_offline),
+    }
+    if comet_workspace:
+        common_kwargs["workspace"] = comet_workspace
+
+    candidate_kwargs = [
+        {"project_name": comet_project_name, "experiment_name": run_name, **common_kwargs},
+        {"project_name": comet_project_name, "name": run_name, **common_kwargs},
+        {"project": comet_project_name, "name": run_name, **common_kwargs},
+        {"project": comet_project_name, "experiment_name": run_name, **common_kwargs},
+    ]
+
+    last_exception = None
+    for kwargs in candidate_kwargs:
+        try:
+            comet_logger = CometLogger(**kwargs)
+            mode = "offline" if comet_offline else "online"
+            logger.info(
+                "Comet logging enabled (%s). project=%s workspace=%s",
+                mode,
+                comet_project_name,
+                comet_workspace or "<default>",
+            )
+            return comet_logger
+        except TypeError:
+            continue
+        except Exception as exc:
+            last_exception = exc
+            break
+
+    if last_exception is not None:
+        logger.warning("Could not initialize Comet logger: %s", last_exception)
+    else:
+        logger.warning("Could not initialize Comet logger due to incompatible logger signature.")
+    return None
+
+
+def _setup_experiment_loggers(
+    output_dir: Path,
+    task_type: str,
+    enable_comet: bool,
+    comet_project_name: str,
+    comet_workspace: str | None,
+    comet_offline: bool,
+):
+    """
+    Create active experiment loggers.
+
+    Returns:
+        tuple[list, Optional[CometLogger]]
+    """
+    loggers = []
+
+    try:
+        tb_logger = TensorBoardLogger(
+            save_dir=output_dir,
+            name="lightning_logs",
+        )
+        loggers.append(tb_logger)
+        logger.info("TensorBoard logging enabled")
+    except ModuleNotFoundError:
+        logger.warning("TensorBoard is unavailable; continuing without TensorBoard logger.")
+
+    csv_logger = CSVLogger(
+        save_dir=output_dir,
+        name="csv_logs",
+    )
+    loggers.append(csv_logger)
+    logger.info("CSV logging enabled")
+
+    run_name = f"timeseries_{task_type}_{Path(output_dir).name}"
+    comet_logger = _setup_comet_logger(
+        run_name=run_name,
+        output_dir=Path(output_dir),
+        enable_comet=enable_comet,
+        comet_project_name=comet_project_name,
+        comet_workspace=comet_workspace,
+        comet_offline=comet_offline,
+    )
+    if comet_logger is not None:
+        loggers.append(comet_logger)
+
+    return loggers, comet_logger
+
+
+def _log_hyperparameters(loggers: list, hyperparams: dict) -> None:
+    """Log run hyperparameters to all active loggers with graceful fallbacks."""
+    if not hyperparams:
+        return
+
+    for active_logger in loggers:
+        try:
+            if hasattr(active_logger, "log_hyperparams"):
+                active_logger.log_hyperparams(hyperparams)
+                continue
+
+            experiment = getattr(active_logger, "experiment", None)
+            if experiment is not None and hasattr(experiment, "log_parameters"):
+                experiment.log_parameters(hyperparams)
+        except Exception as exc:
+            logger.warning("Could not log hyperparameters to %s: %s", type(active_logger).__name__, exc)
+
+
+def _safe_comet_call(comet_logger, action: str, method_name: str, *args, **kwargs):
+    """Call Comet experiment methods safely so logging issues never fail training."""
+    if comet_logger is None:
+        return False
+
+    experiment = getattr(comet_logger, "experiment", None)
+    if experiment is None:
+        return False
+
+    method = getattr(experiment, method_name, None)
+    if method is None:
+        return False
+
+    try:
+        method(*args, **kwargs)
+        return True
+    except Exception as exc:
+        logger.warning("Comet %s failed: %s", action, exc)
+        return False
+
+
+def _log_comet_artifacts(comet_logger, artifacts: list[Path]) -> None:
+    """Upload run artifacts to Comet when available."""
+    if comet_logger is None:
+        return
+
+    uploaded = 0
+    for artifact_path in artifacts:
+        path = Path(artifact_path)
+        if not path.exists():
+            continue
+        logged = _safe_comet_call(comet_logger, "asset logging", "log_asset", str(path), file_name=path.name)
+        if logged:
+            uploaded += 1
+
+    if uploaded > 0:
+        logger.info("Uploaded %d run artifact(s) to Comet", uploaded)
 
 
 def main(args):
@@ -404,16 +591,14 @@ def main(args):
             )
         )
 
-    # Logger (optional TensorBoard)
-    try:
-        tb_logger = TensorBoardLogger(
-            save_dir=output_dir,
-            name="lightning_logs",
-        )
-        logger.info("TensorBoard logging enabled")
-    except ModuleNotFoundError:
-        tb_logger = None
-        logger.warning("TensorBoard not available - logging to CSV only")
+    loggers, comet_logger = _setup_experiment_loggers(
+        output_dir=output_dir,
+        task_type=task_type,
+        enable_comet=args.enable_comet,
+        comet_project_name=args.comet_project_name,
+        comet_workspace=args.comet_workspace,
+        comet_offline=args.comet_offline,
+    )
 
     trainer_accelerator = ACCELERATOR
     if trainer_accelerator == "gpu" and not torch.cuda.is_available():
@@ -444,11 +629,43 @@ def main(args):
         SAFE_GPU_MODE,
     )
 
+    run_hyperparams = {
+        "task_type": task_type,
+        "project_name": PROJECT_NAME,
+        "data_root": str(data_root),
+        "manifest_path": str(manifest_path),
+        "output_dir": str(output_dir),
+        "split_strategy": split_strategy,
+        "train_samples": int(train_mask.sum()),
+        "val_samples": int(val_mask.sum()),
+        "test_samples": int(test_mask.sum()),
+        "num_classes": NUM_CLASSES if task_type == "multiclass" else REGRESSION_TARGETS,
+        "flare_class_names": FLARE_CLASS_NAMES if task_type == "multiclass" else [],
+        "batch_size": BATCH_SIZE,
+        "learning_rate": LEARNING_RATE,
+        "weight_decay": WEIGHT_DECAY,
+        "loss_function": LOSS_FUNCTION if task_type == "multiclass" else "mse",
+        "focal_alpha": FOCAL_LOSS_ALPHA,
+        "focal_gamma": FOCAL_LOSS_GAMMA,
+        "max_epochs": MAX_EPOCHS,
+        "precision": trainer_precision,
+        "accelerator": trainer_accelerator,
+        "devices": DEVICES,
+        "num_workers": effective_num_workers,
+        "safe_gpu_mode": SAFE_GPU_MODE,
+        "split_assignments_path": str(split_assignments_path),
+        "norm_stats_path": str(norm_stats_path),
+    }
+    if class_weights_computed is not None:
+        run_hyperparams["class_weights"] = [float(weight) for weight in class_weights_computed]
+    _log_hyperparameters(loggers, run_hyperparams)
+    _safe_comet_call(comet_logger, "tag logging", "add_tags", [task_type, split_strategy, "timeseries"])
+
     def _build_trainer():
         return pl.Trainer(
             max_epochs=MAX_EPOCHS,
             callbacks=callbacks,
-            logger=tb_logger,
+            logger=loggers if len(loggers) > 1 else loggers[0],
             accelerator=trainer_accelerator,
             devices=DEVICES,
             precision=trainer_precision,
@@ -478,9 +695,18 @@ def main(args):
 
     # Test on best model
     logger.info("Evaluating best model on test set...")
-    trainer.test(model, datamodule, ckpt_path="best")
+    test_results = trainer.test(model, datamodule, ckpt_path="best")
 
     best_checkpoint_path = checkpoint_callback.best_model_path or str(checkpoint_mgr.checkpoint_dir / "best.ckpt")
+    best_checkpoint = Path(best_checkpoint_path)
+
+    if test_results:
+        final_metrics = {}
+        for metric_name, metric_value in test_results[0].items():
+            if isinstance(metric_value, (int, float, np.floating)):
+                final_metrics[f"final_{metric_name.replace('/', '_')}"] = float(metric_value)
+        if final_metrics:
+            _safe_comet_call(comet_logger, "final metric logging", "log_metrics", final_metrics)
 
     # Save final results summary
     results = {
@@ -496,6 +722,29 @@ def main(args):
     results_path = output_dir / "training_summary.json"
     with open(results_path, "w") as f:
         json.dump(results, f, indent=2)
+
+    if best_checkpoint.exists():
+        logged_model = _safe_comet_call(
+            comet_logger,
+            "model logging",
+            "log_model",
+            name=f"timeseries_{task_type}_best",
+            file_or_folder=str(best_checkpoint),
+        )
+        if not logged_model:
+            _safe_comet_call(comet_logger, "checkpoint asset logging", "log_asset", str(best_checkpoint))
+
+    _log_comet_artifacts(
+        comet_logger,
+        artifacts=[
+            manifest_path,
+            split_assignments_path,
+            norm_stats_path,
+            results_path,
+            best_checkpoint,
+        ],
+    )
+    _safe_comet_call(comet_logger, "run finalization", "end")
 
     logger.info(f"Training complete! Results saved to {results_path}")
     logger.info(f"Best checkpoint: {best_checkpoint_path}")
@@ -547,6 +796,34 @@ if __name__ == "__main__":
         type=int,
         default=None,
         help="Override DataLoader worker count (defaults to config.NUM_WORKERS).",
+    )
+    parser.add_argument(
+        "--enable_comet",
+        type=_str2bool,
+        nargs="?",
+        const=True,
+        default=ENABLE_COMET,
+        help="Enable Comet logging (default: from config.ENABLE_COMET).",
+    )
+    parser.add_argument(
+        "--comet_project_name",
+        type=str,
+        default=COMET_PROJECT_NAME,
+        help="Comet project name (default: from config.COMET_PROJECT_NAME).",
+    )
+    parser.add_argument(
+        "--comet_workspace",
+        type=str,
+        default=COMET_WORKSPACE,
+        help="Comet workspace (default: from config.COMET_WORKSPACE).",
+    )
+    parser.add_argument(
+        "--comet_offline",
+        type=_str2bool,
+        nargs="?",
+        const=True,
+        default=COMET_OFFLINE,
+        help="Enable Comet offline mode (default: from config.COMET_OFFLINE).",
     )
 
     args = parser.parse_args()
