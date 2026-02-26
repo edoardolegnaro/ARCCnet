@@ -35,7 +35,7 @@ def _mock_manifest(n_samples=6):
                 "c_plus": 1,
                 "m_plus": 1 if i % 3 == 0 else 0,
                 "x_plus": 1 if i % 5 == 0 else 0,
-                "flare_class": 2 if i % 5 == 0 else (1 if i % 3 == 0 else 0),
+                "flare_class": 2 if (i % 5 == 0 or i % 3 == 0) else 1,
                 "log_ca": 0.301,
                 "log_ma": 0.301 if i % 3 == 0 else 0.0,
                 "log_xa": 0.301 if i % 5 == 0 else 0.0,

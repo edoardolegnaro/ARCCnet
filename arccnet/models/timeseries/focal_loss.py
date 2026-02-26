@@ -34,17 +34,26 @@ class FocalLoss(nn.Module):
 
     def __init__(self, alpha=0.25, gamma=2.0, reduction="mean", weight=None):
         super().__init__()
-        self.alpha = alpha
-        self.gamma = gamma
+        self.alpha = None
+        self.gamma = float(gamma)
         self.reduction = reduction
-        self.weight = weight
 
+        # Keep class weights as a buffer so Lightning/device transfers move it with the module.
+        if weight is None:
+            self.register_buffer("weight", None)
+        elif isinstance(weight, torch.Tensor):
+            self.register_buffer("weight", weight.float())
+        else:
+            self.register_buffer("weight", torch.tensor(weight, dtype=torch.float32))
+
+        # Support scalar alpha or per-class alpha vector.
         if isinstance(alpha, (list, tuple)):
-            self.alpha = torch.tensor(alpha, dtype=torch.float32)
+            self.register_buffer("alpha_tensor", torch.tensor(alpha, dtype=torch.float32))
         elif isinstance(alpha, torch.Tensor):
-            self.alpha = alpha.float()
+            self.register_buffer("alpha_tensor", alpha.float())
         else:
             self.alpha = float(alpha)
+            self.register_buffer("alpha_tensor", None)
 
     def forward(self, inputs, targets):
         """
@@ -75,12 +84,13 @@ class FocalLoss(nn.Module):
         loss = ce * ((1 - p_t) ** self.gamma)
 
         # Apply alpha weighting if specified
-        if isinstance(self.alpha, torch.Tensor):
-            if self.alpha.device != inputs.device:
-                self.alpha = self.alpha.to(inputs.device)
-            alpha_t = self.alpha.gather(0, targets)
+        if self.alpha_tensor is not None:
+            alpha_t = self.alpha_tensor
+            if alpha_t.device != inputs.device:
+                alpha_t = alpha_t.to(inputs.device)
+            alpha_t = alpha_t.gather(0, targets)
             loss = alpha_t * loss
-        elif self.alpha > 0:
+        elif self.alpha is not None and self.alpha > 0:
             loss = self.alpha * loss
 
         # Apply reduction

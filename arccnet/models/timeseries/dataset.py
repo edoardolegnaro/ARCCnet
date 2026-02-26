@@ -116,7 +116,7 @@ class SDOTimeseriesDataset(Dataset):
 
         # Get targets based on task type
         if self.task_type == "multiclass":
-            # Single class label: 0=C, 1=M, 2=X
+            # Single class label: 0=No-flare, 1=C, 2=M+ (M or X)
             y = torch.tensor(row["flare_class"], dtype=torch.long)
         elif self.task_type == "regression":
             # Regression targets: [log(Ca+1), log(Ma+1), log(Xa+1)]

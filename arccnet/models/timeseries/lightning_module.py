@@ -15,8 +15,92 @@ from sklearn.metrics import (
     roc_auc_score,
 )
 
+from .config import FLARE_CLASS_NAMES, NUM_CLASSES, REGRESSION_TARGETS
 from .flare_forecaster import FlareForecaster
 from .focal_loss import FocalLoss
+
+
+def _normalize_class_name(name):
+    """Normalize class-name strings for key generation and simple matching."""
+    normalized = str(name).strip().lower()
+    normalized = normalized.replace("+", "_plus")
+    normalized = normalized.replace("-", "_")
+    normalized = normalized.replace(" ", "_")
+    while "__" in normalized:
+        normalized = normalized.replace("__", "_")
+    return normalized.strip("_")
+
+
+def _class_semantic_tag(name):
+    """Map a class name into a coarse semantic bucket."""
+    normalized = _normalize_class_name(name)
+
+    if normalized.startswith("no_flare") or normalized in {"noflare", "quiet", "none"}:
+        return "no_flare"
+    if "m_plus" in normalized or normalized in {"mplus"}:
+        return "m_plus"
+    if normalized.startswith("x"):
+        return "x"
+    if normalized.startswith("m"):
+        return "m"
+    if normalized.startswith("c"):
+        return "c"
+    return "other"
+
+
+def _get_operational_class_layout(num_classes, class_names=None):
+    """
+    Resolve class-index layout used for M+/X+ operational metrics.
+
+    Supported multiclass layouts:
+    - 3-class: [No-flare, C, M+]
+    - 4-class: [No-flare, C, M, X]
+    - Legacy 3-class fallback: [C, M, X]
+    """
+    if class_names is not None and len(class_names) == num_classes:
+        tags = [_class_semantic_tag(name) for name in class_names]
+
+        c_index = next((idx for idx, tag in enumerate(tags) if tag == "c"), None)
+        m_plus_direct_index = next((idx for idx, tag in enumerate(tags) if tag == "m_plus"), None)
+        x_index = next((idx for idx, tag in enumerate(tags) if tag == "x"), None)
+
+        if m_plus_direct_index is not None:
+            m_plus_indices = [m_plus_direct_index]
+        else:
+            m_plus_indices = [idx for idx, tag in enumerate(tags) if tag in {"m", "x"}]
+
+        if c_index is not None and m_plus_indices:
+            return {
+                "class_names": list(class_names),
+                "c_index": int(c_index),
+                "m_plus_indices": [int(idx) for idx in m_plus_indices],
+                "x_index": int(x_index) if x_index is not None else None,
+            }
+
+    if num_classes == 4:
+        return {
+            "class_names": ["No-flare", "C", "M", "X"],
+            "c_index": 1,
+            "m_plus_indices": [2, 3],
+            "x_index": 3,
+        }
+    if num_classes == 3:
+        return {
+            "class_names": ["C", "M", "X"],
+            "c_index": 0,
+            "m_plus_indices": [1, 2],
+            "x_index": 2,
+        }
+
+    # Fallback: assume classes are ordered by severity and last label is X-like.
+    m_index = max(0, num_classes - 2)
+    x_index = max(0, num_classes - 1)
+    return {
+        "class_names": [f"Class_{idx}" for idx in range(num_classes)],
+        "c_index": max(0, num_classes - 3),
+        "m_plus_indices": sorted(set([m_index, x_index])),
+        "x_index": x_index,
+    }
 
 
 class FlareForecasterLightning(pl.LightningModule):
@@ -26,10 +110,11 @@ class FlareForecasterLightning(pl.LightningModule):
         self,
         task_type="multiclass",
         num_channels=10,
-        output_dim=3,
+        output_dim=None,
         learning_rate=1e-4,
         weight_decay=1e-5,
         class_weights=None,
+        flare_class_names=None,
         loss_function="cross_entropy",
         focal_alpha=0.25,
         focal_gamma=2.0,
@@ -45,7 +130,7 @@ class FlareForecasterLightning(pl.LightningModule):
         num_channels : int
             Number of input channels
         output_dim : int
-            Output dimension (3 for both tasks)
+            Output dimension (num_classes for multiclass, 3 for regression)
         learning_rate : float
             Learning rate for optimizer
         weight_decay : float
@@ -68,6 +153,9 @@ class FlareForecasterLightning(pl.LightningModule):
         self.learning_rate = learning_rate
         self.weight_decay = weight_decay
         self.loss_function = loss_function
+        self.flare_class_names = list(flare_class_names) if flare_class_names is not None else list(FLARE_CLASS_NAMES)
+        if output_dim is None:
+            output_dim = NUM_CLASSES if task_type == "multiclass" else REGRESSION_TARGETS
 
         # Create model
         self.model = FlareForecaster(task_type=task_type, num_channels=num_channels, output_dim=output_dim, **kwargs)
@@ -232,8 +320,9 @@ class FlareForecasterLightning(pl.LightningModule):
         probs = torch.softmax(torch.from_numpy(logits), dim=1).numpy()
         y_pred_class = np.argmax(probs, axis=1)
 
-        # Get unique classes present in data
-        all_classes = [0, 1, 2]
+        num_classes = int(probs.shape[1])
+        all_classes = list(range(num_classes))
+        layout = _get_operational_class_layout(num_classes, class_names=self.flare_class_names)
 
         acc = accuracy_score(y_true, y_pred_class)
         bal_acc = balanced_accuracy_score(y_true, y_pred_class)
@@ -245,20 +334,15 @@ class FlareForecasterLightning(pl.LightningModule):
         metrics = {
             "accuracy": float(acc),
             "balanced_accuracy": float(bal_acc),
-            "class_0_acc": float(per_class_acc[0]) if len(per_class_acc) > 0 else 0.0,
-            "class_1_acc": float(per_class_acc[1]) if len(per_class_acc) > 1 else 0.0,
-            "class_2_acc": float(per_class_acc[2]) if len(per_class_acc) > 2 else 0.0,
         }
+        for idx in range(num_classes):
+            metrics[f"class_{idx}_acc"] = float(per_class_acc[idx]) if idx < len(per_class_acc) else 0.0
 
-        m_plus_true = (y_true >= 1).astype(int)
-        m_plus_score = probs[:, 1] + probs[:, 2]
-        x_plus_true = (y_true == 2).astype(int)
-        x_plus_score = probs[:, 2]
+        m_plus_indices = layout["m_plus_indices"]
+        m_plus_true = np.isin(y_true, m_plus_indices).astype(int)
+        m_plus_score = probs[:, m_plus_indices].sum(axis=1)
 
-        for prefix, y_bin, y_score in [
-            ("m_plus", m_plus_true, m_plus_score),
-            ("x_plus", x_plus_true, x_plus_score),
-        ]:
+        for prefix, y_bin, y_score in [("m_plus", m_plus_true, m_plus_score)]:
             skill = self._compute_binary_skill(y_bin, y_score, threshold=0.5)
             metrics[f"{prefix}_tss"] = skill["tss"]
             metrics[f"{prefix}_hss"] = skill["hss"]
@@ -266,6 +350,18 @@ class FlareForecasterLightning(pl.LightningModule):
             metrics[f"{prefix}_fpr"] = skill["fpr"]
             metrics[f"{prefix}_pr_auc"] = skill["pr_auc"] if skill["pr_auc"] is not None else 0.0
             metrics[f"{prefix}_roc_auc"] = skill["roc_auc"] if skill["roc_auc"] is not None else 0.0
+
+        x_index = layout["x_index"]
+        if x_index is not None:
+            x_plus_true = (y_true == x_index).astype(int)
+            x_plus_score = probs[:, x_index]
+            skill = self._compute_binary_skill(x_plus_true, x_plus_score, threshold=0.5)
+            metrics["x_plus_tss"] = skill["tss"]
+            metrics["x_plus_hss"] = skill["hss"]
+            metrics["x_plus_tpr"] = skill["tpr"]
+            metrics["x_plus_fpr"] = skill["fpr"]
+            metrics["x_plus_pr_auc"] = skill["pr_auc"] if skill["pr_auc"] is not None else 0.0
+            metrics["x_plus_roc_auc"] = skill["roc_auc"] if skill["roc_auc"] is not None else 0.0
 
         return metrics
 

@@ -8,6 +8,7 @@ import torch
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
+from arccnet.models.timeseries import config as ts_config
 from arccnet.models.timeseries.flare_forecaster import FlareForecaster
 from arccnet.models.timeseries.spatial_encoder import SpatialEncoder
 from arccnet.models.timeseries.temporal_transformer import TemporalTransformer
@@ -50,6 +51,7 @@ def test_temporal_transformer_forward():
 def test_flare_forecaster_forward():
     """Test complete model forward pass."""
     print("\nTesting FlareForecaster forward pass...")
+    num_classes = ts_config.NUM_CLASSES
 
     # Test multiclass model
     model_mc = FlareForecaster(
@@ -58,7 +60,7 @@ def test_flare_forecaster_forward():
         spatial_feature_dim=512,
         temporal_num_layers=2,
         temporal_num_heads=8,
-        output_dim=3,
+        output_dim=num_classes,
         pretrained_spatial=False,
         hidden_dims=[128],
     )
@@ -70,9 +72,10 @@ def test_flare_forecaster_forward():
         logits = model_mc(x)
         probs = model_mc.predict_proba(x)
 
-    assert logits.shape == (2, 3), f"Logits shape mismatch: {logits.shape}"
-    assert probs.shape == (2, 3), f"Probs shape mismatch: {probs.shape}"
-    assert (probs >= 0).all() and (probs <= 1).all(), "Probabilities out of range"
+    assert logits.shape == (2, num_classes), f"Logits shape mismatch: {logits.shape}"
+    assert probs.shape == (2, num_classes), f"Probs shape mismatch: {probs.shape}"
+    assert (probs >= 0).all(), "Probabilities should be >= 0"
+    assert (probs <= 1).all(), "Probabilities should be <= 1"
     assert torch.allclose(probs.sum(dim=1), torch.ones(2)), "Probs should sum to 1"
 
     print("  Multiclass:")
@@ -117,7 +120,7 @@ def test_model_cuda():
         task_type="multiclass",
         num_channels=10,
         temporal_num_layers=2,
-        output_dim=3,
+        output_dim=ts_config.NUM_CLASSES,
         pretrained_spatial=False,
     ).to(device)
     model.eval()
@@ -128,7 +131,7 @@ def test_model_cuda():
         logits = model(x)
 
     assert logits.device.type == "cuda", "Output not on CUDA"
-    assert logits.shape == (2, 3), f"Shape mismatch: {logits.shape}"
+    assert logits.shape == (2, ts_config.NUM_CLASSES), f"Shape mismatch: {logits.shape}"
 
     print(f"  Device: {device}")
     print(f"  Output device: {logits.device}")

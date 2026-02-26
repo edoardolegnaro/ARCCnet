@@ -3,7 +3,7 @@
 import torch
 import torch.nn as nn
 
-from .config import TASK_TYPE
+from .config import NUM_CLASSES, TASK_TYPE
 from .spatial_encoder import SpatialEncoder
 from .temporal_transformer import TemporalTransformer
 
@@ -16,7 +16,7 @@ class FlareForecaster(nn.Module):
     1. Spatial encoder (CNN) extracts features from each timestep independently
     2. Temporal transformer processes the sequence of spatial features
     3. Task-specific head:
-       - Multiclass: Predicts flare class (C/M/X) via CrossEntropyLoss
+       - Multiclass: Predicts configured flare class labels (default: No-flare/C/M+) via CrossEntropyLoss
        - Regression: Predicts log flare counts via MSELoss
 
     Parameters
@@ -38,7 +38,7 @@ class FlareForecaster(nn.Module):
     temporal_pooling : str
         Pooling strategy: 'cls', 'mean', 'last' (default: 'mean')
     output_dim : int
-        Output dimension - num_classes for multiclass, 3 for regression (default: 3)
+        Output dimension - num_classes for multiclass, 3 for regression
     pretrained_spatial : bool
         Whether to use pretrained spatial encoder (default: True)
     freeze_spatial : bool
@@ -59,7 +59,7 @@ class FlareForecaster(nn.Module):
         temporal_dim_feedforward=2048,
         temporal_dropout=0.1,
         temporal_pooling="mean",
-        output_dim=3,
+        output_dim=None,
         pretrained_spatial=True,
         freeze_spatial=False,
         hidden_dims=[256],
@@ -70,6 +70,8 @@ class FlareForecaster(nn.Module):
         self.task_type = task_type or TASK_TYPE
         self.num_channels = num_channels
         self.spatial_feature_dim = spatial_feature_dim
+        if output_dim is None:
+            output_dim = NUM_CLASSES if self.task_type == "multiclass" else 3
         self.output_dim = output_dim
 
         # Spatial encoder (CNN)
@@ -180,7 +182,7 @@ def test_flare_forecaster():
         temporal_num_layers=4,
         temporal_num_heads=8,
         temporal_pooling="mean",
-        output_dim=3,
+        output_dim=NUM_CLASSES,
         pretrained_spatial=True,
         hidden_dims=[256],
     )
@@ -206,8 +208,8 @@ def test_flare_forecaster():
     print(f"Probs shape: {probs.shape}")
     print(f"Probs range: [{probs.min():.3f}, {probs.max():.3f}]")
 
-    assert logits.shape == (batch_size, 3), f"Logits shape mismatch: {logits.shape}"
-    assert probs.shape == (batch_size, 3), f"Probs shape mismatch: {probs.shape}"
+    assert logits.shape == (batch_size, NUM_CLASSES), f"Logits shape mismatch: {logits.shape}"
+    assert probs.shape == (batch_size, NUM_CLASSES), f"Probs shape mismatch: {probs.shape}"
     assert (probs >= 0).all(), "Probabilities below 0"
     assert (probs <= 1).all(), "Probabilities above 1"
 
@@ -219,7 +221,7 @@ def test_flare_forecaster():
         logits_masked = model(x, mask=mask)
 
     print(f"Logits shape (masked): {logits_masked.shape}")
-    assert logits_masked.shape == (batch_size, 3), f"Logits shape mismatch: {logits_masked.shape}"
+    assert logits_masked.shape == (batch_size, NUM_CLASSES), f"Logits shape mismatch: {logits_masked.shape}"
 
     # Count parameters
     total_params = sum(p.numel() for p in model.parameters())

@@ -50,8 +50,7 @@ MAX_EPOCHS = 100             # Maximum training epochs
 EARLY_STOPPING_PATIENCE = 15 # Stop after N epochs without improvement
 GRAD_CLIP_MAX_NORM = 1.0     # Gradient clipping threshold
 
-# Class weights (multiclass only)
-CLASS_WEIGHTS = [1.0, 5.0, 15.0]  # Weights for [C, M, X] classes
+# Class weights are computed automatically from the training split in train.py
 ```
 
 ### Model Architecture
@@ -80,7 +79,7 @@ DROPOUT = 0.2                     # Dropout in prediction head
 ```python
 # Data paths
 DATA_FOLDER = "/ARCAFF/data"
-TIMESERIES_ROOT = "/ARCAFF/data/04_final/data"
+TIMESERIES_ROOT = "/ARCAFF/data/timeseries/04_final/data"
 
 # Data splitting
 SPLIT_STRATEGY = "noaa"      # "noaa" or "time"
@@ -100,7 +99,7 @@ PIN_MEMORY = True            # Pin memory for faster GPU transfer
 TASK_TYPE = "multiclass"     # "multiclass" or "regression"
 
 # Multiclass: Predict highest flare class
-NUM_CLASSES = 3              # C, M, X
+NUM_CLASSES = 3              # No-flare, C, M+ (M or X)
 
 # Regression: Predict log flare counts
 REGRESSION_TARGETS = 3       # [log(Ca+1), log(Ma+1), log(Xa+1)]
@@ -166,7 +165,7 @@ While most settings are in `config.py`, you can override some via command line:
 # Use different data directory
 python3 -m arccnet.models.timeseries.train --data_root /path/to/data
 
-# Use existing manifest
+# Write manifest generated during this run
 python3 -m arccnet.models.timeseries.train --manifest_path /path/to/manifest.parq
 
 # Save outputs to different directory
@@ -175,6 +174,8 @@ python3 -m arccnet.models.timeseries.train --output_dir /path/to/outputs
 # Override task type
 python3 -m arccnet.models.timeseries.train --task_type regression
 ```
+
+`train.py` rebuilds the manifest from `--data_root` on each run and writes it to `--manifest_path`.
 
 ## Monitoring Training
 
@@ -217,3 +218,24 @@ Files:
 4. **Tune batch size** - Larger batches = more stable but slower training
 5. **Use mixed precision** - Already enabled by default for faster training
 6. **Adjust early stopping** - Increase `EARLY_STOPPING_PATIENCE` if training is slow to converge
+
+### Precision
+
+If you hit CUDA errors like `unable to find an engine to execute this computation`, use full precision:
+
+```bash
+python train.py --precision 32-true
+```
+
+The script also supports environment-based defaults:
+
+```bash
+export ARCAFF_TS_PRECISION=32-true
+export ARCAFF_TS_SAFE_GPU_MODE=true
+```
+
+If your environment blocks multiprocessing semaphores, run with:
+
+```bash
+python train.py --num_workers 0
+```

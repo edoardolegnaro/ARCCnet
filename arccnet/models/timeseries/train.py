@@ -8,7 +8,6 @@ import argparse
 from pathlib import Path
 
 import numpy as np
-import pandas as pd
 import pytorch_lightning as pl
 import torch
 from pytorch_lightning.callbacks import EarlyStopping, LearningRateFinder
@@ -54,6 +53,7 @@ TRAIN_YEARS = ts_config.TRAIN_YEARS
 VAL_YEARS = ts_config.VAL_YEARS
 TEST_YEARS = ts_config.TEST_YEARS
 NUM_CLASSES = ts_config.NUM_CLASSES
+FLARE_CLASS_NAMES = list(getattr(ts_config, "FLARE_CLASS_NAMES", ["No-flare", "C", "M+"]))
 BATCH_SIZE = ts_config.BATCH_SIZE
 NUM_WORKERS = ts_config.NUM_WORKERS
 USE_AUGMENTATION = ts_config.USE_AUGMENTATION
@@ -88,6 +88,10 @@ MANIFEST_PATH = ts_config.MANIFEST_PATH
 LOSS_FUNCTION = ts_config.LOSS_FUNCTION
 FOCAL_LOSS_ALPHA = ts_config.FOCAL_LOSS_ALPHA
 FOCAL_LOSS_GAMMA = ts_config.FOCAL_LOSS_GAMMA
+PRECISION = getattr(ts_config, "PRECISION", "auto")
+SAFE_GPU_MODE = bool(getattr(ts_config, "SAFE_GPU_MODE", True))
+
+VALID_PRECISIONS = ("auto", "16-mixed", "bf16-mixed", "32-true", "64-true")
 
 
 def _resolve_data_root(data_root):
@@ -184,6 +188,28 @@ def _preflight_data_availability(manifest_df, task_type, sample_count=32):
         )
 
 
+def _resolve_precision(requested_precision, trainer_accelerator):
+    """
+    Resolve trainer precision with a simple device-aware default.
+    """
+    precision = str(requested_precision).strip().lower()
+    if precision not in VALID_PRECISIONS:
+        raise ValueError(f"Invalid precision '{requested_precision}'. Expected one of: {', '.join(VALID_PRECISIONS)}")
+
+    use_cuda = torch.cuda.is_available() and str(trainer_accelerator).lower() != "cpu"
+
+    if precision == "auto":
+        return "16-mixed" if use_cuda else "32-true"
+
+    return precision
+
+
+def _looks_like_worker_permission_error(exc):
+    """Detect restricted multiprocessing environments (e.g., SemLock permission denied)."""
+    msg = str(exc)
+    return "[Errno 13]" in msg and "Permission denied" in msg
+
+
 def main(args):
     """Main training function using PyTorch Lightning."""
 
@@ -192,9 +218,9 @@ def main(args):
         os.environ["CUDA_VISIBLE_DEVICES"] = str(GPU_ID)
         logger.info(f"Using GPU {GPU_ID}")
 
-    # Set random seed for reproducibility
-    train_utils.set_global_seed(SEED, deterministic=True)
-    logger.info(f"Random seed set to {SEED}")
+    # Set random seed for reproducibility without enforcing deterministic kernels.
+    train_utils.set_global_seed(SEED, deterministic=False)
+    logger.info(f"Random seed set to {SEED} (deterministic kernels disabled)")
 
     # Task type
     task_type = args.task_type if args.task_type else TASK_TYPE
@@ -209,7 +235,7 @@ def main(args):
         loss_function=loss_fn,
     )
 
-    # Build or load dataset manifest
+    # Build dataset manifest for this run
     data_root = _resolve_data_root(args.data_root)
     output_dir = Path(args.output_dir) if args.output_dir else checkpoint_mgr.checkpoint_dir
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -217,13 +243,10 @@ def main(args):
     logger.info(f"Run artifacts directory: {output_dir}")
 
     manifest_path = Path(args.manifest_path)
-
     if manifest_path.exists():
-        logger.info(f"Loading existing manifest from {manifest_path}")
-        manifest_df = pd.read_parquet(manifest_path)
-    else:
-        logger.info(f"Building dataset from {data_root}")
-        manifest_df = build_dataset(data_root, output_path=manifest_path)
+        logger.info(f"Manifest output already exists and will be overwritten: {manifest_path}")
+    logger.info(f"Building dataset manifest from {data_root}")
+    manifest_df = build_dataset(data_root, output_path=manifest_path)
 
     logger.info(f"Total samples: {len(manifest_df)}")
     _preflight_data_availability(manifest_df, task_type=task_type)
@@ -286,8 +309,8 @@ def main(args):
             count = (train_labels == cls).sum()
             pct = 100 * count / len(train_labels)
             weight = class_weights_computed[cls]
-            class_names = {0: "C", 1: "M", 2: "X"}
-            logger.info(f"  Class {cls} ({class_names[cls]}): {count} samples ({pct:.1f}%), weight: {weight:.3f}")
+            class_name = FLARE_CLASS_NAMES[cls] if cls < len(FLARE_CLASS_NAMES) else f"class_{cls}"
+            logger.info(f"  Class {cls} ({class_name}): {count} samples ({pct:.1f}%), weight: {weight:.3f}")
 
     # Compute normalization stats from training set
     logger.info("Computing normalization stats from training set...")
@@ -307,29 +330,34 @@ def main(args):
         json.dump(norm_stats, f, indent=2)
     logger.info(f"Normalization stats saved to {norm_stats_path}")
 
-    # Create DataModule
-    datamodule = FlareDataModule(
-        manifest_df=manifest_df,
-        train_mask=train_mask,
-        val_mask=val_mask,
-        test_mask=test_mask,
-        data_dir=data_root,
-        norm_stats=norm_stats,
-        task_type=task_type,
-        batch_size=BATCH_SIZE,
-        num_workers=NUM_WORKERS,
-        resize=RESIZE,
-        use_augmentation=USE_AUGMENTATION,
-        hflip_prob=HFLIP_PROB,
-        vflip_prob=VFLIP_PROB,
-        rotation_degrees=ROTATION_DEGREES,
-    )
+    effective_num_workers = args.num_workers if args.num_workers is not None else NUM_WORKERS
+
+    def _build_datamodule(num_workers):
+        return FlareDataModule(
+            manifest_df=manifest_df,
+            train_mask=train_mask,
+            val_mask=val_mask,
+            test_mask=test_mask,
+            data_dir=data_root,
+            norm_stats=norm_stats,
+            task_type=task_type,
+            batch_size=BATCH_SIZE,
+            num_workers=num_workers,
+            resize=RESIZE,
+            use_augmentation=USE_AUGMENTATION,
+            hflip_prob=HFLIP_PROB,
+            vflip_prob=VFLIP_PROB,
+            rotation_degrees=ROTATION_DEGREES,
+        )
+
+    datamodule = _build_datamodule(effective_num_workers)
 
     # Create Lightning model
     model = FlareForecasterLightning(
         task_type=task_type,
         num_channels=NUM_CHANNELS,
         output_dim=NUM_CLASSES if task_type == "multiclass" else REGRESSION_TARGETS,
+        flare_class_names=FLARE_CLASS_NAMES if task_type == "multiclass" else None,
         learning_rate=LEARNING_RATE,
         weight_decay=WEIGHT_DECAY,
         class_weights=class_weights_computed if task_type == "multiclass" else None,
@@ -392,22 +420,61 @@ def main(args):
         logger.warning("ACCELERATOR set to 'gpu' but CUDA not available; falling back to CPU")
         trainer_accelerator = "cpu"
 
-    # Create Trainer
-    trainer = pl.Trainer(
-        max_epochs=MAX_EPOCHS,
-        callbacks=callbacks,
-        logger=tb_logger,
-        accelerator=trainer_accelerator,
-        devices=DEVICES,
-        precision="16-mixed" if torch.cuda.is_available() else "32-true",
-        gradient_clip_val=GRAD_CLIP_MAX_NORM,
-        log_every_n_steps=LOG_EVERY_N_STEPS,
-        deterministic=True,
+    requested_precision = args.precision if args.precision is not None else PRECISION
+    trainer_precision = _resolve_precision(requested_precision, trainer_accelerator)
+
+    if trainer_accelerator != "cpu" and torch.cuda.is_available() and SAFE_GPU_MODE:
+        if hasattr(torch.backends, "cudnn"):
+            torch.backends.cudnn.enabled = False
+            torch.backends.cudnn.benchmark = False
+        if trainer_precision in {"16-mixed", "bf16-mixed"}:
+            logger.warning(
+                "SAFE_GPU_MODE is enabled: forcing precision=32-true and disabling cuDNN to avoid CUDA engine errors."
+            )
+            trainer_precision = "32-true"
+        else:
+            logger.warning("SAFE_GPU_MODE is enabled: cuDNN disabled for training stability.")
+
+    logger.info(
+        "Trainer runtime: accelerator=%s, devices=%s, precision=%s, num_workers=%s, safe_gpu_mode=%s",
+        trainer_accelerator,
+        DEVICES,
+        trainer_precision,
+        effective_num_workers,
+        SAFE_GPU_MODE,
     )
+
+    def _build_trainer():
+        return pl.Trainer(
+            max_epochs=MAX_EPOCHS,
+            callbacks=callbacks,
+            logger=tb_logger,
+            accelerator=trainer_accelerator,
+            devices=DEVICES,
+            precision=trainer_precision,
+            gradient_clip_val=GRAD_CLIP_MAX_NORM,
+            log_every_n_steps=LOG_EVERY_N_STEPS,
+            deterministic=False,
+            benchmark=True,
+        )
+
+    trainer = _build_trainer()
 
     # Train
     logger.info("Starting training...")
-    trainer.fit(model, datamodule)
+    try:
+        trainer.fit(model, datamodule)
+    except PermissionError as exc:
+        if effective_num_workers > 0 and _looks_like_worker_permission_error(exc):
+            logger.warning(
+                "DataLoader multiprocessing is not available in this environment; retrying with num_workers=0."
+            )
+            effective_num_workers = 0
+            datamodule = _build_datamodule(effective_num_workers)
+            trainer = _build_trainer()
+            trainer.fit(model, datamodule)
+        else:
+            raise
 
     # Test on best model
     logger.info("Evaluating best model on test set...")
@@ -454,7 +521,7 @@ if __name__ == "__main__":
         "--manifest_path",
         type=str,
         default=MANIFEST_PATH,
-        help="Path to pre-built manifest file (built here if missing)",
+        help="Path where train.py writes the manifest built from --data_root for this run",
     )
     parser.add_argument(
         "--output_dir",
@@ -464,6 +531,22 @@ if __name__ == "__main__":
             "Directory for run artifacts (split assignments, norm stats, logs, summary). "
             "Defaults to the checkpoint run folder under /ARCAFF/data/checkpoints/timeseries."
         ),
+    )
+    parser.add_argument(
+        "--precision",
+        type=str,
+        default=None,
+        choices=VALID_PRECISIONS,
+        help=(
+            "Lightning precision mode. "
+            "Use 'auto' to choose based on device availability (default from config.PRECISION)."
+        ),
+    )
+    parser.add_argument(
+        "--num_workers",
+        type=int,
+        default=None,
+        help="Override DataLoader worker count (defaults to config.NUM_WORKERS).",
     )
 
     args = parser.parse_args()

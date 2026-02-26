@@ -110,16 +110,13 @@ def build_sample_record(sample_dir):
     xplus = int(metadata["xa"] > 0)
 
     # Multiclass label: Highest flare class in 24h window.
-    # If no C/M/X event exists, sample is skipped (current model uses 3 classes C/M/X).
-    if (metadata["ca"] + metadata["ma"] + metadata["xa"]) == 0:
-        print(f"Warning: No post-window flares found for {sample_id}; skipping for 3-class setup")
-        return None
-    if metadata["xa"] > 0:
-        flare_class = 2  # X-class
-    elif metadata["ma"] > 0:
-        flare_class = 1  # M-class
+    # Label order: 0=No-flare, 1=C-only, 2=M+ (M or X)
+    if metadata["ma"] > 0 or metadata["xa"] > 0:
+        flare_class = 2  # M+ class (M or X)
+    elif metadata["ca"] > 0:
+        flare_class = 1  # C-class only
     else:
-        flare_class = 0  # C-class only
+        flare_class = 0  # No post-window flare
 
     # Regression targets: log10 of flare counts (with smoothing)
     # Adding 1 to avoid log(0), then taking log10
@@ -148,7 +145,7 @@ def build_sample_record(sample_dir):
         "m_plus": mplus,
         "x_plus": xplus,
         # New targets
-        "flare_class": flare_class,  # Multiclass: 0=C, 1=M, 2=X
+        "flare_class": flare_class,  # Multiclass: 0=NoFlare, 1=C, 2=M+
         "log_ca": log_ca,  # Regression: log10(C_count + 1)
         "log_ma": log_ma,  # Regression: log10(M_count + 1)
         "log_xa": log_xa,  # Regression: log10(X_count + 1)
@@ -193,9 +190,9 @@ def build_dataset(root_dir, output_path=None, max_samples=None):
     print(f"  NOAA ARs: {df['noaa_ar'].nunique()}")
     print(f"  Date range: {df['date'].min()} to {df['date'].max()}")
     print("  Flare class distribution:")
-    print(f"    C-class only: {(df['flare_class'] == 0).sum()} ({(df['flare_class'] == 0).mean() * 100:.1f}%)")
-    print(f"    M-class:      {(df['flare_class'] == 1).sum()} ({(df['flare_class'] == 1).mean() * 100:.1f}%)")
-    print(f"    X-class:      {(df['flare_class'] == 2).sum()} ({(df['flare_class'] == 2).mean() * 100:.1f}%)")
+    print(f"    No-flare:     {(df['flare_class'] == 0).sum()} ({(df['flare_class'] == 0).mean() * 100:.1f}%)")
+    print(f"    C-class only: {(df['flare_class'] == 1).sum()} ({(df['flare_class'] == 1).mean() * 100:.1f}%)")
+    print(f"    M+-class:     {(df['flare_class'] == 2).sum()} ({(df['flare_class'] == 2).mean() * 100:.1f}%)")
     print("  Regression targets (mean):")
     print(f"    log(Ca+1): {df['log_ca'].mean():.3f}")
     print(f"    log(Ma+1): {df['log_ma'].mean():.3f}")

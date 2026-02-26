@@ -36,7 +36,7 @@ def test_dataset_shapes():
             "c_plus": [1],
             "m_plus": [0],
             "x_plus": [0],
-            "flare_class": [0],  # C-class
+            "flare_class": [1],  # C-class (0=No-flare, 1=C, 2=M+)
             "log_ca": [0.301],
             "log_ma": [0.0],
             "log_xa": [0.0],

@@ -15,8 +15,11 @@ CHANNEL_ORDER = AIA_WAVELENGTHS + [HMI_WAVELENGTH]
 TASK_TYPE = "multiclass"  # Options: "multiclass" (class label), "regression" (flare magnitude)
 
 # Multiclass: Predict highest flare class in 24h window
-# Classes: 0=C-class, 1=M-class, 2=X-class
-NUM_CLASSES = 3  # C, M, X
+# Classes: 0=No-flare, 1=C-class, 2=M+-class (M or X)
+FLARE_CLASS_NAMES = ["No-flare", "C", "M+"]
+NUM_CLASSES = len(FLARE_CLASS_NAMES)
+M_PLUS_CLASS_START_INDEX = 2  # M+ means M or X
+X_CLASS_INDEX = None  # No dedicated X class in the default 3-class setup
 
 # Regression: Predict log10(peak flux) for each class
 # Targets: [log10(C_peak), log10(M_peak), log10(X_peak)]
@@ -42,7 +45,7 @@ RESIZE_HEIGHT = 256
 RESIZE_WIDTH = 512
 RESIZE = (RESIZE_HEIGHT, RESIZE_WIDTH)
 
-BATCH_SIZE = 16
+BATCH_SIZE = 8
 LEARNING_RATE = 1e-4
 WEIGHT_DECAY = 1e-4
 MAX_EPOCHS = 100
@@ -80,19 +83,26 @@ CHANNEL_DROP_PROB = 0.0  # Probability to drop one AIA channel
 ACCELERATOR = "gpu"
 DEVICES = 1
 GPU_ID = 0  # Which GPU to use (0, 1, etc.)
-NUM_WORKERS = 8
+NUM_WORKERS = 24
 PIN_MEMORY = True
 PERSISTENT_WORKERS = True
 
 # Training settings
-FIND_LR = False  # Run learning rate finder before training
+FIND_LR = True  # Run learning rate finder before training
 LR_FIND_MIN = 1e-7
 LR_FIND_MAX = 1.0
 LR_FIND_NUM_STEPS = 100
 
 DATA_FOLDER = os.getenv("ARCAFF_DATA_FOLDER", "/ARCAFF/data")
-TIMESERIES_ROOT = os.path.join(DATA_FOLDER, "04_final", "data")
+TIMESERIES_ROOT = os.getenv(
+    "ARCAFF_TIMESERIES_ROOT",
+    os.path.join(DATA_FOLDER, "timeseries", "04_final", "data"),
+)
 MANIFEST_PATH = os.path.join(DATA_FOLDER, "timeseries_manifest.parquet")
+
+# Runtime/trainer stability controls
+PRECISION = os.getenv("ARCAFF_TS_PRECISION", "32-true")
+SAFE_GPU_MODE = os.getenv("ARCAFF_TS_SAFE_GPU_MODE", "true").strip().lower() in {"1", "true", "yes", "on"}
 
 PROJECT_NAME = "arcaff-timeseries-flare-forecasting"
 ENABLE_COMET = False

@@ -9,13 +9,13 @@ This module implements a spatiotemporal deep learning approach for predicting so
 **Architecture:**
 1. **Spatial Encoder** (ResNet34-based CNN) - Extracts features from each timestep independently
 2. **Temporal Transformer** - Processes the sequence of spatial features with multi-head self-attention
-3. **Prediction Head** - Supports multiclass max-flare prediction (C/M/X) or regression of log flare counts
+3. **Prediction Head** - Supports multiclass max-flare prediction (default: No-flare/C/M+) or regression of log flare counts
 
 **Dataset:**
 - Input: 6 timesteps (hourly cadence) × 10 channels (9 AIA wavelengths + 1 HMI magnetogram)
 - Spatial resolution: 400×800 pixels (resized to 256×512 for training)
 - Labels:
-  - Multiclass: highest flare class in next 24h (`0=C`, `1=M`, `2=X`)
+  - Multiclass (default): highest flare class in next 24h (`0=No-flare`, `1=C`, `2=M+` where `M+` includes X)
   - Regression: `[log10(Ca+1), log10(Ma+1), log10(Xa+1)]`
 
 ## Directory Structure
@@ -42,35 +42,28 @@ arccnet/models/timeseries/
 
 ## Quick Start
 
-### 1. Build Manifest
-
-First, build the dataset manifest from your data directory:
-
-```bash
-python -m arccnet.models.timeseries.manifest \
-    --root_dir /ARCAFF/data/04_final/data \
-    --output /ARCAFF/ARCCnet/outputs/timeseries/manifest.parq
-```
-
-### 2. Train Model
+### 1. Train Model
 
 Train the forecasting model:
 
 ```bash
 python -m arccnet.models.timeseries.train \
-    --data_root /ARCAFF/data/04_final/data \
+    --data_root /ARCAFF/data/timeseries/04_final/data \
     --manifest_path /ARCAFF/ARCCnet/outputs/timeseries/manifest.parq \
     --output_dir /ARCAFF/ARCCnet/outputs/timeseries/run_001
 ```
 
+`train.py` rebuilds the manifest from `--data_root` on every run and writes it to `--manifest_path`.
+
 Training outputs:
 - `.../best-epoch-metric.ckpt` - Best Lightning checkpoint (highest validation primary metric)
 - `.../last.ckpt` - Latest checkpoint
+- `manifest.parq` (or your `--manifest_path`) - Manifest generated for this run
 - `norm_stats.json` - Normalization statistics
 - `tensorboard/` - TensorBoard logs
 - `training_summary.json` - Final training summary
 
-### 3. Evaluate Model
+### 2. Evaluate Model
 
 Evaluate on test set:
 
@@ -88,7 +81,7 @@ Evaluation outputs:
 - `metrics_test.json` - Comprehensive metrics (TSS, ROC-AUC, PR-AUC per class)
 - `predictions_test.csv` - Per-sample predictions and labels
 
-### 4. Run Tests
+### 3. Run Tests
 
 Verify the pipeline works correctly:
 
@@ -164,7 +157,7 @@ The CSV is organized with all wavelengths for timestep 0, then all wavelengths f
 - **Input**: 512-dimensional temporal feature
 - **Hidden**: [256] with ReLU and 0.3 dropout
 - **Output**:
-  - Multiclass: 3 logits for C/M/X classes (CrossEntropyLoss)
+  - Multiclass: `NUM_CLASSES` logits (default 3 for No-flare/C/M+ classes, CrossEntropyLoss)
   - Regression: 3 values for log flare-count targets (MSELoss)
 
 ## Configuration
@@ -243,7 +236,7 @@ The pipeline computes comprehensive evaluation metrics:
 
 - **TPR/FPR**: True/False Positive Rate at threshold=0.5
 
-Metrics are computed per class (C+, M+, X+) and aggregated.
+Metrics are computed per class and include operational `M+` scores (and `X+` when an explicit X class exists).
 
 ## Training Tips
 
@@ -282,8 +275,8 @@ model = FlareForecaster(
 # Forward pass
 import torch
 x = torch.randn(2, 6, 10, 256, 512)  # (B, T, C, H, W)
-logits = model(x)  # (B, 3)
-probs = model.predict_proba(x)  # (B, 3) in [0, 1]
+logits = model(x)  # (B, NUM_CLASSES) for multiclass
+probs = model.predict_proba(x)  # (B, NUM_CLASSES) in [0, 1]
 ```
 
 ## Troubleshooting
@@ -305,7 +298,7 @@ probs = model.predict_proba(x)  # (B, 3) in [0, 1]
 
 **Q: Slow data loading**
 - Increase `NUM_WORKERS` (but not > CPU cores)
-- Pre-compute manifest to avoid repeated directory scans
+- Place `--data_root` on fast local storage to speed up manifest rebuilds
 - Consider caching normalized data to disk
 
 ## Citation
