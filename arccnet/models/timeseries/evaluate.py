@@ -345,7 +345,14 @@ def _load_norm_stats(checkpoint_dir=None, norm_stats_path=None):
 
 
 def _load_model(checkpoint_path, task_type, device):
-    """Load model from Lightning checkpoint (preferred) or legacy state dict checkpoint."""
+    """
+    Load model from checkpoint and return optional calibrated threshold.
+
+    Returns
+    -------
+    tuple[torch.nn.Module, float | None]
+        (inference_model, m_plus_threshold_if_available)
+    """
     checkpoint_path = Path(checkpoint_path)
 
     # Preferred: Lightning checkpoint.
@@ -353,9 +360,16 @@ def _load_model(checkpoint_path, task_type, device):
         lightning_model = FlareForecasterLightning.load_from_checkpoint(
             str(checkpoint_path),
             map_location=device,
+            strict=False,
         )
         lightning_model = lightning_model.to(device).eval()
-        return lightning_model.model
+        threshold = None
+        if hasattr(lightning_model, "m_plus_threshold"):
+            try:
+                threshold = float(lightning_model.m_plus_threshold.detach().cpu().item())
+            except Exception:
+                threshold = None
+        return lightning_model.model, threshold
     except Exception as lightning_error:
         print(f"Lightning checkpoint load failed, trying legacy format: {lightning_error}")
 
@@ -380,7 +394,7 @@ def _load_model(checkpoint_path, task_type, device):
         )
         model.load_state_dict(checkpoint["model_state_dict"])
         model = model.to(device).eval()
-        return model
+        return model, None
 
     # Lightning checkpoint loaded manually.
     if isinstance(checkpoint, dict) and "state_dict" in checkpoint:
@@ -392,9 +406,34 @@ def _load_model(checkpoint_path, task_type, device):
         )
         lightning_model.load_state_dict(checkpoint["state_dict"], strict=False)
         lightning_model = lightning_model.to(device).eval()
-        return lightning_model.model
+        threshold = None
+        if hasattr(lightning_model, "m_plus_threshold"):
+            try:
+                threshold = float(lightning_model.m_plus_threshold.detach().cpu().item())
+            except Exception:
+                threshold = None
+        return lightning_model.model, threshold
 
     raise ValueError(f"Unsupported checkpoint format: {checkpoint_path}")
+
+
+def _resolve_eval_threshold(threshold_arg, checkpoint_threshold=None):
+    """Resolve evaluation threshold from CLI input or checkpoint metadata."""
+    token = str(threshold_arg).strip().lower()
+    if token == "auto":
+        if checkpoint_threshold is not None and np.isfinite(float(checkpoint_threshold)):
+            return float(checkpoint_threshold), "checkpoint"
+        return 0.5, "default"
+
+    try:
+        threshold = float(threshold_arg)
+    except ValueError as exc:
+        raise ValueError(f"Invalid threshold '{threshold_arg}'. Use a float or 'auto'.") from exc
+
+    if not (0.0 <= threshold <= 1.0):
+        raise ValueError(f"Threshold must be within [0, 1], got {threshold}")
+
+    return float(threshold), "cli"
 
 
 @torch.no_grad()
@@ -492,11 +531,16 @@ def main(args):
     )
 
     print(f"Loading model from {args.checkpoint_path}")
-    model = _load_model(
+    model, checkpoint_threshold = _load_model(
         checkpoint_path=args.checkpoint_path,
         task_type=task_type,
         device=device,
     )
+    eval_threshold, threshold_source = _resolve_eval_threshold(
+        threshold_arg=args.threshold,
+        checkpoint_threshold=checkpoint_threshold,
+    )
+    print(f"Using evaluation threshold={eval_threshold:.4f} (source={threshold_source})")
 
     print("Running inference...")
     predictions, labels, metadata = evaluate(model, dataloader, device, task_type=task_type)
@@ -509,9 +553,11 @@ def main(args):
         metrics = compute_multiclass_metrics(
             labels,
             predictions,
-            threshold=args.threshold,
+            threshold=eval_threshold,
             class_names=configured_class_names,
         )
+        metrics["evaluation_threshold"] = float(eval_threshold)
+        metrics["evaluation_threshold_source"] = threshold_source
     else:
         metrics = compute_regression_metrics(labels, predictions)
 
@@ -600,9 +646,9 @@ if __name__ == "__main__":
     parser.add_argument("--batch_size", type=int, default=BATCH_SIZE, help="Batch size for evaluation")
     parser.add_argument(
         "--threshold",
-        type=float,
-        default=0.5,
-        help="Threshold used for derived binary metrics (M+/X+, one-vs-rest)",
+        type=str,
+        default="auto",
+        help="Threshold for derived binary metrics. Use float in [0,1] or 'auto' to use checkpoint/default.",
     )
     parser.add_argument("--save_predictions", action="store_true", help="Save per-sample predictions")
 

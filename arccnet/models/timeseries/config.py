@@ -53,8 +53,10 @@ EARLY_STOPPING_PATIENCE = 15
 GRAD_CLIP_MAX_NORM = 1.0
 
 # Loss function
-LOSS_FUNCTION = "focal"  # Options: "cross_entropy", "focal"
-FOCAL_LOSS_ALPHA = 0.25  # Weighting factor for focal loss
+# Cross-entropy uses class weights computed from the training split in train.py.
+LOSS_FUNCTION = "cross_entropy"  # Options: "cross_entropy", "focal"
+# Scalar alpha=1.0 is neutral; set a per-class list for class-specific focal weighting.
+FOCAL_LOSS_ALPHA = 1.0
 FOCAL_LOSS_GAMMA = 2.0  # Focusing parameter for focal loss
 
 # Data splitting
@@ -100,6 +102,11 @@ TIMESERIES_ROOT = os.getenv(
 )
 MANIFEST_PATH = os.path.join(DATA_FOLDER, "timeseries_manifest.parquet")
 
+# Normalization-stat estimation controls
+NORM_STATS_MAX_SAMPLES = int(os.getenv("ARCAFF_TS_NORM_MAX_SAMPLES", "200"))
+NORM_STATS_MAX_TIMESTEPS = int(os.getenv("ARCAFF_TS_NORM_MAX_TIMESTEPS", str(NUM_TIMESTEPS)))
+NORM_STATS_MAX_PIXELS_PER_IMAGE = int(os.getenv("ARCAFF_TS_NORM_MAX_PIXELS_PER_IMAGE", "8192"))
+
 # Runtime/trainer stability controls
 PRECISION = os.getenv("ARCAFF_TS_PRECISION", "32-true")
 SAFE_GPU_MODE = os.getenv("ARCAFF_TS_SAFE_GPU_MODE", "true").strip().lower() in {"1", "true", "yes", "on"}
@@ -108,9 +115,4 @@ PROJECT_NAME = "arcaff-timeseries"
 ENABLE_COMET = True
 COMET_PROJECT_NAME = "arcaff-timeseries"
 COMET_WORKSPACE = "arcaff"
-COMET_OFFLINE = os.getenv("ARCAFF_TS_COMET_OFFLINE", "false").strip().lower() in {"1", "true", "yes", "on"}
-COMET_OFFLINE_DIRECTORY = os.getenv(
-    "ARCAFF_TS_COMET_OFFLINE_DIR",
-    os.path.join(DATA_FOLDER, "timeseries", "comet_offline"),
-)
 LOG_EVERY_N_STEPS = 10

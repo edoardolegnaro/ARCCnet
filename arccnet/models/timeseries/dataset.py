@@ -10,7 +10,15 @@ from torch.utils.data import Dataset
 
 from astropy.io import fits
 
-from .config import NUM_CHANNELS, NUM_TIMESTEPS, TASK_TYPE
+from .config import (
+    NORM_STATS_MAX_PIXELS_PER_IMAGE,
+    NORM_STATS_MAX_SAMPLES,
+    NORM_STATS_MAX_TIMESTEPS,
+    NUM_CHANNELS,
+    NUM_TIMESTEPS,
+    SEED,
+    TASK_TYPE,
+)
 
 
 class SDOTimeseriesDataset(Dataset):
@@ -281,15 +289,27 @@ class SDOTimeseriesDataset(Dataset):
                 return np.zeros((self.resize[0], self.resize[1]), dtype=np.float32)
             return np.zeros((400, 800), dtype=np.float32)
 
-    def _compute_norm_stats(self, max_samples=50):
-        """Compute per-channel mean and std from subset of data."""
+    def _compute_norm_stats(self, max_samples=None, max_timesteps=None, max_pixels_per_image=None):
+        """Compute per-channel mean/std using a representative subset of samples and timesteps."""
+        if max_samples is None:
+            max_samples = max(1, int(NORM_STATS_MAX_SAMPLES))
+        if max_timesteps is None:
+            max_timesteps = max(1, int(NORM_STATS_MAX_TIMESTEPS))
+        max_timesteps = max(1, min(int(max_timesteps), int(self.expected_timesteps)))
+        if max_pixels_per_image is None:
+            max_pixels_per_image = int(NORM_STATS_MAX_PIXELS_PER_IMAGE)
+        if max_pixels_per_image <= 0:
+            max_pixels_per_image = None
+
         num_channels = NUM_CHANNELS
         channel_means = []
         channel_stds = []
         clip_lows = []
         clip_highs = []
 
-        sample_indices = np.random.choice(len(self), min(max_samples, len(self)), replace=False)
+        rng = np.random.default_rng(SEED)
+        sample_count = min(int(max_samples), len(self))
+        sample_indices = rng.choice(len(self), sample_count, replace=False)
 
         for c in range(num_channels):
             values = []
@@ -297,10 +317,14 @@ class SDOTimeseriesDataset(Dataset):
                 row = self.manifest.iloc[idx]
                 paths = self._parse_paths(row["paths"])
 
-                for t_paths in paths[:2]:  # Sample first 2 timesteps
+                for t_paths in paths[:max_timesteps]:
                     if c < len(t_paths) and t_paths[c] and t_paths[c] != "None":
                         img = self._load_fits(t_paths[c])
-                        values.append(img.flatten())
+                        pixels = img.reshape(-1)
+                        if max_pixels_per_image is not None and pixels.size > max_pixels_per_image:
+                            sel = rng.choice(pixels.size, max_pixels_per_image, replace=False)
+                            pixels = pixels[sel]
+                        values.append(pixels.astype(np.float32, copy=False))
 
             if values:
                 all_values = np.concatenate(values)
@@ -308,7 +332,7 @@ class SDOTimeseriesDataset(Dataset):
                 clipped = np.clip(all_values, p1, p99)
                 channel_means.append(float(np.mean(clipped)))
                 channel_stds.append(float(np.std(clipped)) + 1e-6)
-                if c == 9:
+                if c == NUM_CHANNELS - 1:
                     # Preserve signed magnetic structure from HMI with symmetric clip.
                     abs_clip = float(max(abs(p1), abs(p99)))
                     p1, p99 = -abs_clip, abs_clip
@@ -326,7 +350,11 @@ class SDOTimeseriesDataset(Dataset):
             "clip_low": clip_lows,
             "clip_high": clip_highs,
         }
-        print(f"Normalization stats computed: {len(channel_means)} channels")
+        print(
+            "Normalization stats computed: "
+            f"{len(channel_means)} channels (samples={sample_count}, timesteps={max_timesteps}, "
+            f"max_pixels_per_image={max_pixels_per_image if max_pixels_per_image is not None else 'all'})"
+        )
         return stats
 
     def _normalize(self, x):

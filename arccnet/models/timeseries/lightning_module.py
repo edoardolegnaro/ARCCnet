@@ -116,8 +116,10 @@ class FlareForecasterLightning(pl.LightningModule):
         class_weights=None,
         flare_class_names=None,
         loss_function="cross_entropy",
-        focal_alpha=0.25,
+        focal_alpha=1.0,
         focal_gamma=2.0,
+        tune_threshold_on_val=True,
+        threshold_search_points=181,
         **kwargs,
     ):
         """
@@ -139,8 +141,9 @@ class FlareForecasterLightning(pl.LightningModule):
             Class weights for multiclass classification
         loss_function : str
             Loss function to use: 'cross_entropy' or 'focal'
-        focal_alpha : float
-            Alpha parameter for focal loss
+        focal_alpha : float or list
+            Alpha parameter for focal loss. Use 1.0 for neutral scaling, or a
+            per-class list for class-specific weighting.
         focal_gamma : float
             Gamma parameter for focal loss
         **kwargs
@@ -153,6 +156,8 @@ class FlareForecasterLightning(pl.LightningModule):
         self.learning_rate = learning_rate
         self.weight_decay = weight_decay
         self.loss_function = loss_function
+        self.tune_threshold_on_val = bool(tune_threshold_on_val)
+        self.threshold_search_points = max(3, int(threshold_search_points))
         self.flare_class_names = list(flare_class_names) if flare_class_names is not None else list(FLARE_CLASS_NAMES)
         if output_dim is None:
             output_dim = NUM_CLASSES if task_type == "multiclass" else REGRESSION_TARGETS
@@ -181,6 +186,7 @@ class FlareForecasterLightning(pl.LightningModule):
         # For collecting predictions
         self.validation_step_outputs = []
         self.test_step_outputs = []
+        self.register_buffer("m_plus_threshold", torch.tensor(0.5, dtype=torch.float32))
 
     def forward(self, x, mask=None):
         """Forward pass."""
@@ -233,7 +239,26 @@ class FlareForecasterLightning(pl.LightningModule):
 
         # Compute task-specific metrics
         if self.task_type == "multiclass":
-            metrics = self._compute_multiclass_metrics(all_targets, all_preds)
+            calibrated_threshold = None
+            if self.tune_threshold_on_val:
+                calibrated_threshold = self._calibrate_m_plus_threshold(all_targets, all_preds)
+            if calibrated_threshold is not None:
+                self.m_plus_threshold.fill_(float(calibrated_threshold))
+
+            active_threshold = float(self.m_plus_threshold.item())
+            metrics = self._compute_multiclass_metrics(
+                all_targets,
+                all_preds,
+                m_plus_threshold=active_threshold,
+            )
+            metrics["m_plus_threshold"] = float(active_threshold)
+            # Fixed baseline retained for comparability with historical runs.
+            fixed_metrics = self._compute_multiclass_metrics(
+                all_targets,
+                all_preds,
+                m_plus_threshold=0.5,
+            )
+            metrics["m_plus_tss_fixed_050"] = fixed_metrics.get("m_plus_tss", 0.0)
             primary_metric = metrics.get("m_plus_tss", metrics["balanced_accuracy"])
         else:  # regression
             metrics = self._compute_regression_metrics(all_targets, all_preds)
@@ -281,7 +306,19 @@ class FlareForecasterLightning(pl.LightningModule):
 
         # Compute task-specific metrics
         if self.task_type == "multiclass":
-            metrics = self._compute_multiclass_metrics(all_targets, all_preds)
+            active_threshold = float(self.m_plus_threshold.item())
+            metrics = self._compute_multiclass_metrics(
+                all_targets,
+                all_preds,
+                m_plus_threshold=active_threshold,
+            )
+            metrics["m_plus_threshold"] = float(active_threshold)
+            fixed_metrics = self._compute_multiclass_metrics(
+                all_targets,
+                all_preds,
+                m_plus_threshold=0.5,
+            )
+            metrics["m_plus_tss_fixed_050"] = fixed_metrics.get("m_plus_tss", 0.0)
         else:  # regression
             metrics = self._compute_regression_metrics(all_targets, all_preds)
 
@@ -313,7 +350,7 @@ class FlareForecasterLightning(pl.LightningModule):
             },
         }
 
-    def _compute_multiclass_metrics(self, y_true, y_pred):
+    def _compute_multiclass_metrics(self, y_true, y_pred, m_plus_threshold=0.5):
         """Compute metrics for multiclass classification."""
         y_true = np.asarray(y_true, dtype=np.int64)
         logits = np.asarray(y_pred, dtype=np.float32)
@@ -343,7 +380,7 @@ class FlareForecasterLightning(pl.LightningModule):
         m_plus_score = probs[:, m_plus_indices].sum(axis=1)
 
         for prefix, y_bin, y_score in [("m_plus", m_plus_true, m_plus_score)]:
-            skill = self._compute_binary_skill(y_bin, y_score, threshold=0.5)
+            skill = self._compute_binary_skill(y_bin, y_score, threshold=float(m_plus_threshold))
             metrics[f"{prefix}_tss"] = skill["tss"]
             metrics[f"{prefix}_hss"] = skill["hss"]
             metrics[f"{prefix}_tpr"] = skill["tpr"]
@@ -364,6 +401,56 @@ class FlareForecasterLightning(pl.LightningModule):
             metrics["x_plus_roc_auc"] = skill["roc_auc"] if skill["roc_auc"] is not None else 0.0
 
         return metrics
+
+    def _calibrate_m_plus_threshold(self, y_true, y_pred):
+        """
+        Select the M+ operating threshold that maximizes validation TSS.
+        """
+        y_true = np.asarray(y_true, dtype=np.int64)
+        logits = np.asarray(y_pred, dtype=np.float32)
+        probs = torch.softmax(torch.from_numpy(logits), dim=1).numpy()
+
+        layout = _get_operational_class_layout(int(probs.shape[1]), class_names=self.flare_class_names)
+        m_plus_indices = layout["m_plus_indices"]
+        m_plus_true = np.isin(y_true, m_plus_indices).astype(int)
+        m_plus_score = probs[:, m_plus_indices].sum(axis=1)
+
+        best_threshold = self._find_optimal_binary_threshold(m_plus_true, m_plus_score)
+        return best_threshold
+
+    def _find_optimal_binary_threshold(self, y_true, y_score):
+        """
+        Find threshold maximizing TSS over a fixed search grid.
+        """
+        y_true = np.asarray(y_true).astype(int)
+        y_score = np.asarray(y_score, dtype=np.float32)
+
+        # Cannot calibrate threshold without both classes present.
+        if len(np.unique(y_true)) < 2:
+            return 0.5
+
+        thresholds = np.linspace(0.05, 0.95, self.threshold_search_points)
+        best_threshold = 0.5
+        best_tss = -np.inf
+        best_tpr = -np.inf
+        best_fpr = np.inf
+
+        for threshold in thresholds:
+            skill = self._compute_binary_skill(y_true, y_score, threshold=float(threshold))
+            tss = skill["tss"]
+            tpr = skill["tpr"]
+            fpr = skill["fpr"]
+
+            # Tie-breakers: higher TPR, then lower FPR.
+            if (tss > best_tss) or (
+                np.isclose(tss, best_tss) and (tpr > best_tpr or (np.isclose(tpr, best_tpr) and fpr < best_fpr))
+            ):
+                best_tss = tss
+                best_tpr = tpr
+                best_fpr = fpr
+                best_threshold = float(threshold)
+
+        return float(best_threshold)
 
     @staticmethod
     def _compute_binary_skill(y_true, y_score, threshold=0.5):

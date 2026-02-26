@@ -99,8 +99,6 @@ PROJECT_NAME = getattr(ts_config, "PROJECT_NAME", "arcaff-timeseries-flare-forec
 ENABLE_COMET = bool(getattr(ts_config, "ENABLE_COMET", False))
 COMET_PROJECT_NAME = getattr(ts_config, "COMET_PROJECT_NAME", PROJECT_NAME)
 COMET_WORKSPACE = getattr(ts_config, "COMET_WORKSPACE", None)
-COMET_OFFLINE = bool(getattr(ts_config, "COMET_OFFLINE", False))
-COMET_OFFLINE_DIRECTORY = Path(getattr(ts_config, "COMET_OFFLINE_DIRECTORY", "/tmp/comet_offline"))
 MIN_AVAILABLE_PATH_FRACTION = float(os.getenv("ARCAFF_TS_MIN_AVAILABLE_PATH_FRACTION", "1.0"))
 
 VALID_PRECISIONS = ("auto", "16-mixed", "bf16-mixed", "32-true", "64-true")
@@ -327,13 +325,11 @@ def _looks_like_worker_permission_error(exc):
 
 def _setup_comet_logger(
     run_name: str,
-    output_dir: Path,
     enable_comet: bool,
     comet_project_name: str,
     comet_workspace: str | None,
-    comet_offline: bool,
 ):
-    """Create a Comet logger with compatibility fallbacks across Lightning versions."""
+    """Create an online Comet logger."""
     if not enable_comet:
         return None
 
@@ -341,47 +337,38 @@ def _setup_comet_logger(
         logger.warning("Comet logging enabled but Comet dependencies are unavailable; skipping Comet logger.")
         return None
 
-    output_dir = Path(output_dir)
-    save_dir = COMET_OFFLINE_DIRECTORY if comet_offline else (output_dir / "comet")
-    save_dir.mkdir(parents=True, exist_ok=True)
-
-    common_kwargs = {
-        "save_dir": str(save_dir),
-        "offline": bool(comet_offline),
-    }
+    common_kwargs = {"project": comet_project_name, "name": run_name, "online": True}
     if comet_workspace:
         common_kwargs["workspace"] = comet_workspace
 
-    candidate_kwargs = [
-        {"project_name": comet_project_name, "experiment_name": run_name, **common_kwargs},
-        {"project_name": comet_project_name, "name": run_name, **common_kwargs},
-        {"project": comet_project_name, "name": run_name, **common_kwargs},
-        {"project": comet_project_name, "experiment_name": run_name, **common_kwargs},
-    ]
+    try:
+        comet_logger = CometLogger(**common_kwargs)
+        experiment = getattr(comet_logger, "experiment", None)
+        exp_class = type(experiment).__name__ if experiment is not None else "None"
 
-    last_exception = None
-    for kwargs in candidate_kwargs:
-        try:
-            comet_logger = CometLogger(**kwargs)
-            mode = "offline" if comet_offline else "online"
-            logger.info(
-                "Comet logging enabled (%s). project=%s workspace=%s",
-                mode,
-                comet_project_name,
-                comet_workspace or "<default>",
+        # Comet may silently downgrade to an offline experiment when network/proxy fails.
+        if "offline" in exp_class.lower():
+            raise RuntimeError(
+                "Comet initialized as offline experiment while online mode is required. "
+                "Check proxy/network and COMET_API_KEY."
             )
-            return comet_logger
-        except TypeError:
-            continue
-        except Exception as exc:
-            last_exception = exc
-            break
 
-    if last_exception is not None:
-        logger.warning("Could not initialize Comet logger: %s", last_exception)
-    else:
-        logger.warning("Could not initialize Comet logger due to incompatible logger signature.")
-    return None
+        run_url = None
+        if experiment is not None:
+            run_url = getattr(experiment, "url", None)
+            if callable(run_url):
+                run_url = run_url()
+
+        logger.info(
+            "Comet logging enabled (online). project=%s workspace=%s run_url=%s",
+            comet_project_name,
+            comet_workspace or "<default>",
+            run_url or "<unavailable>",
+        )
+        return comet_logger
+    except Exception as exc:
+        logger.warning("Could not initialize Comet logger in online mode: %s", exc)
+        return None
 
 
 def _setup_experiment_loggers(
@@ -390,7 +377,6 @@ def _setup_experiment_loggers(
     enable_comet: bool,
     comet_project_name: str,
     comet_workspace: str | None,
-    comet_offline: bool,
 ):
     """
     Create active experiment loggers.
@@ -420,12 +406,15 @@ def _setup_experiment_loggers(
     run_name = f"timeseries_{task_type}_{Path(output_dir).name}"
     comet_logger = _setup_comet_logger(
         run_name=run_name,
-        output_dir=Path(output_dir),
         enable_comet=enable_comet,
         comet_project_name=comet_project_name,
         comet_workspace=comet_workspace,
-        comet_offline=comet_offline,
     )
+    if enable_comet and comet_logger is None:
+        raise RuntimeError(
+            "Comet logging is enabled but online initialization failed. "
+            "Check COMET_API_KEY, workspace/project names, and proxy/network configuration."
+        )
     if comet_logger is not None:
         loggers.append(comet_logger)
 
@@ -713,7 +702,6 @@ def main(args):
         enable_comet=args.enable_comet,
         comet_project_name=args.comet_project_name,
         comet_workspace=args.comet_workspace,
-        comet_offline=args.comet_offline,
     )
 
     trainer_accelerator = ACCELERATOR
@@ -950,14 +938,6 @@ if __name__ == "__main__":
         type=str,
         default=COMET_WORKSPACE,
         help="Comet workspace (default: from config.COMET_WORKSPACE).",
-    )
-    parser.add_argument(
-        "--comet_offline",
-        type=_str2bool,
-        nargs="?",
-        const=True,
-        default=COMET_OFFLINE,
-        help="Enable Comet offline mode (default: from config.COMET_OFFLINE).",
     )
 
     args = parser.parse_args()
