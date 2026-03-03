@@ -33,7 +33,6 @@ def temp_path_fixture(request):
     return (Path(temp_dir), Path(raw_data_dir), Path(processed_data_dir))
 
 
-@pytest.mark.remote_data
 @pytest.fixture
 def sunpy_hmi_copies(temp_path_fixture):
     n = 5

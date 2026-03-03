@@ -42,7 +42,6 @@ def test_query_missing(example_query):
 
 # Define a fixture for creating a DataManager instance with default arguments
 @pytest.fixture
-@pytest.mark.remote_data
 def data_manager_default():
     dm = DataManager(
         start_date=str(datetime(2010, 4, 15)),

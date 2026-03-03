@@ -5,6 +5,8 @@
 # full list see the documentation:
 # http://www.sphinx-doc.org/en/master/config
 # The full version, including alpha/beta/rc tags
+from shutil import which
+
 from arccnet import __version__
 
 release = __version__
@@ -25,7 +27,6 @@ extensions = [
     "sphinx.ext.intersphinx",
     "sphinx.ext.todo",
     "sphinx.ext.coverage",
-    "sphinx.ext.inheritance_diagram",
     "sphinx.ext.viewcode",
     "sphinx.ext.napoleon",
     "sphinx.ext.doctest",
@@ -34,6 +35,9 @@ extensions = [
     "sphinx_automodapi.smart_resolver",
     "sphinxcontrib.bibtex",
 ]
+
+if which("dot") is not None:
+    extensions.append("sphinx.ext.inheritance_diagram")
 
 myst_enable_extensions = [
     "amsmath",
@@ -126,8 +130,9 @@ html_css_files = ["custom.css"]
 
 numfig = True
 recursive_update = False
-suppress_warnings = ["myst.domains"]
+suppress_warnings = ["myst.domains", "graphviz.dot"]
 bibtex_bibfiles = ["reports/refs.bib"]
+automodapi_inheritance_diagram = False
 
 # def setup(app):
 #     """Add functions to the Sphinx setup."""
