@@ -1,6 +1,9 @@
 import logging
+from time import perf_counter
 from pathlib import Path
+from itertools import repeat
 from collections import namedtuple
+from multiprocessing import Semaphore
 from concurrent.futures import ProcessPoolExecutor
 
 from aiapy import calibrate
@@ -27,37 +30,54 @@ from arccnet.data_generation.timeseries.sdo_processing import (
 if __name__ == "__main__":
     __all__ = []
 
+    ss = perf_counter()
+
+    drms_limit = Semaphore(6)
     # Logging settings here.
     drms_log = logging.getLogger("drms")
     drms_log.setLevel("ERROR")
     reproj_log = logging.getLogger("reproject.common")
     reproj_log.setLevel("ERROR")
-    # May need to find a more robust solution with filters/exceptions for this.
     astropy_log.setLevel("ERROR")
     data_path = config["paths"]["data_folder"]
+    wavelengths = config["drms"]["wavelengths"]
     packed_maps = namedtuple("packed_maps", ["hmi_origin", "l2_map"])
-    starts = read_data(
+    starts, before_fl_tables, after_fl_tables = read_data(
         hek_path=Path(f"{data_path}/flare_files/hek_swpc_1996-01-01T00:00:00-2023-01-01T00:00:00_dev.parq"),
         srs_path=Path(f"{data_path}/flare_files/srs_processed_catalog.parq"),
-        size=1,
+        # Set size to -1 for all AR's in a year
+        size=-1,
         duration=6,
         long_lim=65,
-        types=["F1", "F2", "N1", "N2"],
-    )[0]
+        # Use these instead of years if generating old flare target data.
+        # types=["F1", "F2", "N1", "N2"],
+        years=list(range(2011, 2023)),
+    )
 
     cores = int(config["drms"]["cores"])
-    with ProcessPoolExecutor(cores) as executor:
-        for record in starts:
-            noaa_ar, fl_class, start, end, date, center, category = record
-            pointing_table = calibrate.util.get_pointing_table(source="jsoc", time_range=[start - 6 * u.hour, end])
-            start_split = start.value.split("T")[0]
-            file_name = f"{category}_{start_split}_{fl_class}_{noaa_ar}"
+
+    with ProcessPoolExecutor(20) as executor:
+        for rec_num in range(len(starts)):
+            print(f" {rec_num}/{len(starts)} ".center(70, "!"))
+            record = starts[rec_num]
+            noaa_ar, mag_class, mcintosh, end, start, date, center = record
+            before_fls = before_fl_tables[rec_num]
+            after_fls = after_fl_tables[rec_num]
+            b_x, b_m, b_c = before_fls[1]["X"], before_fls[1]["M"], before_fls[1]["C"]
+            a_x, a_m, a_c = after_fls[1]["X"], after_fls[1]["M"], after_fls[1]["C"]
+            try:
+                pointing_table = calibrate.util.get_pointing_table(source="jsoc", time_range=[start - 6 * u.hour, end])
+            except Exception:
+                logging.error("Could not fetch pointing table for this run.")
+                continue
+            start_split = end.value.split("T")[0]
+            file_name = (
+                f"{start_split}_{noaa_ar}_{mag_class}_{mcintosh}_Xb{b_x}_Mb{b_m}_Cb{b_c}_Xa{a_x}_Ma{a_m}_Ca{a_c}"
+            )
             patch_height = int(config["drms"]["patch_height"]) * u.pix
             patch_width = int(config["drms"]["patch_width"]) * u.pix
             try:
-                logging.info(
-                    f"{record['noaa_number']} {record['goes_class']} {record['start_time']} {record['category']}"
-                )
+                logging.info(file_name)
                 aia_maps, hmi_maps = drms_pipeline(
                     start_t=start,
                     end_t=end,
@@ -66,8 +86,10 @@ if __name__ == "__main__":
                     aia_keys=config["drms"]["aia_keys"],
                     wavelengths=config["drms"]["wavelengths"],
                     sample=config["drms"]["sample"],
+                    drms_limit=drms_limit,
                 )
-                if len(aia_maps) != 60:
+                # WILL NEED TO ADJUST IF USING MORE/LESS THAN 6 TIME STEPS
+                if len(aia_maps) != (60):
                     logging.info("Bad run - missing frames, skipping.")
                     continue
 
@@ -79,21 +101,26 @@ if __name__ == "__main__":
                 )
 
                 packed_files = match_files(aia_maps, hmi_maps, pointing_table)
-                aia_proc = tqdm(
-                    executor.map(aia_l2, packed_files),
-                    total=len(aia_maps),
-                )
+                aia_proc = tqdm(executor.map(aia_l2, packed_files), total=len(aia_maps), desc="AIA prep")
                 packed_maps = namedtuple("packed_maps", ["hmi_origin", "l2_map", "ar_num"])
                 hmi_origin_patch = crop_map(hmi_proc[0], center, patch_height, patch_width, date)
-                l2_hmi_packed = [[hmi_origin_patch, hmi_map, noaa_ar, center] for hmi_map in hmi_proc]
-                l2_aia_packed = [[hmi_origin_patch, aia_map, noaa_ar, center] for aia_map in aia_proc]
+                # l2_hmi_packed = ((hmi_origin_patch, hmi_map, noaa_ar, center) for hmi_map in hmi_proc)
+                # l2_aia_packed = ((hmi_origin_patch, aia_map, noaa_ar, center) for aia_map in aia_proc)
 
                 # Went back to tuples because this was failing in a weird way - something to do with pickle and concurrent futures. Left for future debugging.
                 # l2_hmi_packed = [packed_maps(hmi_origin_patch, hmi_map, noaa_ar) for hmi_map in hmi_proc]
                 # l2_aia_packed = [packed_maps(hmi_origin_patch, aia_map, noaa_ar) for aia_map in aia_proc]
 
-                hmi_patch_paths = tqdm(executor.map(map_reproject, l2_hmi_packed), total=len(l2_hmi_packed))
-                aia_patch_paths = tqdm(executor.map(map_reproject, l2_aia_packed), total=len(l2_aia_packed))
+                hmi_patch_paths = tqdm(
+                    executor.map(map_reproject, repeat(hmi_origin_patch.wcs), hmi_proc, repeat(noaa_ar)),
+                    total=len(hmi_proc),
+                    desc="HMI reprojection",
+                )
+                aia_patch_paths = tqdm(
+                    executor.map(map_reproject, repeat(hmi_origin_patch.wcs), aia_proc, repeat(noaa_ar)),
+                    total=len(aia_proc),
+                    desc="AIA reprojection",
+                )
 
                 # For some reason, aia_proc becomes an empty list after this function call.
                 home_table, aia_patch_paths, aia_quality, aia_time, hmi_patch_paths, hmi_quality, hmi_time = (
@@ -119,7 +146,19 @@ if __name__ == "__main__":
                 home_table.write(f"{batched_name}/records/{file_name}.csv", overwrite=True)
 
                 vid_path = vid_match(home_table, file_name, batched_name)
-                l4_file_pack(aia_patch_paths, hmi_patch_paths, batched_name, file_name, away_table, vid_path)
+                l4_file_pack(
+                    aia_patch_paths,
+                    hmi_patch_paths,
+                    batched_name,
+                    file_name,
+                    away_table,
+                    before_fls[0],
+                    after_fls[0],
+                    vid_path,
+                )
 
             except Exception as error:
                 logging.error(error, exc_info=True)
+
+    ee = perf_counter()
+    print(f"Total time took {(ee - ss) / 60} minutes.")
