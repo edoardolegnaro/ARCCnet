@@ -11,7 +11,6 @@ AIA_WAVELENGTHS = [94, 131, 171, 193, 211, 304, 335, 1600, 1700]
 HMI_WAVELENGTH = 6173
 CHANNEL_ORDER = AIA_WAVELENGTHS + [HMI_WAVELENGTH]
 
-# Task configuration
 TASK_TYPE = "multiclass"  # Options: "multiclass" (class label), "regression" (flare magnitude)
 
 # Multiclass: Predict highest flare class in 24h window
@@ -45,7 +44,7 @@ RESIZE_HEIGHT = 256
 RESIZE_WIDTH = 512
 RESIZE = (RESIZE_HEIGHT, RESIZE_WIDTH)
 
-BATCH_SIZE = 8
+BATCH_SIZE = 4
 LEARNING_RATE = 1e-4
 WEIGHT_DECAY = 1e-4
 MAX_EPOCHS = 100
@@ -55,9 +54,8 @@ GRAD_CLIP_MAX_NORM = 1.0
 # Loss function
 # Cross-entropy uses class weights computed from the training split in train.py.
 LOSS_FUNCTION = "cross_entropy"  # Options: "cross_entropy", "focal"
-# Scalar alpha=1.0 is neutral; set a per-class list for class-specific focal weighting.
 FOCAL_LOSS_ALPHA = 1.0
-FOCAL_LOSS_GAMMA = 2.0  # Focusing parameter for focal loss
+FOCAL_LOSS_GAMMA = 2.0
 
 # Data splitting
 SPLIT_STRATEGY = "noaa"  # Options: "noaa", "time"
@@ -65,18 +63,18 @@ TRAIN_FRAC = 0.7
 VAL_FRAC = 0.15
 TEST_FRAC = 0.15
 SEED = 42
-RANDOM_SEED = 42
+RANDOM_SEED = SEED
 
 TRAIN_YEARS = [2011, 2017, 2018, 2019, 2020]
 VAL_YEARS = [2021]
 TEST_YEARS = [2022]
 
 # Data augmentation
-USE_AUGMENTATION = True
+USE_AUGMENTATION = False
 HFLIP_PROB = 0.5
-HORIZONTAL_FLIP_PROB = 0.5
 VFLIP_PROB = 0.5
-VERTICAL_FLIP_PROB = 0.5
+HORIZONTAL_FLIP_PROB = HFLIP_PROB
+VERTICAL_FLIP_PROB = VFLIP_PROB
 ROTATION_DEGREES = 10
 
 TEMPORAL_DROP_PROB = 0.0  # Probability to drop one timestep
@@ -84,7 +82,7 @@ CHANNEL_DROP_PROB = 0.0  # Probability to drop one AIA channel
 
 ACCELERATOR = "gpu"
 DEVICES = 1
-GPU_ID = 0  # Which GPU to use (0, 1, etc.)
+GPU_ID = 0  # Which GPU to use
 NUM_WORKERS = 24
 PIN_MEMORY = True
 PERSISTENT_WORKERS = True
@@ -100,16 +98,15 @@ TIMESERIES_ROOT = os.getenv(
     "ARCAFF_TIMESERIES_ROOT",
     os.path.join(DATA_FOLDER, "timeseries", "04_final", "data"),
 )
+
+# default file location train writes to (and eval reads from).
 MANIFEST_PATH = os.path.join(DATA_FOLDER, "timeseries_manifest.parquet")
 
-# Normalization-stat estimation controls
-NORM_STATS_MAX_SAMPLES = int(os.getenv("ARCAFF_TS_NORM_MAX_SAMPLES", "200"))
-NORM_STATS_MAX_TIMESTEPS = int(os.getenv("ARCAFF_TS_NORM_MAX_TIMESTEPS", str(NUM_TIMESTEPS)))
-NORM_STATS_MAX_PIXELS_PER_IMAGE = int(os.getenv("ARCAFF_TS_NORM_MAX_PIXELS_PER_IMAGE", "8192"))
-
-# Runtime/trainer stability controls
-PRECISION = os.getenv("ARCAFF_TS_PRECISION", "32-true")
-SAFE_GPU_MODE = os.getenv("ARCAFF_TS_SAFE_GPU_MODE", "true").strip().lower() in {"1", "true", "yes", "on"}
+NORM_STATS_MAX_SAMPLES = 200
+NORM_STATS_MAX_TIMESTEPS = NUM_TIMESTEPS
+NORM_STATS_MAX_PIXELS_PER_IMAGE = 8192
+PRECISION = "32-true"
+SAFE_GPU_MODE = True
 
 PROJECT_NAME = "arcaff-timeseries"
 ENABLE_COMET = True

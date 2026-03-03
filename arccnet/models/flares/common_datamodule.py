@@ -2,17 +2,16 @@
 
 from __future__ import annotations
 
-import os
 import logging
 from pathlib import Path
 
 import numpy as np
-import pandas as pd
 import pytorch_lightning as pl
 import torch
 from torch.utils.data import DataLoader, Dataset
 
 from arccnet.models import preprocessing_common as pp_common
+from arccnet.models.flares import split_cache_utils as cache_utils
 from arccnet.visualisation import utils as ut_v
 
 logger = logging.getLogger(__name__)
@@ -181,16 +180,10 @@ class FlareDataModule(pl.LightningDataModule):
             if self.split_cache_dir
             else (Path(self.data_folder) / "cache" / "flares" / "binary_classification")
         )
-        cache_name = str(self.split_cache_name)
-        return {
-            "train": split_dir / f"{cache_name}_train.parquet",
-            "val": split_dir / f"{cache_name}_val.parquet",
-            "test": split_dir / f"{cache_name}_test.parquet",
-        }
+        return cache_utils.build_split_cache_paths(cache_root=split_dir, cache_name=str(self.split_cache_name))
 
     def _split_files_exist(self):
-        paths = self._split_paths()
-        return all(path.exists() for path in paths.values())
+        return cache_utils.split_cache_exists(self._split_paths())
 
     def prepare_data(self):
         """Build and persist train/val/test splits once on rank zero."""
@@ -233,15 +226,7 @@ class FlareDataModule(pl.LightningDataModule):
 
         paths = self._split_paths()
         paths["train"].parent.mkdir(parents=True, exist_ok=True)
-        for split_name, split_df in (
-            ("train", train_df),
-            ("val", val_df),
-            ("test", test_df),
-        ):
-            final_path = paths[split_name]
-            tmp_path = Path(f"{final_path}.{os.getpid()}.tmp")
-            split_df.to_parquet(tmp_path, index=False)
-            os.replace(tmp_path, final_path)
+        cache_utils.write_split_parquets(train_df, val_df, test_df, paths)
         logger.info("Saved prepared splits to %s", paths["train"].parent)
 
     def _load_split_dataframes(self):
@@ -256,9 +241,7 @@ class FlareDataModule(pl.LightningDataModule):
                 f"Missing prepared split files. Expected prepare_data() to create them first. Missing: {missing_paths}"
             )
 
-        self.train_df = pd.read_parquet(paths["train"])
-        self.val_df = pd.read_parquet(paths["val"])
-        self.test_df = pd.read_parquet(paths["test"])
+        self.train_df, self.val_df, self.test_df = cache_utils.read_split_parquets(paths)
         logger.info(
             "Loaded prepared splits from disk. Shapes: Train=%s, Val=%s, Test=%s",
             self.train_df.shape,

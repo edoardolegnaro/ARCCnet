@@ -2,6 +2,7 @@ import os
 import time
 import random
 import socket
+import argparse
 
 import numpy as np
 import pandas as pd
@@ -15,6 +16,7 @@ from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
 import arccnet.visualisation.utils as ut
+from arccnet.models import comet_utils
 from arccnet.models import labels as lbs
 from arccnet.models import preprocessing_common as pp_common
 
@@ -45,6 +47,32 @@ def set_global_seed(seed: int, deterministic: bool = True) -> None:
             torch.use_deterministic_algorithms(True, warn_only=True)
         except Exception:
             pass
+
+
+def parse_bool_cli(value):
+    """
+    Parse CLI boolean values consistently across training scripts.
+
+    Accepts booleans and common string/int tokens:
+    true/t/yes/y/1 and false/f/no/n/0.
+    """
+    if isinstance(value, bool):
+        return value
+    normalized = str(value).strip().lower()
+    if normalized in {"true", "t", "yes", "y", "1"}:
+        return True
+    if normalized in {"false", "f", "no", "n", "0"}:
+        return False
+    raise argparse.ArgumentTypeError(f"Invalid boolean value: {value}")
+
+
+def safe_comet_call(comet_logger, logger, action: str, method_name: str, *args, **kwargs) -> bool:
+    """
+    Call a Comet experiment method safely so logging failures never crash training.
+
+    Returns True when the method exists and is called successfully, else False.
+    """
+    return comet_utils.safe_comet_call(comet_logger, logger, action, method_name, *args, **kwargs)
 
 
 class FITSDataset(Dataset):

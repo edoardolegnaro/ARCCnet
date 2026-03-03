@@ -17,7 +17,7 @@
 # %% [markdown]
 # # Timeseries Data EDA (Current Dataset Status)
 #
-# This notebook-style script focuses on the **current timeseries dataset status** and
+# This notebook focuses on the **current timeseries dataset status** and
 # the **current 3-class target setup**:
 #
 # - `No-flare`
@@ -30,9 +30,8 @@
 # - split-wise class balance checks
 # - path completeness and file-availability checks
 # - quick visual inspection of a representative sample
-
-import os
 # %%
+import os
 import ast
 import json
 from pathlib import Path
@@ -46,6 +45,7 @@ from astropy.io import fits
 from arccnet.models.timeseries import config as ts_config
 from arccnet.models.timeseries.manifest import build_dataset
 from arccnet.models.timeseries.splitters import get_split
+from arccnet.visualisation import utils as ut_v
 
 pd.set_option("display.max_columns", None)
 pd.set_option("display.max_colwidth", None)
@@ -272,7 +272,7 @@ TIMESERIES_ROOT = resolve_timeseries_root(DATA_FOLDER)
 MANIFEST_PATH = DATA_FOLDER / "timeseries_manifest.parquet"
 
 # Set to True when you want to force a rebuild from disk.
-REBUILD_MANIFEST = False
+REBUILD_MANIFEST = True
 MAX_SAMPLES = None
 
 print(f"Data folder:      {DATA_FOLDER}")
@@ -337,27 +337,57 @@ for key, value in summary.items():
 # ## 3. Class Balance (Current 3-Class Setup)
 
 # %%
-class_counts = df_eda["flare_class_name"].value_counts().reindex(CLASS_NAMES, fill_value=0)
-class_pct = class_counts / max(len(df_eda), 1) * 100.0
+class_order_3 = ["No-flare", "C", "M+"]
+class_counts_3 = df_eda["flare_class_name"].value_counts().reindex(class_order_3, fill_value=0)
+class_colors_3 = [CLASS_COLORS.get(name, "#4C78A8") for name in class_order_3]
+
+ut_v.make_classes_histogram(
+    df_eda["flare_class_name"],
+    figsz=(8, 5),
+    y_off=10,
+    ylim=class_counts_3.max() * 1.1,
+    fontsize=11,
+    title="Class Counts (No-flare / C / M+)",
+    ylabel="Samples",
+    categories=class_order_3,
+)
+plt.show()
+
+# Define class_colors for use in later plots (temporal coverage, etc.)
 class_colors = [CLASS_COLORS.get(name, "#4C78A8") for name in CLASS_NAMES]
 
-fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+# %% [markdown]
+# ## 3b. Class Balance (4-Class View: No-flare / C / M / X)
 
-axes[0].bar(CLASS_NAMES, class_counts.values, color=class_colors, edgecolor="black", linewidth=0.8)
-axes[0].set_title("Class Counts (No-flare / C / M+)")
-axes[0].set_ylabel("Samples")
-axes[0].grid(True, axis="y", alpha=0.25)
-annotate_bars(axes[0], class_counts.values)
 
-axes[1].bar(CLASS_NAMES, class_pct.values, color=class_colors, edgecolor="black", linewidth=0.8)
-axes[1].set_title("Class Percentages")
-axes[1].set_ylabel("Percent of dataset")
-axes[1].set_ylim(0, max(class_pct.values.max() * 1.2, 5))
-axes[1].grid(True, axis="y", alpha=0.25)
-for idx, value in enumerate(class_pct.values):
-    axes[1].text(idx, value + 0.5, f"{value:.1f}%", ha="center", va="bottom", fontsize=9)
+# %%
+def map_4class_label(row):
+    """Map per-sample flare counts into 4-class target labels."""
+    if row.get("xa", 0) > 0:
+        return "X"
+    if row.get("ma", 0) > 0:
+        return "M"
+    if row.get("ca", 0) > 0:
+        return "C"
+    return "No-flare"
 
-plt.tight_layout()
+
+df_eda["flare_class_name_4"] = df_eda.apply(map_4class_label, axis=1)
+
+class_order_4 = ["No-flare", "C", "M", "X"]
+class_counts_4 = df_eda["flare_class_name_4"].value_counts().reindex(class_order_4, fill_value=0)
+class_colors_4 = [CLASS_COLORS.get(name, "#4C78A8") for name in class_order_4]
+
+ut_v.make_classes_histogram(
+    df_eda["flare_class_name_4"],
+    figsz=(8, 5),
+    y_off=10,
+    ylim=class_counts_4.max() * 1.1,
+    fontsize=11,
+    title="Class Counts (No-flare / C / M / X)",
+    ylabel="Samples",
+    categories=class_order_4,
+)
 plt.show()
 
 # %% [markdown]
@@ -416,7 +446,10 @@ for y in range(heatmap.shape[0]):
     for x in range(heatmap.shape[1]):
         value = int(heatmap.values[y, x])
         if value > 0:
-            ax.text(x, y, str(value), ha="center", va="center", fontsize=8, color="black")
+            rgba = im.cmap(im.norm(value))
+            luminance = 0.2126 * rgba[0] + 0.7152 * rgba[1] + 0.0722 * rgba[2]
+            text_color = "black" if luminance > 0.5 else "white"
+            ax.text(x, y, str(value), ha="center", va="center", fontsize=8, color=text_color)
 
 plt.colorbar(im, ax=ax, label="Samples")
 plt.tight_layout()
@@ -661,6 +694,8 @@ if viz_row is not None and 171 in ts_config.CHANNEL_ORDER:
 # ## 9. Compact Status Summary
 
 # %%
+class_counts = df_eda["flare_class_name"].value_counts().reindex(CLASS_NAMES, fill_value=0)
+
 print("=" * 72)
 print("TIMESERIES DATASET STATUS SUMMARY")
 print("=" * 72)

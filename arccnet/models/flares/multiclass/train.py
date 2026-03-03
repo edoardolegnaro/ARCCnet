@@ -1,15 +1,9 @@
 """Training entrypoint for multiclass flare classification."""
 
-from __future__ import annotations
-
 import os
-import re
-import json
-import random
 import logging
 from typing import Any
 from pathlib import Path
-from contextlib import contextmanager
 
 # Import comet_ml before torch/pytorch-lightning for automatic instrumentation.
 try:
@@ -30,6 +24,8 @@ from sklearn.utils.class_weight import compute_class_weight
 from arccnet.models import preprocessing_common as pp_common
 from arccnet.models.checkpoint_manager import MulticlassFlareCheckpointManager
 from arccnet.models.flares import preprocessing
+from arccnet.models.flares import split_cache_utils as cache_utils
+from arccnet.models.flares import train_runtime_utils as tr_common
 from arccnet.models.flares import utils as flare_utils
 from arccnet.models.flares.multiclass import config
 from arccnet.models.flares.multiclass.datamodule import FlareDataModule
@@ -40,207 +36,23 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 
-class CometModelCheckpointCallback(Callback):
-    """Log a new best checkpoint artifact to Comet."""
-
-    def __init__(self, comet_logger: CometLogger) -> None:
-        super().__init__()
-        self.comet_logger = comet_logger
-        self._last_logged_best_path: str | None = None
-
-    def on_validation_end(self, trainer: pl.Trainer, pl_module: pl.LightningModule) -> None:
-        checkpoint_callback = getattr(trainer, "checkpoint_callback", None)
-        best_path = getattr(checkpoint_callback, "best_model_path", None)
-        if not best_path or not os.path.exists(best_path):
-            return
-        if best_path == self._last_logged_best_path:
-            return
-
-        logged = _safe_comet_call(
-            self.comet_logger,
-            "model logging",
-            "log_model",
-            "best_model",
-            best_path,
-            overwrite=True,
-        )
-        if logged:
-            self._last_logged_best_path = best_path
-
-
-def _safe_comet_call(comet_logger: CometLogger | None, action: str, fn: str, *args: Any, **kwargs: Any) -> bool:
-    """Call Comet experiment methods safely without interrupting training."""
-    if comet_logger is None:
-        return False
-    experiment = getattr(comet_logger, "experiment", None)
-    if experiment is None:
-        return False
-    method = getattr(experiment, fn, None)
-    if method is None:
-        return False
-    try:
-        method(*args, **kwargs)
-        return True
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Comet %s failed: %s", action, exc)
-        return False
-
-
-def _extract_uppercase_config_values() -> dict[str, Any]:
-    """Collect explicit module-level config constants."""
-    return {
-        key: value
-        for key, value in vars(config).items()
-        if key.isupper() and not key.startswith("_") and not callable(value)
-    }
-
-
-def _flatten_dict(data: dict[str, Any], prefix: str = "") -> dict[str, Any]:
-    """Flatten nested dictionaries for Comet parameter logging."""
-    flat: dict[str, Any] = {}
-    for key, value in data.items():
-        flat_key = f"{prefix}.{key}" if prefix else str(key)
-        if isinstance(value, dict):
-            flat.update(_flatten_dict(value, prefix=flat_key))
-        elif isinstance(value, (list, tuple, set)):
-            flat[flat_key] = ",".join(map(str, value))
-        else:
-            flat[flat_key] = value
-    return flat
-
-
-def _set_deterministic_seed(seed: int) -> None:
-    """Set deterministic random seeds across Python, NumPy, Torch, and Lightning."""
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
-    if hasattr(torch.backends, "cudnn"):
-        torch.backends.cudnn.benchmark = False
-        torch.backends.cudnn.deterministic = True
-    pl.seed_everything(seed, workers=True)
-    logger.info("Global seed set to %d.", seed)
-
-
-def resolve_trainer_runtime() -> dict[str, Any]:
-    """Validate runtime device availability and return Trainer settings."""
-    runtime = {
-        "accelerator": getattr(config, "ACCELERATOR", "auto"),
-        "devices": getattr(config, "DEVICES", "auto"),
-        "precision": getattr(config, "PRECISION", "16-mixed"),
-    }
-
-    accel = str(runtime["accelerator"]).lower()
-
-    if accel in {"gpu", "cuda"}:
-        if not torch.cuda.is_available() or torch.cuda.device_count() < 1:
-            raise RuntimeError("GPU/CUDA was requested but no CUDA device is available.")
-        torch.cuda.get_device_capability(0)
-        logger.info(
-            "CUDA runtime ready. Visible devices: %d. Primary device: %s",
-            torch.cuda.device_count(),
-            torch.cuda.get_device_name(0),
-        )
-
-    if accel == "auto":
-        if torch.cuda.is_available() and torch.cuda.device_count() > 0:
-            runtime["accelerator"] = "gpu"
-            logger.info(
-                "Auto accelerator selected GPU. Visible devices: %d. Primary device: %s",
-                torch.cuda.device_count(),
-                torch.cuda.get_device_name(0),
-            )
-        else:
-            runtime["accelerator"] = "cpu"
-            runtime["devices"] = 1
-            runtime["precision"] = "32-true"
-            logger.info("Auto accelerator selected CPU (CUDA unavailable).")
-
-    if str(runtime["accelerator"]).lower() == "cpu":
-        devices = runtime["devices"]
-        if devices == "auto":
-            runtime["devices"] = 1
-        elif isinstance(devices, int):
-            runtime["devices"] = max(1, devices)
-        elif isinstance(devices, (list, tuple)):
-            runtime["devices"] = max(1, len(devices))
-        else:
-            runtime["devices"] = 1
-
-        if str(runtime["precision"]).endswith("16-mixed"):
-            logger.warning("Mixed precision is not supported on CPU. Falling back to 32-true precision.")
-            runtime["precision"] = "32-true"
-
-    return runtime
-
-
-def init_comet_logger() -> CometLogger | None:
-    """Initialize Comet logger when enabled."""
-    if not bool(getattr(config, "ENABLE_COMET_LOGGING", False)):
-        return None
-
-    if comet_ml is None:
-        logger.warning("Comet logging enabled but `comet_ml` is not installed. Continuing without Comet.")
-        return None
-
-    logger.info("Comet logging is enabled. Initializing CometLogger...")
-    common_kwargs = {"workspace": config.COMET_WORKSPACE}
-    api_key = os.getenv("COMET_API_KEY")
-    if api_key:
-        common_kwargs["api_key"] = api_key
-
-    try:
-        comet_logger = CometLogger(project=config.COMET_PROJECT_NAME, **common_kwargs)
-    except TypeError:
-        comet_logger = CometLogger(project_name=config.COMET_PROJECT_NAME, **common_kwargs)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Failed to initialize Comet logger: %s", exc)
-        return None
-
-    logger.info("CometLogger initialized.")
-    return comet_logger
-
-
-def _sanitize_cache_token(value: Any) -> str:
-    return str(value).replace("/", "_").replace(".", "_").replace(" ", "_")
-
-
 def build_split_cache_name() -> str:
     """Build deterministic split-cache key from data and preprocessing config."""
+    sanitize = cache_utils.sanitize_cache_token
     return (
-        f"{_sanitize_cache_token(config.FLARES_PARQ)}_{config.TARGET_COLUMN}"
+        f"{sanitize(config.FLARES_PARQ)}_{config.TARGET_COLUMN}"
         f"_seed{config.RANDOM_SEED}"
-        f"_test{_sanitize_cache_token(config.TEST_SIZE)}"
-        f"_val{_sanitize_cache_token(config.VAL_SIZE)}"
+        f"_test{sanitize(config.TEST_SIZE)}"
+        f"_val{sanitize(config.VAL_SIZE)}"
         f"_limb{int(bool(getattr(config, 'FILTER_SOLAR_LIMB', True)))}"
-        f"_lon{_sanitize_cache_token(getattr(config, 'MAX_LONGITUDE', 65.0))}"
+        f"_lon{sanitize(getattr(config, 'MAX_LONGITUDE', 65.0))}"
         f"_q{int(bool(getattr(config, 'APPLY_QUALITY_FILTER', True)))}"
         f"_p{int(bool(getattr(config, 'APPLY_PATH_FILTER', True)))}"
         f"_l{int(bool(getattr(config, 'APPLY_LONGITUDE_FILTER', False)))}"
         f"_n{int(bool(getattr(config, 'APPLY_NAN_FILTER', False)))}"
-        f"_nt{_sanitize_cache_token(getattr(config, 'NAN_THRESHOLD', 0.05))}"
-        f"_ds{_sanitize_cache_token(config.CUTOUT_DATASET_FOLDER)}"
+        f"_nt{sanitize(getattr(config, 'NAN_THRESHOLD', 0.05))}"
+        f"_ds{sanitize(config.CUTOUT_DATASET_FOLDER)}"
     )
-
-
-def split_cache_paths(cache_name: str) -> dict[str, Path]:
-    """Return split-cache file paths for train/val/test and metadata."""
-    split_cache_dir = getattr(config, "SPLIT_CACHE_DIR", None)
-    cache_root = (
-        Path(split_cache_dir) if split_cache_dir else (Path(config.DATA_FOLDER) / "cache" / "flares" / "multiclass")
-    )
-    return {
-        "train": cache_root / f"{cache_name}_train.parquet",
-        "val": cache_root / f"{cache_name}_val.parquet",
-        "test": cache_root / f"{cache_name}_test.parquet",
-        "meta": cache_root / f"{cache_name}_meta.json",
-    }
-
-
-def split_cache_exists(paths: dict[str, Path]) -> bool:
-    """Check whether all split-cache artifacts exist."""
-    return all(path.exists() for path in paths.values())
 
 
 def save_split_cache(
@@ -253,38 +65,27 @@ def save_split_cache(
     """Persist split dataframes and metadata atomically."""
     cache_root = paths["train"].parent
     cache_root.mkdir(parents=True, exist_ok=True)
-
-    for split_name, split_df in (("train", train_df), ("val", val_df), ("test", test_df)):
-        final_path = paths[split_name]
-        tmp_path = Path(f"{final_path}.{os.getpid()}.tmp")
-        split_df.to_parquet(tmp_path, index=False)
-        os.replace(tmp_path, final_path)
+    cache_utils.write_split_parquets(train_df, val_df, test_df, paths)
 
     metadata = {
         "class_names": class_names,
         "target_column": config.TARGET_COLUMN,
         "cache_name": build_split_cache_name(),
     }
-    tmp_meta = Path(f"{paths['meta']}.{os.getpid()}.tmp")
-    with open(tmp_meta, "w") as handle:
-        json.dump(metadata, handle, indent=2)
-    os.replace(tmp_meta, paths["meta"])
+    cache_utils.atomic_write_json(metadata, paths["meta"])
 
     logger.info("Saved multiclass split cache to: %s", cache_root)
 
 
 def load_split_cache(paths: dict[str, Path]) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, list[str]]:
     """Load split dataframes and class names from split cache."""
-    with open(paths["meta"]) as handle:
-        metadata = json.load(handle)
+    metadata = cache_utils.read_json(paths["meta"])
 
     class_names = metadata.get("class_names")
     if not isinstance(class_names, list) or not class_names:
         raise ValueError(f"Invalid class_names in split cache metadata: {paths['meta']}")
 
-    train_df = pd.read_parquet(paths["train"])
-    val_df = pd.read_parquet(paths["val"])
-    test_df = pd.read_parquet(paths["test"])
+    train_df, val_df, test_df = cache_utils.read_split_parquets(paths)
 
     if train_df.empty or val_df.empty or test_df.empty:
         raise ValueError(
@@ -483,9 +284,13 @@ def prepare_multiclass_splits() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFram
 def get_or_prepare_splits() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, list[str]]:
     """Load cached splits when available, otherwise build and cache them."""
     cache_name = build_split_cache_name()
-    cache_paths = split_cache_paths(cache_name)
+    split_cache_dir = getattr(config, "SPLIT_CACHE_DIR", None)
+    cache_root = (
+        Path(split_cache_dir) if split_cache_dir else (Path(config.DATA_FOLDER) / "cache" / "flares" / "multiclass")
+    )
+    cache_paths = cache_utils.build_split_cache_paths(cache_root=cache_root, cache_name=cache_name, include_meta=True)
 
-    if split_cache_exists(cache_paths):
+    if cache_utils.split_cache_exists(cache_paths):
         logger.info("Detected existing multiclass split cache. Loading from %s", cache_paths["train"].parent)
         try:
             return load_split_cache(cache_paths)
@@ -544,9 +349,30 @@ def log_dataset_histograms(
         val_count = int(val_counts.get(class_idx, 0))
         test_count = int(test_counts.get(class_idx, 0))
 
-        _safe_comet_call(comet_logger, "metric logging", "log_metric", f"dataset_count_train_{class_name}", train_count)
-        _safe_comet_call(comet_logger, "metric logging", "log_metric", f"dataset_count_val_{class_name}", val_count)
-        _safe_comet_call(comet_logger, "metric logging", "log_metric", f"dataset_count_test_{class_name}", test_count)
+        tr_common.safe_comet_call(
+            comet_logger,
+            logger,
+            "metric logging",
+            "log_metric",
+            f"dataset_count_train_{class_name}",
+            train_count,
+        )
+        tr_common.safe_comet_call(
+            comet_logger,
+            logger,
+            "metric logging",
+            "log_metric",
+            f"dataset_count_val_{class_name}",
+            val_count,
+        )
+        tr_common.safe_comet_call(
+            comet_logger,
+            logger,
+            "metric logging",
+            "log_metric",
+            f"dataset_count_test_{class_name}",
+            test_count,
+        )
 
     class_indices = list(range(len(class_names)))
     train_values = [int(train_counts.get(i, 0)) for i in class_indices]
@@ -566,7 +392,7 @@ def log_dataset_histograms(
     for axis in axes:
         axis.set_ylabel("Count")
     plt.tight_layout()
-    _safe_comet_call(comet_logger, "figure logging", "log_figure", "dataset_distributions", fig)
+    tr_common.safe_comet_call(comet_logger, logger, "figure logging", "log_figure", "dataset_distributions", fig)
     plt.close(fig)
 
 
@@ -623,84 +449,11 @@ def _dataset_metadata(
     return metadata
 
 
-def _single_device_for_eval(devices: Any) -> Any:
-    """Choose single-device trainer configuration for exact final evaluation."""
-    if isinstance(devices, (list, tuple)) and len(devices) > 0:
-        return [devices[0]]
-    return 1
-
-
-def _is_distributed_initialized() -> bool:
-    """Check torch.distributed initialization state."""
-    return torch.distributed.is_available() and torch.distributed.is_initialized()
-
-
-def _barrier_if_distributed(trainer: pl.Trainer) -> None:
-    """Synchronize all ranks when running distributed training."""
-    if getattr(trainer, "world_size", 1) > 1:
-        trainer.strategy.barrier()
-
-
-@contextmanager
-def _single_process_env():
-    """Temporarily clear distributed env vars for isolated single-process evaluation."""
-    dist_keys = (
-        "LOCAL_RANK",
-        "RANK",
-        "WORLD_SIZE",
-        "NODE_RANK",
-        "GROUP_RANK",
-        "ROLE_RANK",
-    )
-    saved = {key: os.environ.get(key) for key in dist_keys}
-    for key in dist_keys:
-        os.environ.pop(key, None)
-    try:
-        yield
-    finally:
-        for key, value in saved.items():
-            if value is not None:
-                os.environ[key] = value
-
-
-def _extract_best_epoch(best_ckpt_path: str, checkpoint_payload: dict[str, Any]) -> int | None:
-    """Extract best epoch from checkpoint payload or checkpoint filename."""
-    epoch_value = checkpoint_payload.get("epoch")
-    if isinstance(epoch_value, (int, float)):
-        return int(epoch_value)
-
-    match = re.search(r"best-(\d+)-", os.path.basename(best_ckpt_path))
-    if match:
-        return int(match.group(1))
-    return None
-
-
-def _num_completed_fit_epochs(trainer: pl.Trainer) -> int:
-    """Return number of completed fit epochs."""
-    fit_loop = getattr(trainer, "fit_loop", None)
-    if fit_loop is not None:
-        epoch_progress = getattr(fit_loop, "epoch_progress", None)
-        if epoch_progress is not None:
-            current = getattr(epoch_progress, "current", None)
-            completed = getattr(current, "completed", None) if current is not None else None
-            if isinstance(completed, int):
-                return completed
-            if isinstance(completed, float):
-                return int(completed)
-
-    current_epoch = getattr(trainer, "current_epoch", 0)
-    if isinstance(current_epoch, int):
-        return max(current_epoch, 0)
-    if isinstance(current_epoch, float):
-        return max(int(current_epoch), 0)
-    return 0
-
-
 def main() -> None:
     """Train and evaluate multiclass flare model."""
-    _set_deterministic_seed(int(config.RANDOM_SEED))
+    tr_common.set_deterministic_seed(int(config.RANDOM_SEED), logger)
 
-    runtime = resolve_trainer_runtime()
+    runtime = tr_common.resolve_trainer_runtime(config, logger)
     use_pin_memory = bool(getattr(config, "PIN_MEMORY", True) and str(runtime["accelerator"]).lower() != "cpu")
     logger.info(
         "Trainer runtime config: accelerator=%s, devices=%s, precision=%s, pin_memory=%s",
@@ -747,11 +500,11 @@ def main() -> None:
         learning_rate=float(config.LEARNING_RATE),
     )
 
-    comet_logger = init_comet_logger()
+    comet_logger = tr_common.init_comet_logger(config, logger, comet_ml)
     dataset_metadata = _dataset_metadata(train_df, val_df, test_df, class_names)
-    run_parameters = _extract_uppercase_config_values()
+    run_parameters = tr_common.extract_uppercase_config_values(config)
     run_parameters.update(
-        _flatten_dict(
+        tr_common.flatten_dict(
             {
                 "runtime": runtime,
                 "dataset": dataset_metadata,
@@ -764,7 +517,7 @@ def main() -> None:
             }
         )
     )
-    _safe_comet_call(comet_logger, "parameter logging", "log_parameters", run_parameters)
+    tr_common.safe_comet_call(comet_logger, logger, "parameter logging", "log_parameters", run_parameters)
     log_dataset_histograms(train_df, val_df, test_df, class_names, comet_logger)
 
     checkpoint_manager = MulticlassFlareCheckpointManager(
@@ -773,7 +526,7 @@ def main() -> None:
         loss_function=config.LOSS_TYPE,
     )
     logger.info("Checkpoint directory: %s", checkpoint_manager.get_checkpoint_path())
-    checkpoint_manager.save_config(_extract_uppercase_config_values())
+    checkpoint_manager.save_config(tr_common.extract_uppercase_config_values(config))
     checkpoint_manager.training_metadata["class_names"] = class_names
 
     checkpoint_callback = checkpoint_manager.get_checkpoint_callback(
@@ -789,7 +542,12 @@ def main() -> None:
 
     callbacks: list[Callback] = [checkpoint_callback, early_stopping_callback]
     if comet_logger is not None:
-        callbacks.append(CometModelCheckpointCallback(comet_logger))
+        callbacks.append(
+            tr_common.CometModelCheckpointCallback(
+                comet_logger=comet_logger,
+                logger=logger,
+            )
+        )
 
     trainer = pl.Trainer(
         max_epochs=config.MAX_EPOCHS,
@@ -806,8 +564,8 @@ def main() -> None:
     trainer.fit(flare_model, datamodule=data_module)
     logger.info("Training finished.")
 
-    _barrier_if_distributed(trainer)
-    if _is_distributed_initialized():
+    tr_common.barrier_if_distributed(trainer)
+    if tr_common.is_distributed_initialized():
         torch.distributed.destroy_process_group()
 
     if trainer.global_rank != 0:
@@ -824,11 +582,11 @@ def main() -> None:
     if state_dict is None:
         raise KeyError(f"Missing 'state_dict' in checkpoint: {best_ckpt_path}")
     flare_model.load_state_dict(state_dict)
-    best_epoch = _extract_best_epoch(best_ckpt_path, best_checkpoint)
+    best_epoch = tr_common.extract_best_epoch(best_ckpt_path, best_checkpoint)
 
     logger.info("Starting single-device testing with best checkpoint weights...")
-    eval_devices = _single_device_for_eval(runtime["devices"])
-    with _single_process_env():
+    eval_devices = tr_common.single_device_for_eval(runtime["devices"])
+    with tr_common.single_process_env():
         eval_trainer = pl.Trainer(
             accelerator=runtime["accelerator"],
             devices=eval_devices,
@@ -842,13 +600,15 @@ def main() -> None:
     if test_results:
         for metric_name, metric_value in test_results[0].items():
             if isinstance(metric_value, (float, int)):
-                _safe_comet_call(comet_logger, "metric logging", "log_metric", metric_name, float(metric_value))
+                tr_common.safe_comet_call(
+                    comet_logger, logger, "metric logging", "log_metric", metric_name, float(metric_value)
+                )
 
     best_metric_value = None
     if checkpoint_callback.best_model_score is not None:
         best_metric_value = float(checkpoint_callback.best_model_score.item())
 
-    num_epochs_trained = _num_completed_fit_epochs(trainer)
+    num_epochs_trained = tr_common.num_completed_fit_epochs(trainer)
     early_stopping_triggered = bool(getattr(early_stopping_callback, "stopped_epoch", 0) > 0)
 
     training_metadata = {

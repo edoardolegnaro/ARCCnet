@@ -104,18 +104,6 @@ MIN_AVAILABLE_PATH_FRACTION = float(os.getenv("ARCAFF_TS_MIN_AVAILABLE_PATH_FRAC
 VALID_PRECISIONS = ("auto", "16-mixed", "bf16-mixed", "32-true", "64-true")
 
 
-def _str2bool(value):
-    """Robust argparse bool parser supporting True/False, 1/0, yes/no."""
-    if isinstance(value, bool):
-        return value
-    normalized = str(value).strip().lower()
-    if normalized in {"true", "t", "yes", "y", "1"}:
-        return True
-    if normalized in {"false", "f", "no", "n", "0"}:
-        return False
-    raise argparse.ArgumentTypeError(f"Invalid boolean value: {value}")
-
-
 def _resolve_data_root(data_root):
     """
     Resolve data root across legacy and namespaced layouts.
@@ -439,27 +427,6 @@ def _log_hyperparameters(loggers: list, hyperparams: dict) -> None:
             logger.warning("Could not log hyperparameters to %s: %s", type(active_logger).__name__, exc)
 
 
-def _safe_comet_call(comet_logger, action: str, method_name: str, *args, **kwargs):
-    """Call Comet experiment methods safely so logging issues never fail training."""
-    if comet_logger is None:
-        return False
-
-    experiment = getattr(comet_logger, "experiment", None)
-    if experiment is None:
-        return False
-
-    method = getattr(experiment, method_name, None)
-    if method is None:
-        return False
-
-    try:
-        method(*args, **kwargs)
-        return True
-    except Exception as exc:
-        logger.warning("Comet %s failed: %s", action, exc)
-        return False
-
-
 def _log_comet_artifacts(comet_logger, artifacts: list[Path]) -> None:
     """Upload run artifacts to Comet when available."""
     if comet_logger is None:
@@ -470,7 +437,9 @@ def _log_comet_artifacts(comet_logger, artifacts: list[Path]) -> None:
         path = Path(artifact_path)
         if not path.exists():
             continue
-        logged = _safe_comet_call(comet_logger, "asset logging", "log_asset", str(path), file_name=path.name)
+        logged = train_utils.safe_comet_call(
+            comet_logger, logger, "asset logging", "log_asset", str(path), file_name=path.name
+        )
         if logged:
             uploaded += 1
 
@@ -767,7 +736,9 @@ def main(args):
     if class_weights_computed is not None:
         run_hyperparams["class_weights"] = [float(weight) for weight in class_weights_computed]
     _log_hyperparameters(loggers, run_hyperparams)
-    _safe_comet_call(comet_logger, "tag logging", "add_tags", [task_type, split_strategy, "timeseries"])
+    train_utils.safe_comet_call(
+        comet_logger, logger, "tag logging", "add_tags", [task_type, split_strategy, "timeseries"]
+    )
 
     def _build_trainer():
         return pl.Trainer(
@@ -814,7 +785,7 @@ def main(args):
             if isinstance(metric_value, (int, float, np.floating)):
                 final_metrics[f"final_{metric_name.replace('/', '_')}"] = float(metric_value)
         if final_metrics:
-            _safe_comet_call(comet_logger, "final metric logging", "log_metrics", final_metrics)
+            train_utils.safe_comet_call(comet_logger, logger, "final metric logging", "log_metrics", final_metrics)
 
     # Save final results summary
     results = {
@@ -837,15 +808,18 @@ def main(args):
         json.dump(results, f, indent=2)
 
     if best_checkpoint.exists():
-        logged_model = _safe_comet_call(
+        logged_model = train_utils.safe_comet_call(
             comet_logger,
+            logger,
             "model logging",
             "log_model",
             name=f"timeseries_{task_type}_best",
             file_or_folder=str(best_checkpoint),
         )
         if not logged_model:
-            _safe_comet_call(comet_logger, "checkpoint asset logging", "log_asset", str(best_checkpoint))
+            train_utils.safe_comet_call(
+                comet_logger, logger, "checkpoint asset logging", "log_asset", str(best_checkpoint)
+            )
 
     run_artifacts = [
         manifest_path,
@@ -857,7 +831,7 @@ def main(args):
     if dropped_samples_path is not None:
         run_artifacts.append(dropped_samples_path)
     _log_comet_artifacts(comet_logger, artifacts=run_artifacts)
-    _safe_comet_call(comet_logger, "run finalization", "end")
+    train_utils.safe_comet_call(comet_logger, logger, "run finalization", "end")
 
     logger.info(f"Training complete! Results saved to {results_path}")
     logger.info(f"Best checkpoint: {best_checkpoint_path}")
@@ -921,7 +895,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--enable_comet",
-        type=_str2bool,
+        type=train_utils.parse_bool_cli,
         nargs="?",
         const=True,
         default=ENABLE_COMET,

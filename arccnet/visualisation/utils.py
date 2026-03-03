@@ -99,6 +99,7 @@ def make_classes_histogram(
     ax=None,
     save_path=None,
     transparent=False,
+    categories=None,
 ):
     """
     Creates and displays a bar chart (histogram) that visualizes the distribution of classes in a given pandas Series.
@@ -149,21 +150,30 @@ def make_classes_histogram(
         Default is None.
     - transparent (bool, optional):
         Whether to save the figure with a transparent background. Default is False.
+    - categories (list, optional):
+        Explicit list of categories in desired order. If provided, will use this order instead of sorting.
+        Default is None (will sort alphabetically).
     """
     # Determine the default y_off based on horizontal
     if y_off is None:
         y_off = 0.5 if horizontal else 300
 
     # Process class names and counts
-    # Filter out None and sort based on horizontal flag
-    classes_names = sorted(filter(lambda x: x is not None, series.unique()), reverse=horizontal)
-    if horizontal:
+    if categories is not None:
+        # Use provided categories in the given order
+        classes_names = [c for c in categories if c in series.unique()]
         counts = series.value_counts().reindex(classes_names, fill_value=0)
-        classes_names = counts.index.tolist()
         values = counts.values
     else:
-        classes_counts = series.value_counts().reindex(classes_names)
-        values = classes_counts.values
+        # Filter out None and sort based on horizontal flag (original behavior)
+        classes_names = sorted(filter(lambda x: x is not None, series.unique()), reverse=horizontal)
+        if horizontal:
+            counts = series.value_counts().reindex(classes_names, fill_value=0)
+            classes_names = counts.index.tolist()
+            values = counts.values
+        else:
+            classes_counts = series.value_counts().reindex(classes_names)
+            values = classes_counts.values
 
     total = np.sum(values)
     greek_labels = labels.convert_to_greek_label(classes_names)  # Ensure this is defined or imported

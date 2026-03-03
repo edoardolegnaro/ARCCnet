@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+from sklearn.model_selection import train_test_split
 
 
 def _build_split_dict(df, train_mask, val_mask, test_mask, strategy, metadata=None):
@@ -26,32 +27,113 @@ def _build_split_dict(df, train_mask, val_mask, test_mask, strategy, metadata=No
     return out
 
 
+def _can_stratify(labels):
+    """Return True when class counts support sklearn stratified splitting."""
+    if labels is None:
+        return False
+    labels = np.asarray(labels)
+    if labels.size == 0:
+        return False
+    unique, counts = np.unique(labels, return_counts=True)
+    return len(unique) > 1 and bool(np.all(counts >= 2))
+
+
+def _group_stratified_split(groups, strata, test_size, seed):
+    """
+    Split grouped identifiers with stratification fallback.
+
+    Parameters
+    ----------
+    groups : np.ndarray
+        Group identifiers to split.
+    strata : np.ndarray
+        Per-group stratification labels.
+    test_size : int | float
+        train_test_split test_size argument.
+    seed : int
+        Random seed.
+    """
+    stratify = strata if _can_stratify(strata) else None
+    try:
+        train_groups, test_groups, train_strata, test_strata = train_test_split(
+            groups,
+            strata,
+            test_size=test_size,
+            random_state=seed,
+            stratify=stratify,
+        )
+    except ValueError:
+        train_groups, test_groups, train_strata, test_strata = train_test_split(
+            groups,
+            strata,
+            test_size=test_size,
+            random_state=seed,
+            stratify=None,
+        )
+    return np.asarray(train_groups), np.asarray(test_groups), np.asarray(train_strata), np.asarray(test_strata)
+
+
 def split_by_noaa_group(df, train_frac=0.7, val_frac=0.15, seed=42):
     """
-    Split data by NOAA AR to reduce active-region identity leakage.
-    Ensures each NOAA AR appears in exactly one split.
+    Split data by NOAA AR with group-level class stratification.
+
+    This preserves active-region separation while approximately matching the
+    flare-class severity distribution across train/val/test by stratifying on
+    each NOAA AR's maximum `flare_class` value.
     """
     if "noaa_ar" not in df.columns:
         raise ValueError("Expected 'noaa_ar' column in manifest for NOAA split")
+    if "flare_class" not in df.columns:
+        raise ValueError("Expected 'flare_class' column in manifest for stratified NOAA split")
+    if train_frac <= 0 or val_frac <= 0 or train_frac + val_frac >= 1:
+        raise ValueError("Expected fractions with train_frac > 0, val_frac > 0, and train_frac + val_frac < 1")
 
-    rng = np.random.default_rng(seed)
-    unique_noaa = np.array(sorted(df["noaa_ar"].unique()))
+    group_severity = df.groupby("noaa_ar")["flare_class"].max().sort_index()
+    unique_noaa = group_severity.index.to_numpy()
+    group_strata = group_severity.to_numpy(dtype=np.int64)
+
     n_noaa = len(unique_noaa)
     if n_noaa == 0:
         raise ValueError("No NOAA AR values found in manifest")
+    if n_noaa < 3:
+        raise ValueError("Need at least 3 NOAA AR groups to create train/val/test splits")
 
-    perm = rng.permutation(unique_noaa)
-    n_train = int(n_noaa * train_frac)
-    n_val = int(n_noaa * val_frac)
-
-    # Keep at least one group for test when feasible.
+    holdout_frac = 1.0 - float(train_frac)
+    holdout_count = int(round(n_noaa * holdout_frac))
     if n_noaa >= 3:
-        n_train = min(max(n_train, 1), n_noaa - 2)
-        n_val = min(max(n_val, 1), n_noaa - n_train - 1)
+        holdout_count = min(max(holdout_count, 2), n_noaa - 1)
+    else:
+        holdout_count = max(1, n_noaa - 1)
 
-    train_noaa = set(perm[:n_train].tolist())
-    val_noaa = set(perm[n_train : n_train + n_val].tolist())
-    test_noaa = set(perm[n_train + n_val :].tolist())
+    train_noaa, holdout_noaa, _, holdout_strata = _group_stratified_split(
+        unique_noaa,
+        group_strata,
+        test_size=holdout_count,
+        seed=seed,
+    )
+
+    val_ratio_within_holdout = float(val_frac) / holdout_frac
+    val_count = int(round(len(holdout_noaa) * val_ratio_within_holdout))
+    if len(holdout_noaa) >= 2:
+        val_count = min(max(val_count, 1), len(holdout_noaa) - 1)
+    else:
+        val_count = len(holdout_noaa)
+    test_count = len(holdout_noaa) - val_count
+
+    if test_count > 0:
+        val_noaa, test_noaa, _, _ = _group_stratified_split(
+            holdout_noaa,
+            holdout_strata,
+            test_size=test_count,
+            seed=seed,
+        )
+    else:
+        val_noaa = holdout_noaa
+        test_noaa = np.asarray([], dtype=holdout_noaa.dtype)
+
+    train_noaa = set(np.asarray(train_noaa).tolist())
+    val_noaa = set(np.asarray(val_noaa).tolist())
+    test_noaa = set(np.asarray(test_noaa).tolist())
 
     train_mask = df["noaa_ar"].isin(train_noaa)
     val_mask = df["noaa_ar"].isin(val_noaa)
@@ -61,6 +143,7 @@ def split_by_noaa_group(df, train_frac=0.7, val_frac=0.15, seed=42):
         "train_noaa": sorted(train_noaa),
         "val_noaa": sorted(val_noaa),
         "test_noaa": sorted(test_noaa),
+        "stratified_by": "noaa_ar_max_flare_class",
     }
     return _build_split_dict(df, train_mask, val_mask, test_mask, strategy="noaa", metadata=metadata)
 

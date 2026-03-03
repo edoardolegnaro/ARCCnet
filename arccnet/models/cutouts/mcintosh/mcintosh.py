@@ -48,15 +48,8 @@ def _safe_experiment_call(experiment, action: str, method_name: str, *args, **kw
 
 
 def _str2bool(value):
-    """Robust argparse bool parser supporting True/False, 1/0, yes/no."""
-    if isinstance(value, bool):
-        return value
-    normalized = str(value).strip().lower()
-    if normalized in {"true", "t", "yes", "y", "1"}:
-        return True
-    if normalized in {"false", "f", "no", "n", "0"}:
-        return False
-    raise argparse.ArgumentTypeError(f"Invalid boolean value: {value}")
+    """Backwards-compatible wrapper around shared CLI bool parsing."""
+    return ut_t.parse_bool_cli(value)
 
 
 def main(args=None):

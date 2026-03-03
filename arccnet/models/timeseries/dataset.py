@@ -1,6 +1,4 @@
 import os
-import ast
-import json
 from pathlib import Path
 
 import numpy as np
@@ -19,6 +17,7 @@ from .config import (
     SEED,
     TASK_TYPE,
 )
+from .path_utils import parse_paths_grid
 
 
 class SDOTimeseriesDataset(Dataset):
@@ -79,6 +78,10 @@ class SDOTimeseriesDataset(Dataset):
         row = self.manifest.iloc[idx]
 
         paths = self._parse_paths(row["paths"])
+        if self.resize:
+            image_shape = (self.resize[0], self.resize[1])
+        else:
+            image_shape = (400, 800)
 
         timesteps = []
         timestep_mask = []
@@ -89,27 +92,18 @@ class SDOTimeseriesDataset(Dataset):
             has_valid_channel = False
             for c_path in t_paths[:NUM_CHANNELS]:
                 if c_path is None or c_path == "None":
-                    if self.resize:
-                        channels.append(np.zeros((self.resize[0], self.resize[1]), dtype=np.float32))
-                    else:
-                        channels.append(np.zeros((400, 800), dtype=np.float32))
+                    channels.append(np.zeros(image_shape, dtype=np.float32))
                 else:
                     img = self._load_fits(c_path)
                     channels.append(img)
                     has_valid_channel = True
             while len(channels) < NUM_CHANNELS:
-                if self.resize:
-                    channels.append(np.zeros((self.resize[0], self.resize[1]), dtype=np.float32))
-                else:
-                    channels.append(np.zeros((400, 800), dtype=np.float32))
+                channels.append(np.zeros(image_shape, dtype=np.float32))
             timesteps.append(np.stack(channels, axis=0))
             timestep_mask.append(bool(has_valid_channel))
 
         while len(timesteps) < self.expected_timesteps:
-            if self.resize:
-                blank = np.zeros((NUM_CHANNELS, self.resize[0], self.resize[1]), dtype=np.float32)
-            else:
-                blank = np.zeros((NUM_CHANNELS, 400, 800), dtype=np.float32)
+            blank = np.zeros((NUM_CHANNELS, image_shape[0], image_shape[1]), dtype=np.float32)
             timesteps.append(blank)
             timestep_mask.append(False)
 
@@ -146,23 +140,7 @@ class SDOTimeseriesDataset(Dataset):
 
     def _parse_paths(self, raw_paths):
         """Safely parse serialized path grids from manifest."""
-        if isinstance(raw_paths, str):
-            try:
-                parsed = json.loads(raw_paths)
-            except json.JSONDecodeError:
-                parsed = ast.literal_eval(raw_paths)
-        else:
-            parsed = raw_paths
-
-        if isinstance(parsed, np.ndarray):
-            parsed = parsed.tolist()
-
-        normalized = []
-        for t_paths in parsed:
-            if isinstance(t_paths, np.ndarray):
-                t_paths = t_paths.tolist()
-            normalized.append(list(t_paths))
-        return normalized
+        return parse_paths_grid(raw_paths)
 
     def _discover_processed_roots(self):
         """
@@ -359,12 +337,14 @@ class SDOTimeseriesDataset(Dataset):
 
     def _normalize(self, x):
         """Normalize each channel independently."""
-        T, C, H, W = x.shape
+        _, C, _, _ = x.shape
+        clip_lows = self.norm_stats.get("clip_low", [None] * C)
+        clip_highs = self.norm_stats.get("clip_high", [None] * C)
         for c in range(C):
             mean = self.norm_stats["mean"][c]
             std = self.norm_stats["std"][c]
-            clip_low = self.norm_stats.get("clip_low", [None] * C)[c]
-            clip_high = self.norm_stats.get("clip_high", [None] * C)[c]
+            clip_low = clip_lows[c]
+            clip_high = clip_highs[c]
 
             if clip_low is not None and clip_high is not None:
                 x[:, c] = torch.clamp(x[:, c], clip_low, clip_high)
@@ -374,7 +354,7 @@ class SDOTimeseriesDataset(Dataset):
 
     def _augment(self, x):
         """Apply spatial augmentations to all timesteps consistently."""
-        T, C, H, W = x.shape
+        num_timesteps = x.shape[0]
 
         if np.random.rand() < self.hflip_prob:
             x = torch.flip(x, dims=[3])
@@ -385,7 +365,7 @@ class SDOTimeseriesDataset(Dataset):
         if self.rotation_degrees > 0:
             angle = np.random.uniform(-self.rotation_degrees, self.rotation_degrees)
             x_aug = []
-            for t in range(T):
+            for t in range(num_timesteps):
                 x_t = TF.rotate(x[t], angle)
                 x_aug.append(x_t)
             x = torch.stack(x_aug, dim=0)

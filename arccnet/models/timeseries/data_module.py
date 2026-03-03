@@ -80,6 +80,17 @@ class FlareDataModule(pl.LightningDataModule):
         self.val_dataset = None
         self.test_dataset = None
 
+    def _make_dataloader(self, dataset, shuffle):
+        """Create a DataLoader with the module's common runtime options."""
+        return DataLoader(
+            dataset,
+            batch_size=self.batch_size,
+            shuffle=shuffle,
+            num_workers=self.num_workers,
+            pin_memory=PIN_MEMORY,
+            persistent_workers=PERSISTENT_WORKERS if self.num_workers > 0 else False,
+        )
+
     def setup(self, stage=None):
         """Setup datasets for each stage."""
         train_df = self.manifest_df[self.train_mask].reset_index(drop=True)
@@ -116,9 +127,6 @@ class FlareDataModule(pl.LightningDataModule):
             resize=self.resize,
             augment=False,
             norm_stats=self.norm_stats,
-            hflip_prob=self.hflip_prob,
-            vflip_prob=self.vflip_prob,
-            rotation_degrees=self.rotation_degrees,
         )
 
         self.test_dataset = SDOTimeseriesDataset(
@@ -128,40 +136,16 @@ class FlareDataModule(pl.LightningDataModule):
             resize=self.resize,
             augment=False,
             norm_stats=self.norm_stats,
-            hflip_prob=self.hflip_prob,
-            vflip_prob=self.vflip_prob,
-            rotation_degrees=self.rotation_degrees,
         )
 
     def train_dataloader(self):
         """Create training dataloader."""
-        return DataLoader(
-            self.train_dataset,
-            batch_size=self.batch_size,
-            shuffle=True,
-            num_workers=self.num_workers,
-            pin_memory=PIN_MEMORY,
-            persistent_workers=PERSISTENT_WORKERS if self.num_workers > 0 else False,
-        )
+        return self._make_dataloader(self.train_dataset, shuffle=True)
 
     def val_dataloader(self):
         """Create validation dataloader."""
-        return DataLoader(
-            self.val_dataset,
-            batch_size=self.batch_size,
-            shuffle=False,
-            num_workers=self.num_workers,
-            pin_memory=PIN_MEMORY,
-            persistent_workers=PERSISTENT_WORKERS if self.num_workers > 0 else False,
-        )
+        return self._make_dataloader(self.val_dataset, shuffle=False)
 
     def test_dataloader(self):
         """Create test dataloader."""
-        return DataLoader(
-            self.test_dataset,
-            batch_size=self.batch_size,
-            shuffle=False,
-            num_workers=self.num_workers,
-            pin_memory=PIN_MEMORY,
-            persistent_workers=PERSISTENT_WORKERS if self.num_workers > 0 else False,
-        )
+        return self._make_dataloader(self.test_dataset, shuffle=False)

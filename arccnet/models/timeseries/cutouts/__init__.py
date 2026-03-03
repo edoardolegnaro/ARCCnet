@@ -1,3 +1,0 @@
-"""
-AR Cutouts Models Training
-"""

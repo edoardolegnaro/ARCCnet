@@ -1,106 +1,19 @@
 """PyTorch Lightning module for timeseries flare forecasting."""
 
+import logging
+
 import numpy as np
 import pytorch_lightning as pl
 import torch
 import torch.nn as nn
-from sklearn.metrics import (
-    accuracy_score,
-    average_precision_score,
-    balanced_accuracy_score,
-    confusion_matrix,
-    mean_absolute_error,
-    mean_squared_error,
-    r2_score,
-    roc_auc_score,
-)
+from sklearn.metrics import accuracy_score, balanced_accuracy_score, confusion_matrix
 
 from .config import FLARE_CLASS_NAMES, NUM_CLASSES, REGRESSION_TARGETS
 from .flare_forecaster import FlareForecaster
 from .focal_loss import FocalLoss
+from .metrics import compute_binary_skill, compute_regression_metrics, get_operational_class_layout
 
-
-def _normalize_class_name(name):
-    """Normalize class-name strings for key generation and simple matching."""
-    normalized = str(name).strip().lower()
-    normalized = normalized.replace("+", "_plus")
-    normalized = normalized.replace("-", "_")
-    normalized = normalized.replace(" ", "_")
-    while "__" in normalized:
-        normalized = normalized.replace("__", "_")
-    return normalized.strip("_")
-
-
-def _class_semantic_tag(name):
-    """Map a class name into a coarse semantic bucket."""
-    normalized = _normalize_class_name(name)
-
-    if normalized.startswith("no_flare") or normalized in {"noflare", "quiet", "none"}:
-        return "no_flare"
-    if "m_plus" in normalized or normalized in {"mplus"}:
-        return "m_plus"
-    if normalized.startswith("x"):
-        return "x"
-    if normalized.startswith("m"):
-        return "m"
-    if normalized.startswith("c"):
-        return "c"
-    return "other"
-
-
-def _get_operational_class_layout(num_classes, class_names=None):
-    """
-    Resolve class-index layout used for M+/X+ operational metrics.
-
-    Supported multiclass layouts:
-    - 3-class: [No-flare, C, M+]
-    - 4-class: [No-flare, C, M, X]
-    - Legacy 3-class fallback: [C, M, X]
-    """
-    if class_names is not None and len(class_names) == num_classes:
-        tags = [_class_semantic_tag(name) for name in class_names]
-
-        c_index = next((idx for idx, tag in enumerate(tags) if tag == "c"), None)
-        m_plus_direct_index = next((idx for idx, tag in enumerate(tags) if tag == "m_plus"), None)
-        x_index = next((idx for idx, tag in enumerate(tags) if tag == "x"), None)
-
-        if m_plus_direct_index is not None:
-            m_plus_indices = [m_plus_direct_index]
-        else:
-            m_plus_indices = [idx for idx, tag in enumerate(tags) if tag in {"m", "x"}]
-
-        if c_index is not None and m_plus_indices:
-            return {
-                "class_names": list(class_names),
-                "c_index": int(c_index),
-                "m_plus_indices": [int(idx) for idx in m_plus_indices],
-                "x_index": int(x_index) if x_index is not None else None,
-            }
-
-    if num_classes == 4:
-        return {
-            "class_names": ["No-flare", "C", "M", "X"],
-            "c_index": 1,
-            "m_plus_indices": [2, 3],
-            "x_index": 3,
-        }
-    if num_classes == 3:
-        return {
-            "class_names": ["C", "M", "X"],
-            "c_index": 0,
-            "m_plus_indices": [1, 2],
-            "x_index": 2,
-        }
-
-    # Fallback: assume classes are ordered by severity and last label is X-like.
-    m_index = max(0, num_classes - 2)
-    x_index = max(0, num_classes - 1)
-    return {
-        "class_names": [f"Class_{idx}" for idx in range(num_classes)],
-        "c_index": max(0, num_classes - 3),
-        "m_plus_indices": sorted(set([m_index, x_index])),
-        "x_index": x_index,
-    }
+logger = logging.getLogger(__name__)
 
 
 class FlareForecasterLightning(pl.LightningModule):
@@ -192,6 +105,63 @@ class FlareForecasterLightning(pl.LightningModule):
         """Forward pass."""
         return self.model(x, mask=mask)
 
+    def _iter_active_loggers(self):
+        """Yield active loggers attached to this module/trainer."""
+        try:
+            active_loggers = list(getattr(self, "loggers", []) or [])
+        except Exception:
+            active_loggers = []
+
+        if active_loggers:
+            for active_logger in active_loggers:
+                if active_logger is not None:
+                    yield active_logger
+            return
+
+        single_logger = getattr(self, "logger", None)
+        if single_logger is None:
+            return
+        if isinstance(single_logger, (list, tuple)):
+            for active_logger in single_logger:
+                if active_logger is not None:
+                    yield active_logger
+            return
+        yield single_logger
+
+    def _log_confusion_matrix_to_comet(self, y_true, y_pred, split_name="test"):
+        """Log confusion matrix to any attached Comet logger."""
+        if self.task_type != "multiclass":
+            return
+
+        trainer = getattr(self, "trainer", None)
+        if trainer is not None and not bool(getattr(trainer, "is_global_zero", True)):
+            return
+
+        y_true = np.asarray(y_true, dtype=np.int64)
+        y_pred = np.asarray(y_pred, dtype=np.int64)
+        if y_true.size == 0:
+            return
+
+        num_classes = int(max(np.max(y_true), np.max(y_pred)) + 1)
+        labels = list(self.flare_class_names)
+        if len(labels) != num_classes:
+            labels = [f"class_{idx}" for idx in range(num_classes)]
+
+        for active_logger in self._iter_active_loggers():
+            experiment = getattr(active_logger, "experiment", None)
+            log_cm = getattr(experiment, "log_confusion_matrix", None) if experiment is not None else None
+            if log_cm is None:
+                continue
+            try:
+                log_cm(
+                    y_true=y_true.tolist(),
+                    y_predicted=y_pred.tolist(),
+                    labels=labels,
+                    title=f"{split_name.capitalize()} Confusion Matrix",
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Could not log %s confusion matrix to Comet: %s", split_name, exc)
+
     def training_step(self, batch, batch_idx):
         """Training step."""
         x = batch["x"]
@@ -210,6 +180,18 @@ class FlareForecasterLightning(pl.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         """Validation step."""
+        return self._shared_eval_step(batch, self.validation_step_outputs)
+
+    @staticmethod
+    def _collect_epoch_outputs(step_outputs):
+        """Aggregate per-step outputs into epoch-level tensors/arrays."""
+        avg_loss = torch.stack([item["loss"] for item in step_outputs]).mean()
+        all_preds = torch.cat([item["preds"] for item in step_outputs]).cpu().numpy()
+        all_targets = torch.cat([item["targets"] for item in step_outputs]).cpu().numpy()
+        return avg_loss, all_preds, all_targets
+
+    def _shared_eval_step(self, batch, output_store):
+        """Shared validation/test step logic."""
         x = batch["x"]
         y = batch["y"]
         mask = batch.get("mask")
@@ -217,10 +199,7 @@ class FlareForecasterLightning(pl.LightningModule):
             mask = mask.to(x.device)
         output = self(x, mask=mask)
         loss = self.criterion(output, y)
-
-        # Store predictions for metric computation
-        self.validation_step_outputs.append({"loss": loss, "preds": output.detach(), "targets": y.detach()})
-
+        output_store.append({"loss": loss, "preds": output.detach(), "targets": y.detach()})
         return loss
 
     def on_validation_epoch_end(self):
@@ -228,14 +207,7 @@ class FlareForecasterLightning(pl.LightningModule):
         if not self.validation_step_outputs:
             return
 
-        # Aggregate outputs
-        avg_loss = torch.stack([x["loss"] for x in self.validation_step_outputs]).mean()
-        all_preds = torch.cat([x["preds"] for x in self.validation_step_outputs])
-        all_targets = torch.cat([x["targets"] for x in self.validation_step_outputs])
-
-        # Move to CPU for sklearn metrics
-        all_preds = all_preds.cpu().numpy()
-        all_targets = all_targets.cpu().numpy()
+        avg_loss, all_preds, all_targets = self._collect_epoch_outputs(self.validation_step_outputs)
 
         # Compute task-specific metrics
         if self.task_type == "multiclass":
@@ -261,7 +233,7 @@ class FlareForecasterLightning(pl.LightningModule):
             metrics["m_plus_tss_fixed_050"] = fixed_metrics.get("m_plus_tss", 0.0)
             primary_metric = metrics.get("m_plus_tss", metrics["balanced_accuracy"])
         else:  # regression
-            metrics = self._compute_regression_metrics(all_targets, all_preds)
+            metrics = compute_regression_metrics(all_targets, all_preds)
             primary_metric = -metrics["rmse"]  # negative RMSE for maximization
 
         # Log metrics
@@ -277,32 +249,14 @@ class FlareForecasterLightning(pl.LightningModule):
 
     def test_step(self, batch, batch_idx):
         """Test step."""
-        x = batch["x"]
-        y = batch["y"]
-        mask = batch.get("mask")
-        if mask is not None:
-            mask = mask.to(x.device)
-        output = self(x, mask=mask)
-        loss = self.criterion(output, y)
-
-        # Store predictions for metric computation
-        self.test_step_outputs.append({"loss": loss, "preds": output.detach(), "targets": y.detach()})
-
-        return loss
+        return self._shared_eval_step(batch, self.test_step_outputs)
 
     def on_test_epoch_end(self):
         """Compute test metrics at the end of testing."""
         if not self.test_step_outputs:
             return
 
-        # Aggregate outputs
-        avg_loss = torch.stack([x["loss"] for x in self.test_step_outputs]).mean()
-        all_preds = torch.cat([x["preds"] for x in self.test_step_outputs])
-        all_targets = torch.cat([x["targets"] for x in self.test_step_outputs])
-
-        # Move to CPU for sklearn metrics
-        all_preds = all_preds.cpu().numpy()
-        all_targets = all_targets.cpu().numpy()
+        avg_loss, all_preds, all_targets = self._collect_epoch_outputs(self.test_step_outputs)
 
         # Compute task-specific metrics
         if self.task_type == "multiclass":
@@ -319,8 +273,15 @@ class FlareForecasterLightning(pl.LightningModule):
                 m_plus_threshold=0.5,
             )
             metrics["m_plus_tss_fixed_050"] = fixed_metrics.get("m_plus_tss", 0.0)
+            probs = torch.softmax(torch.from_numpy(np.asarray(all_preds, dtype=np.float32)), dim=1).numpy()
+            y_pred_class = np.argmax(probs, axis=1).astype(np.int64)
+            self._log_confusion_matrix_to_comet(
+                y_true=np.asarray(all_targets, dtype=np.int64),
+                y_pred=y_pred_class,
+                split_name="test",
+            )
         else:  # regression
-            metrics = self._compute_regression_metrics(all_targets, all_preds)
+            metrics = compute_regression_metrics(all_targets, all_preds)
 
         # Log metrics
         batch_size = len(all_targets)
@@ -359,7 +320,7 @@ class FlareForecasterLightning(pl.LightningModule):
 
         num_classes = int(probs.shape[1])
         all_classes = list(range(num_classes))
-        layout = _get_operational_class_layout(num_classes, class_names=self.flare_class_names)
+        layout = get_operational_class_layout(num_classes, class_names=self.flare_class_names)
 
         acc = accuracy_score(y_true, y_pred_class)
         bal_acc = balanced_accuracy_score(y_true, y_pred_class)
@@ -380,7 +341,7 @@ class FlareForecasterLightning(pl.LightningModule):
         m_plus_score = probs[:, m_plus_indices].sum(axis=1)
 
         for prefix, y_bin, y_score in [("m_plus", m_plus_true, m_plus_score)]:
-            skill = self._compute_binary_skill(y_bin, y_score, threshold=float(m_plus_threshold))
+            skill = compute_binary_skill(y_bin, y_score, threshold=float(m_plus_threshold))
             metrics[f"{prefix}_tss"] = skill["tss"]
             metrics[f"{prefix}_hss"] = skill["hss"]
             metrics[f"{prefix}_tpr"] = skill["tpr"]
@@ -392,7 +353,7 @@ class FlareForecasterLightning(pl.LightningModule):
         if x_index is not None:
             x_plus_true = (y_true == x_index).astype(int)
             x_plus_score = probs[:, x_index]
-            skill = self._compute_binary_skill(x_plus_true, x_plus_score, threshold=0.5)
+            skill = compute_binary_skill(x_plus_true, x_plus_score, threshold=0.5)
             metrics["x_plus_tss"] = skill["tss"]
             metrics["x_plus_hss"] = skill["hss"]
             metrics["x_plus_tpr"] = skill["tpr"]
@@ -410,7 +371,7 @@ class FlareForecasterLightning(pl.LightningModule):
         logits = np.asarray(y_pred, dtype=np.float32)
         probs = torch.softmax(torch.from_numpy(logits), dim=1).numpy()
 
-        layout = _get_operational_class_layout(int(probs.shape[1]), class_names=self.flare_class_names)
+        layout = get_operational_class_layout(int(probs.shape[1]), class_names=self.flare_class_names)
         m_plus_indices = layout["m_plus_indices"]
         m_plus_true = np.isin(y_true, m_plus_indices).astype(int)
         m_plus_score = probs[:, m_plus_indices].sum(axis=1)
@@ -436,7 +397,7 @@ class FlareForecasterLightning(pl.LightningModule):
         best_fpr = np.inf
 
         for threshold in thresholds:
-            skill = self._compute_binary_skill(y_true, y_score, threshold=float(threshold))
+            skill = compute_binary_skill(y_true, y_score, threshold=float(threshold))
             tss = skill["tss"]
             tpr = skill["tpr"]
             fpr = skill["fpr"]
@@ -451,72 +412,3 @@ class FlareForecasterLightning(pl.LightningModule):
                 best_threshold = float(threshold)
 
         return float(best_threshold)
-
-    @staticmethod
-    def _compute_binary_skill(y_true, y_score, threshold=0.5):
-        """Compute operational binary skill metrics from score outputs."""
-        y_true = np.asarray(y_true).astype(int)
-        y_pred = (np.asarray(y_score) >= threshold).astype(int)
-
-        tp = int(((y_true == 1) & (y_pred == 1)).sum())
-        tn = int(((y_true == 0) & (y_pred == 0)).sum())
-        fp = int(((y_true == 0) & (y_pred == 1)).sum())
-        fn = int(((y_true == 1) & (y_pred == 0)).sum())
-
-        tpr = tp / (tp + fn + 1e-8)
-        fpr = fp / (fp + tn + 1e-8)
-        tss = tpr - fpr
-
-        hss_num = 2.0 * (tp * tn - fp * fn)
-        hss_den = ((tp + fn) * (fn + tn)) + ((tp + fp) * (fp + tn)) + 1e-8
-        hss = hss_num / hss_den
-
-        if len(np.unique(y_true)) > 1:
-            roc_auc = float(roc_auc_score(y_true, y_score))
-            pr_auc = float(average_precision_score(y_true, y_score))
-        else:
-            roc_auc = None
-            pr_auc = None
-
-        return {
-            "tss": float(tss),
-            "hss": float(hss),
-            "tpr": float(tpr),
-            "fpr": float(fpr),
-            "roc_auc": roc_auc,
-            "pr_auc": pr_auc,
-        }
-
-    def _compute_regression_metrics(self, y_true, y_pred):
-        """Compute metrics for regression."""
-        mse = mean_squared_error(y_true, y_pred)
-        rmse = np.sqrt(mse)
-        mae = mean_absolute_error(y_true, y_pred)
-
-        # Per-target metrics
-        mse_per_target = ((y_true - y_pred) ** 2).mean(axis=0)
-        mae_per_target = np.abs(y_true - y_pred).mean(axis=0)
-
-        # R2 per target
-        r2_scores = []
-        for i in range(y_true.shape[1]):
-            try:
-                r2 = r2_score(y_true[:, i], y_pred[:, i])
-                r2_scores.append(float(r2))
-            except Exception:
-                r2_scores.append(0.0)
-
-        return {
-            "mse": float(mse),
-            "rmse": float(rmse),
-            "mae": float(mae),
-            "target_0_mse": float(mse_per_target[0]),
-            "target_1_mse": float(mse_per_target[1]),
-            "target_2_mse": float(mse_per_target[2]),
-            "target_0_mae": float(mae_per_target[0]),
-            "target_1_mae": float(mae_per_target[1]),
-            "target_2_mae": float(mae_per_target[2]),
-            "target_0_r2": r2_scores[0],
-            "target_1_r2": r2_scores[1],
-            "target_2_r2": r2_scores[2],
-        }

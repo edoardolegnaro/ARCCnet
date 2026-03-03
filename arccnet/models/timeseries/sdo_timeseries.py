@@ -5,6 +5,8 @@ from torch.utils.data import Dataset
 
 from astropy.io import fits
 
+from .path_utils import parse_paths_grid
+
 
 class SDOTimeseriesDataset(Dataset):
     """
@@ -55,7 +57,7 @@ class SDOTimeseriesDataset(Dataset):
     def __getitem__(self, idx):
         row = self.manifest.iloc[idx]
 
-        paths = eval(row["paths"]) if isinstance(row["paths"], str) else row["paths"]
+        paths = self._parse_paths(row["paths"])
 
         timesteps = []
         for t_paths in paths:
@@ -108,6 +110,11 @@ class SDOTimeseriesDataset(Dataset):
                 return np.zeros((self.resize[0], self.resize[1]), dtype=np.float32)
             return np.zeros((400, 800), dtype=np.float32)
 
+    @staticmethod
+    def _parse_paths(raw_paths):
+        """Safely parse serialized path grids from manifest rows."""
+        return parse_paths_grid(raw_paths)
+
     def _compute_norm_stats(self, max_samples=50):
         """Compute per-channel mean and std from subset of data."""
         num_channels = 10
@@ -120,7 +127,7 @@ class SDOTimeseriesDataset(Dataset):
             values = []
             for idx in sample_indices:
                 row = self.manifest.iloc[idx]
-                paths = eval(row["paths"]) if isinstance(row["paths"], str) else row["paths"]
+                paths = self._parse_paths(row["paths"])
 
                 for t_paths in paths[:2]:  # Sample first 2 timesteps
                     if t_paths[c] and t_paths[c] != "None":
