@@ -86,37 +86,6 @@ def analyze_quality_flags(df, instrument_name):
     )
 
 
-def create_solar_grid(ax, num_meridians=12, num_parallels=12, num_points=300):
-    """
-    Add meridian and parallel grid lines to a solar disc plot.
-
-    Parameters
-    ----------
-    ax : matplotlib.axes.Axes
-        Axes object for drawing grid lines.
-    num_meridians : int, optional
-        Number of longitude lines. Default 12.
-    num_parallels : int, optional
-        Number of latitude lines. Default 12.
-    num_points : int, optional
-        Points per grid line for smoothness. Default 300.
-    """
-    phis = np.linspace(0, 2 * np.pi, num_meridians, endpoint=False)
-    lats = np.linspace(-np.pi / 2, np.pi / 2, num_parallels)
-    theta = np.linspace(-np.pi / 2, np.pi / 2, num_points)
-
-    # Meridians
-    for phi in phis:
-        y, z = np.cos(theta) * np.sin(phi), np.sin(theta)
-        ax.plot(y, z, "k-", linewidth=0.2)
-
-    # Parallels
-    for lat in lats:
-        y = np.cos(lat) * np.sin(theta)
-        z = np.full(num_points, np.sin(lat))
-        ax.plot(y, z, "k-", linewidth=0.2)
-
-
 def analyze_nan_pattern(data, longitude):
     """
     Analyze NaN patterns considering longitude position.
