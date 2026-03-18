@@ -162,11 +162,19 @@ def plot_set_distributions(df, *, train_idxs, test_idxs, class_col):
 
 def plot_srs_coverage(processed_catalog, figsize=(6, 4), dpi=300):
     pcat_df = processed_catalog.to_pandas()
-    min_date = pcat_df.time.min()
-    max_date = pcat_df.time.max()
+    if "time" in pcat_df.columns:
+        time_col = "time"
+    elif "target_time" in pcat_df.columns:
+        time_col = "target_time"
+    else:
+        raise KeyError("Expected one of columns ['time', 'target_time'] in SRS processed catalog")
+
+    times = pd.to_datetime(pcat_df[time_col])
+    min_date = times.min()
+    max_date = times.max()
     srs_coverage = np.full((max_date.year - min_date.year + 1, 366), -1)
 
-    for g, v in pcat_df.groupby("time"):
+    for g, v in pcat_df.assign(_time=times).groupby("_time"):
         if str(v["path"].values[0]) == ".":
             val = 0
 

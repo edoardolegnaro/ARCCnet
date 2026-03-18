@@ -111,28 +111,73 @@ None
 from myst_nb import glue
 import datetime
 from pathlib import Path
+import matplotlib.pyplot as plt
 from arccnet.catalogs.active_regions.swpc import ClassificationCatalog
 from arccnet.visualisation.data import plot_srs_coverage, plot_srs_map, plot_filtered_srs_trace
 from arccnet import config
 
+plt.rcParams.update(
+  {
+    "font.size": 12,
+    "axes.titlesize": 13,
+    "axes.labelsize": 12,
+    "xtick.labelsize": 11,
+    "ytick.labelsize": 11,
+    "legend.fontsize": 10,
+  }
+)
+
 start_date = config["general"]["start_date"]
 end_date = config["general"]["end_date"]
-pcat = ClassificationCatalog.read(Path(config["paths"]["data_dir_processed"]) / "noaa_srs" / "srs_processed_catalog.parq")
+catalog_candidates = [
+    Path(config["paths"]["data_dir_processed"]) / "metadata" / "noaa_srs" / "srs_processed_catalog.parq",
+    Path(config["paths"]["data_dir_processed"]) / "noaa_srs" / "srs_processed_catalog.parq",
+    Path("/ARCAFF/data/arcnet-v20251017/03_processed/metadata/noaa_srs/srs_processed_catalog.parq"),
+]
+
+srs_catalog_file = next((candidate for candidate in catalog_candidates if candidate.exists()), None)
+if srs_catalog_file is None:
+    raise FileNotFoundError(
+        "Could not find srs_processed_catalog.parq in any expected location. Checked: "
+        + ", ".join(str(candidate) for candidate in catalog_candidates)
+    )
+
+pcat = ClassificationCatalog.read(srs_catalog_file)
 pcat_df = pcat.to_pandas()
-srs_coverage_fig, srs_coverage_ax = plot_srs_coverage(pcat)
+time_col = "time" if "time" in pcat_df.columns else "target_time"
+srs_coverage_fig, srs_coverage_ax = plot_srs_coverage(pcat, figsize=(10, 6), dpi=300)
+srs_coverage_ax.tick_params(labelsize=11)
+if len(srs_coverage_fig.axes) > 1:
+  srs_coverage_fig.axes[-1].tick_params(labelsize=10)
+srs_coverage_fig.tight_layout()
 glue("srs_coverage_fig", srs_coverage_fig, display=False)
 glue("start_date", str(start_date), display=False)
 glue("end_date", str(end_date), display=False)
-glue("srs_expected_no", len(pcat_df.time.unique()))
+glue("srs_expected_no", len(pcat_df[time_col].unique()))
 glue("srs_missing_no", pcat_df.url.isnull().sum())
 glue("srs_error_no",  len(pcat_df[pcat_df.loaded_successfully == False].path.unique()) - 1)
 glue("srs_good_no", len(pcat_df[pcat_df.loaded_successfully == True].url.unique()))
 
 
-srs_map_fig, srs_map_ax = plot_srs_map(pcat)
+srs_map_fig, srs_map_ax = plot_srs_map(pcat, figsize=(10, 8), dpi=300)
+srs_map_ax.set_title(srs_map_ax.get_title(), fontsize=13)
+if srs_map_ax.get_legend() is not None:
+  for text in srs_map_ax.get_legend().get_texts():
+    text.set_fontsize(10)
+srs_map_fig.tight_layout()
 glue("srs_map_fig", srs_map_fig, display=False)
 
-srs_trace_fig, srs_trace_ax = plot_filtered_srs_trace(pcat, numbers={13173: 'Ok', 7946: 'Bad Lon Rate', 8090: 'Bad Lat Rate', 8238: 'Bad Lon, Lat Rates'})
+srs_trace_fig, srs_trace_ax = plot_filtered_srs_trace(
+  pcat,
+  numbers={13173: 'Ok', 7946: 'Bad Lon Rate', 8090: 'Bad Lat Rate', 8238: 'Bad Lon, Lat Rates'},
+  figsize=(10, 8),
+  dpi=300,
+)
+srs_trace_ax.set_title(srs_trace_ax.get_title(), fontsize=13)
+if srs_trace_ax.get_legend() is not None:
+  for text in srs_trace_ax.get_legend().get_texts():
+    text.set_fontsize(10)
+srs_trace_fig.tight_layout()
 glue("srs_trace_fig", srs_trace_fig, display=False)
 
 
