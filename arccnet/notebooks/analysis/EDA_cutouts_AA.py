@@ -20,20 +20,21 @@
 
 from datetime import datetime
 from functools import partial
+import multiprocessing as mp
+import os
 
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
-from p_tqdm import p_map
+from tqdm.auto import tqdm
 
 from arccnet import load_config
 from arccnet.models import dataset_utils as ut_d
 from arccnet.models import preprocessing_common as pp_common
 from arccnet.notebooks.analysis.EDA_utils import (
     analyze_quality_flags,
-    create_solar_grid,
     load_and_analyze_fits_pair,
     process_row,
 )
@@ -43,15 +44,45 @@ pd.set_option("display.max_columns", None)
 pd.set_option("display.max_colwidth", None)
 config = load_config()
 
+# A&A figure policy: no background grids or colored/grey axes backgrounds,
+# unless the grid itself carries scientific information.
+AA_STYLE = {
+    "axes.facecolor": "white",
+    "figure.facecolor": "white",
+    "savefig.facecolor": "white",
+    "axes.grid": False,
+    "grid.alpha": 0.0,
+}
+
+sns.set_theme(context="paper", style="white", rc=AA_STYLE)
+plt.rcParams.update(AA_STYLE)
+
+
+def aa_clean_axes(*axes):
+    """Force white backgrounds and no decorative grid on publication figures."""
+    for ax in axes:
+        ax.set_facecolor("white")
+        ax.grid(False)
+        ax.figure.patch.set_facecolor("white")
+
+
+def aa_make_classes_histogram(*args, **kwargs):
+    """Local wrapper around the shared histogram helper with A&A-safe styling."""
+    kwargs.setdefault("style", "default")
+    ax = ut_v.make_classes_histogram(*args, **kwargs)
+    aa_clean_axes(ax)
+    return ax
+
 # %%
 data_folder = "/ARCAFF/data"
-dataset_folder = "arcnet-v20251017/04_final"
-df_file_name = "data/cutout_classification/region_classification.parq"
+dataset_folder = "arccnet-ar-classification-v20251016"
+df_file_name = "region_classification.parq"
 dataset_title = "arccnet v20251017"
+save_figures = True
 
 # %%
 df, _, filtered_ql_df = ut_d.make_dataframe(data_folder, dataset_folder, df_file_name)
-ut_v.make_classes_histogram(df["label"], figsz=(18, 6), text_fontsize=11, title=dataset_title)
+aa_make_classes_histogram(df["label"], figsz=(18, 6), text_fontsize=11, title=dataset_title)
 plt.show()
 df
 
@@ -136,15 +167,17 @@ AR_IA_lbs = ["Alpha", "Beta", "IA", "Beta-Gamma-Delta", "Beta-Gamma", "Beta-Delt
 AR_IA_df = df_clean[df_clean["label"].isin(AR_IA_lbs)].reset_index(drop=True)
 
 # %%
-ut_v.make_classes_histogram(AR_IA_df["label"], figsz=(12, 7), text_fontsize=11, title=f"{dataset_title} ARs", y_off=100)
+aa_make_classes_histogram(
+    AR_IA_df["label"], figsz=(12, 7), text_fontsize=12, title=f"Mount Wilson Classes Distribution", y_off=100, fontsize=13)
 plt.show()
 
 
 # %%
-def plot_histogram(ax, data, degree_ticks, title, color="#4C72B0"):
+def plot_histogram(ax, data, degree_ticks, title, color="#4C72B0", bin_width_deg=3):
     """Plot histogram with degree labels."""
     rad_ticks = np.deg2rad(degree_ticks)
-    ax.hist(data, bins=rad_ticks, color=color, edgecolor="black")
+    bin_edges = np.deg2rad(np.arange(degree_ticks.min(), degree_ticks.max() + bin_width_deg, bin_width_deg))
+    ax.hist(data, bins=bin_edges, color=color, edgecolor="black")
     ax.set_xticks(rad_ticks)
     ax.set_xticklabels([f"{deg}°" for deg in degree_ticks])
     ax.set_xlabel(f"{title} (degrees)")
@@ -157,10 +190,11 @@ latV = np.deg2rad(pp_common.select_latitude_series(AR_IA_df).to_numpy(dtype=np.f
 degree_ticks = np.arange(-90, 91, 15)
 
 # Plot histograms
-with plt.style.context("seaborn-v0_8-darkgrid"):
+with plt.style.context("default"):
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 6))
     plot_histogram(ax1, lonV, degree_ticks, "Longitude")
     plot_histogram(ax2, latV, degree_ticks, "Latitude")
+    aa_clean_axes(ax1, ax2)
     plt.tight_layout()
     plt.show()
 
@@ -175,7 +209,6 @@ zV = np.sin(latV)
 # Create solar disc visualization
 fig, ax = plt.subplots(figsize=(10, 10))
 ax.add_artist(plt.Circle((0, 0), 1, edgecolor="gray", facecolor="none"))
-create_solar_grid(ax)
 
 # Plot data points using masks
 front_mask, rear_mask = results["mask_front"], results["mask_rear"]
@@ -186,6 +219,7 @@ ax.scatter(yV[front_mask], zV[front_mask], s=1, alpha=0.2, color=mdi_color, labe
 ax.set(xlim=(-1.1, 1.1), ylim=(-1.1, 1.1), aspect="equal")
 ax.axis("off")
 ax.legend(fontsize=12)
+aa_clean_axes(ax)
 plt.show()
 
 # Print statistics
@@ -196,8 +230,8 @@ print(f"Rear ARs: {rear_count:,}")
 print(f"Front ARs: {front_count:,}")
 print(f"Percentage of rear ARs: {100 * rear_count / total_count:.2f}%")
 
-ut_v.make_classes_histogram(results["df_front"]["label"], title="Front ARs", y_off=10, figsz=(11, 5))
-ut_v.make_classes_histogram(results["df_rear"]["label"], title="Rear ARs", y_off=10, figsz=(11, 5))
+aa_make_classes_histogram(results["df_front"]["label"], title="Front ARs", y_off=10, figsz=(11, 5))
+aa_make_classes_histogram(results["df_rear"]["label"], title="Rear ARs", y_off=10, figsz=(11, 5))
 plt.show()
 
 # %% [markdown]
@@ -213,23 +247,24 @@ mdi_counts, hmi_counts = mdi_df["dates"].value_counts().sort_index(), hmi_df["da
 # Setup plot
 tick_dates = [datetime(year, 1, 1) for year in range(1996, 2025, 2)]
 
-with plt.style.context("seaborn-v0_8-darkgrid"):
+with plt.style.context("default"):
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(16, 9), sharex=True, gridspec_kw={"height_ratios": [4, 1]})
 
     # Top panel: Bar chart
     ax1.bar(mdi_counts.index, mdi_counts.values, width=0.8, color=mdi_color, alpha=0.9, label="MDI")
     ax1.bar(hmi_counts.index, hmi_counts.values, width=0.8, color=hmi_color, alpha=0.9, label="HMI")
-    ax1.set(ylabel="n° of ARs per day", ylim=[0, 20], yticks=np.arange(0, 20 + 2, 2))
+    ax1.set(ylim=[0, 20], yticks=np.arange(0, 22, 2))
+    ax1.set_ylabel("n° of ARs per day", fontsize=14)
     ax1.tick_params(axis="y", labelsize=14)
     ax1.legend(loc="upper left", fontsize=14)
-    ax1.grid(True, linestyle="--", alpha=0.5)
+    ax1.grid(False)
 
     # Bottom panel: Timeline
     for dates, color, y_range in zip([mdi_dates, hmi_dates], [mdi_color, hmi_color], [(0.2, 0.8), (1.2, 1.8)]):
         ax2.vlines(dates, *y_range, color=color, alpha=0.9, linewidth=0.5)
 
     ax2.set(ylim=[0, 2], yticks=[])
-    ax2.grid(True, linestyle="--", alpha=0.75)
+    ax2.grid(False)
 
     # X-axis formatting
     ax2.xaxis_date()
@@ -238,8 +273,11 @@ with plt.style.context("seaborn-v0_8-darkgrid"):
     ax2.set_xticks(tick_dates)
     plt.setp(ax2.get_xticklabels(), rotation=45, fontsize=14)
     ax2.set_xlabel("Time", fontsize=16)
+    aa_clean_axes(ax1, ax2)
 
     plt.tight_layout()
+    if save_figures:
+        fig.savefig("ar_timeline_AA.pdf", format="pdf", bbox_inches="tight")
     plt.show()
 
 # %% [markdown]
@@ -248,7 +286,7 @@ with plt.style.context("seaborn-v0_8-darkgrid"):
 # %%
 AR_df = df[df["magnetic_class"] != ""].copy()
 
-ut_v.make_classes_histogram(
+aa_make_classes_histogram(
     AR_df["mcintosh_class"],
     horizontal=True,
     figsz=(10, 18),
@@ -257,6 +295,8 @@ ut_v.make_classes_histogram(
     ylabel="Number of Active Regions",
     title="McIntosh Class Distribution",
     ylim=5900,
+    text_fontsize=13,
+    fontsize=13
 )
 plt.show()
 
@@ -275,7 +315,7 @@ params = [
 ]
 
 for component, figsz, title in params:
-    ut_v.make_classes_histogram(AR_df[component], y_off=50, figsz=figsz, title=title)
+    aa_make_classes_histogram(AR_df[component], y_off=50, figsz=figsz, title=title)
 # %%
 mappings = {
     # Merge D, E, F into LG (LargeGroup)
@@ -289,7 +329,7 @@ mappings = {
 # Apply mappings and plot
 for comp, mapping in mappings.items():
     AR_df[f"{comp}_grouped"] = AR_df[comp].map(mapping)
-    ut_v.make_classes_histogram(
+    aa_make_classes_histogram(
         AR_df[f"{comp}_grouped"],
         y_off=50,
         figsz={"Z_component": (8, 6), "p_component": (6, 6), "c_component": (5, 6)}[comp],
@@ -342,6 +382,7 @@ for ax, img_data, title, stats in zip(
     ax.set_title(f"{title}\nMean: {stats['mean']:.2f}, Std: {stats['std']:.2f}")
     ax.axis("off")
     plt.colorbar(im, ax=ax, shrink=0.8)
+    aa_clean_axes(ax)
 
 plt.tight_layout()
 plt.show()
@@ -361,7 +402,20 @@ print(f"{'Max':<12} {data['mag_stats']['max']:<12.2f} {data['cont_stats']['max']
 
 # %%
 process_row_fn = partial(process_row, df_clean=AR_IA_df, data_folder=data_folder, dataset_folder=dataset_folder)
-results = p_map(process_row_fn, range(len(AR_IA_df)))
+
+# Fork keeps the dataframe in shared copy-on-write memory on Linux and avoids
+# heavy serialization costs from sending it with each task.
+n_workers = min(14, os.cpu_count() or 1)
+chunk_size = 2048
+
+with mp.get_context("fork").Pool(processes=n_workers) as pool:
+    results = list(
+        tqdm(
+            pool.imap(process_row_fn, range(len(AR_IA_df)), chunksize=chunk_size),
+            total=len(AR_IA_df),
+            desc=f"FITS stats ({n_workers} workers)",
+        )
+    )
 
 # %%
 flat_stats = []
@@ -388,16 +442,6 @@ top10_rows
 
 # %%
 stats_config = [
-<<<<<<< Updated upstream
-    ("mag_mean", "Magnetogram Mean", "royalblue"),
-    ("mag_std", "Magnetogram Std Dev", "royalblue"),
-    ("mag_min", "Magnetogram Min", "royalblue"),
-    ("mag_max", "Magnetogram Max", "royalblue"),
-    ("cont_mean", "Continuum Mean", "tomato"),
-    ("cont_std", "Continuum Std Dev", "tomato"),
-    ("cont_min", "Continuum Min", "tomato"),
-    ("cont_max", "Continuum Max", "tomato"),
-=======
     ("mag_mean", "Magnetogram Mean", "royalblue", "Magnetic field [G]"),
     ("mag_std", "Magnetogram Std Dev", "royalblue", "Magnetic field [G]"),
     ("mag_min", "Magnetogram Min", "royalblue", "Magnetic field [G]"),
@@ -406,20 +450,20 @@ stats_config = [
     ("cont_std", "Continuum Std Dev", "tomato", "Continuum intensity"),
     ("cont_min", "Continuum Min", "tomato", "Continuum intensity"),
     ("cont_max", "Continuum Max", "tomato", "Continuum intensity"),
->>>>>>> Stashed changes
 ]
 
 # Create histograms
-fig, axes = plt.subplots(2, 4, figsize=(20, 8))
-for i, (col, title, color) in enumerate(stats_config):
+fig, axes = plt.subplots(2, 4, figsize=(20, 8), sharey=True)
+for i, (col, title, color, xlabel) in enumerate(stats_config):
     ax = axes.flat[i]
     ax.hist(stats_df[col], bins=50, color=color, alpha=0.7, edgecolor="black", linewidth=0.5, log=True)
     ax.set_title(title, fontsize=16, pad=12)
-    ax.set_xlabel("Value", fontsize=14)
+    ax.set_xlabel(xlabel, fontsize=16)
     if i % 4 == 0:  # First column gets y-label
-        ax.set_ylabel("Frequency", fontsize=14)
-    ax.grid(True, alpha=0.3)
-    ax.tick_params(labelsize=12)
+        ax.set_ylabel("Frequency (log scale)", fontsize=16)
+    ax.grid(False)
+    ax.tick_params(labelsize=14)
+    aa_clean_axes(ax)
 
 plt.tight_layout()
 plt.show()
@@ -432,14 +476,15 @@ all_labels = stats_df["label"].unique()
 # Create a custom color palette
 palette = {label: colors[i % len(colors)] for i, label in enumerate(all_labels)}
 
-for col, title, _ in stats_config:
+for col, title, _, _ in stats_config:
     fig, ax = plt.subplots(figsize=(14, 8))
     sns.boxplot(data=stats_df, x="label", y=col, hue="label", palette=palette, ax=ax, legend=False)
     ax.set_title(f"{title} by Active Region Class", fontsize=18)
     ax.tick_params(axis="x", rotation=45, labelsize=14)
     ax.set_xlabel("")
     ax.set_ylabel("Value", fontsize=16)
-    ax.grid(True, alpha=0.3)
+    ax.grid(False)
+    aa_clean_axes(ax)
     fig.autofmt_xdate(ha="right")
     plt.tight_layout()
     plt.show()
