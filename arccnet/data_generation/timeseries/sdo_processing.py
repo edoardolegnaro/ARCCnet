@@ -1208,8 +1208,9 @@ def l4_file_pack(aia_paths, hmi_paths, dir_path, rec, out_table, before_fls, aft
             Table containing log of flares occurring within the current run.
         after_fls : `AstropyTable`
             Table containing log of flares occurring within 24 hours of target time (end of run).
-        anim_path: `str`
-            The path to the mosaic animation of the current run.
+        anim_path: `str` or `None`
+            The path to the mosaic animation of the current run, or `None` if
+            animations are disabled.
     """
     base_path = Path(dir_path) / "data" / rec
     folder_hmi = base_path / "HMI"
@@ -1222,9 +1223,10 @@ def l4_file_pack(aia_paths, hmi_paths, dir_path, rec, out_table, before_fls, aft
     _link_files(aia_paths, folder_aia)
     _link_files(set(hmi_paths), folder_hmi)
 
-    anim_dst = base_path / Path(anim_path).name
-    anim_dst.unlink(missing_ok=True)
-    anim_dst.symlink_to(os.path.relpath(anim_path, start=base_path))
+    if anim_path is not None:
+        anim_dst = base_path / Path(anim_path).name
+        anim_dst.unlink(missing_ok=True)
+        anim_dst.symlink_to(os.path.relpath(anim_path, start=base_path))
 
     # Need to be real writes
     out_table.write(base_path / f"{rec}.csv", overwrite=True)

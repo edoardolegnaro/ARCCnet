@@ -54,8 +54,13 @@ if __name__ == "__main__":
     catalog_end_date = config["timeseries"].get("catalog_end_date", "2023-01-01")
     hek_file = config["timeseries"].get("hek_file", "hek_swpc_1996-01-01T00:00:00-2023-01-01T00:00:00_dev.parq")
     srs_file = config["timeseries"].get("srs_file", "srs_processed_catalog.parq")
-    # AIA wavelengths plus the HMI continuum frame per timestep.
-    expected_frames = (num_wavelengths + 1) * timesteps
+    resume = config["timeseries"].getboolean("resume", fallback=True)
+    make_animations = config["timeseries"].getboolean("make_animations", fallback=False)
+    final_root = f"{data_path}/04_final"
+    # Frames per timestep: EUV wavelengths from config, plus the 1600/1700 UV
+    # channels (hardcoded in aia_query_export) and the HMI continuum frame.
+    frames_per_step = num_wavelengths + 2 + 1
+    expected_frames = frames_per_step * timesteps
 
     starts, before_fl_tables, after_fl_tables = read_data(
         hek_path=Path(f"{data_path}/flare_files/{hek_file}"),
@@ -118,6 +123,11 @@ if __name__ == "__main__":
             file_name = (
                 f"{start_split}_{noaa_ar}_{mag_class}_{mcintosh}_Xb{b_x}_Mb{b_m}_Cb{b_c}_Xa{a_x}_Ma{a_m}_Ca{a_c}"
             )
+            # after_flares.parquet is the last artifact l4_file_pack writes, so its
+            # presence marks a fully generated sample.
+            if resume and (Path(final_root) / "data" / file_name / "after_flares.parquet").exists():
+                logging.info(f"Skipping already generated sample {file_name}")
+                continue
             patch_height = int(config["drms"]["patch_height"]) * u.pix
             patch_width = int(config["drms"]["patch_width"]) * u.pix
             try:
@@ -165,7 +175,7 @@ if __name__ == "__main__":
                     table_match(list(aia_patch_paths), list(hmi_patch_paths))
                 )
 
-                batched_name = f"{config['paths']['data_folder']}/04_final"
+                batched_name = final_root
                 Path(f"{batched_name}/records").mkdir(parents=True, exist_ok=True)
                 Path(f"{batched_name}/tars").mkdir(parents=True, exist_ok=True)
                 hmi_away = ["HMI/" + Path(file).name for file in hmi_patch_paths]
@@ -183,7 +193,7 @@ if __name__ == "__main__":
 
                 home_table.write(f"{batched_name}/records/{file_name}.csv", overwrite=True)
 
-                vid_path = vid_match(home_table, file_name, batched_name)
+                vid_path = vid_match(home_table, file_name, batched_name) if make_animations else None
                 l4_file_pack(
                     aia_patch_paths,
                     hmi_patch_paths,

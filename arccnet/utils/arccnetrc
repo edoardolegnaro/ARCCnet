@@ -62,6 +62,10 @@ samples_per_year = -1
 ; Required for radiometric consistency across the mission; without it the
 ; acquisition epoch is imprinted on image intensities.
 aia_degradation_correction = True
+; Skip samples whose 04_final output already exists (safe restart of long runs).
+resume = True
+; Render the per-sample mosaic animation (slow; disable for bulk generation).
+make_animations = False
 
 
 ;;;;;;;;;;;;;;;;
