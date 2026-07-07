@@ -1,9 +1,10 @@
 import logging
 from time import perf_counter
 from pathlib import Path
-from itertools import repeat
+from itertools import islice, repeat
+from collections import deque
 from multiprocessing import Semaphore
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 
 from aiapy import calibrate
 from tqdm import tqdm
@@ -110,38 +111,87 @@ if __name__ == "__main__":
                 "Set aia_degradation_correction = False in [timeseries] to skip correction."
             )
 
-    with ProcessPoolExecutor(cores) as executor:
-        for rec_num in range(len(starts)):
-            print(f" {rec_num}/{len(starts)} ".center(70, "!"))
-            record = starts[rec_num]
-            noaa_ar, mag_class, mcintosh, end, start, date, center = record
-            before_fls = before_fl_tables[rec_num]
-            after_fls = after_fl_tables[rec_num]
-            b_x, b_m, b_c = before_fls[1]["X"], before_fls[1]["M"], before_fls[1]["C"]
-            a_x, a_m, a_c = after_fls[1]["X"], after_fls[1]["M"], after_fls[1]["C"]
-            start_split = end.value.split("T")[0]
-            file_name = (
-                f"{start_split}_{noaa_ar}_{mag_class}_{mcintosh}_Xb{b_x}_Mb{b_m}_Cb{b_c}_Xa{a_x}_Ma{a_m}_Ca{a_c}"
+    download_workers = int(config["drms"].get("download_workers", 3))
+    patch_height = int(config["drms"]["patch_height"]) * u.pix
+    patch_width = int(config["drms"]["patch_width"]) * u.pix
+
+    def build_record_meta(rec_num):
+        """Collect the per-record fields needed for download and processing."""
+        record = starts[rec_num]
+        noaa_ar, mag_class, mcintosh, end, start, date, center = record
+        before_fls = before_fl_tables[rec_num]
+        after_fls = after_fl_tables[rec_num]
+        b_x, b_m, b_c = before_fls[1]["X"], before_fls[1]["M"], before_fls[1]["C"]
+        a_x, a_m, a_c = after_fls[1]["X"], after_fls[1]["M"], after_fls[1]["C"]
+        start_split = end.value.split("T")[0]
+        file_name = f"{start_split}_{noaa_ar}_{mag_class}_{mcintosh}_Xb{b_x}_Mb{b_m}_Cb{b_c}_Xa{a_x}_Ma{a_m}_Ca{a_c}"
+        return {
+            "noaa_ar": noaa_ar,
+            "start": start,
+            "end": end,
+            "date": date,
+            "center": center,
+            "before_fls": before_fls,
+            "after_fls": after_fls,
+            "file_name": file_name,
+        }
+
+    def download_record(meta):
+        """Runs in a download thread: JSOC queries, exports and L1 downloads for one record."""
+        try:
+            aia_maps, hmi_maps = drms_pipeline(
+                start_t=meta["start"],
+                end_t=meta["end"],
+                path=data_path,
+                hmi_keys=config["drms"]["hmi_keys"],
+                aia_keys=config["drms"]["aia_keys"],
+                wavelengths=wavelengths,
+                sample=config["drms"]["sample"],
+                drms_limit=drms_limit,
             )
-            # after_flares.parquet is the last artifact l4_file_pack writes, so its
-            # presence marks a fully generated sample.
-            if resume and (Path(final_root) / "data" / file_name / "after_flares.parquet").exists():
-                logging.info(f"Skipping already generated sample {file_name}")
+            return meta, aia_maps, hmi_maps, None
+        except Exception as error:
+            return meta, None, None, error
+
+    metas = []
+    for rec_num in range(len(starts)):
+        meta = build_record_meta(rec_num)
+        # after_flares.parquet is the last artifact l4_file_pack writes, so its
+        # presence marks a fully generated sample.
+        if resume and (Path(final_root) / "data" / meta["file_name"] / "after_flares.parquet").exists():
+            logging.info(f"Skipping already generated sample {meta['file_name']}")
+            continue
+        metas.append(meta)
+    logging.info(f"{len(metas)} samples to generate ({len(starts) - len(metas)} already complete).")
+
+    # Producer-consumer overlap: download threads prefetch the next few records'
+    # JSOC exports while the process pool works on the current record, keeping
+    # both the network and the CPUs busy.
+    with ProcessPoolExecutor(cores) as executor, ThreadPoolExecutor(download_workers) as dl_pool:
+        meta_iter = iter(metas)
+        in_flight = deque(dl_pool.submit(download_record, meta) for meta in islice(meta_iter, download_workers + 1))
+
+        done_count = 0
+        while in_flight:
+            future = in_flight.popleft()
+            meta, aia_maps, hmi_maps, dl_error = future.result()
+            next_meta = next(meta_iter, None)
+            if next_meta is not None:
+                in_flight.append(dl_pool.submit(download_record, next_meta))
+            done_count += 1
+            print(f" {done_count}/{len(metas)} ".center(70, "!"))
+            noaa_ar = meta["noaa_ar"]
+            end = meta["end"]
+            date = meta["date"]
+            center = meta["center"]
+            before_fls = meta["before_fls"]
+            after_fls = meta["after_fls"]
+            file_name = meta["file_name"]
+            if dl_error is not None:
+                logging.error(f"Download failed for {file_name}: {dl_error}", exc_info=dl_error)
                 continue
-            patch_height = int(config["drms"]["patch_height"]) * u.pix
-            patch_width = int(config["drms"]["patch_width"]) * u.pix
             try:
                 logging.info(file_name)
-                aia_maps, hmi_maps = drms_pipeline(
-                    start_t=start,
-                    end_t=end,
-                    path=config["paths"]["data_folder"],
-                    hmi_keys=config["drms"]["hmi_keys"],
-                    aia_keys=config["drms"]["aia_keys"],
-                    wavelengths=config["drms"]["wavelengths"],
-                    sample=config["drms"]["sample"],
-                    drms_limit=drms_limit,
-                )
                 if len(aia_maps) != expected_frames:
                     logging.info(
                         f"Bad run - expected {expected_frames} frames, got {len(aia_maps)}, skipping."

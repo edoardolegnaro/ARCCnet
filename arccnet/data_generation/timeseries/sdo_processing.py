@@ -5,6 +5,8 @@ import glob
 import logging
 import warnings
 import itertools
+import threading
+import urllib.request
 from random import sample
 from pathlib import Path
 
@@ -772,6 +774,40 @@ def aia_rec_find(qstr, keys, retries, time_add):
     return fsns if fsns else None
 
 
+def _atomic_download(url, dest, retries=3):
+    r"""
+    Download a URL to a destination path atomically (temp file + rename).
+
+    Safe under concurrent download threads: records from the same day share
+    full-disk L1 files, and two threads may try to fetch the same target. The
+    rename is atomic, so a partially written file can never appear at the final
+    path (which also makes interrupted runs safe to resume).
+
+    Parameters
+    ----------
+        url : `str`
+            Source URL.
+        dest : `str`
+            Destination file path.
+        retries : `int`
+            Number of download attempts before giving up.
+    """
+    dest = Path(dest)
+    if dest.exists():
+        return dest
+    tmp = dest.with_name(f".{dest.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    last_error = None
+    for _ in range(retries):
+        try:
+            urllib.request.urlretrieve(url, tmp)
+            os.replace(tmp, dest)
+            return dest
+        except Exception as error:
+            last_error = error
+            tmp.unlink(missing_ok=True)
+    raise RuntimeError(f"Failed to download {url} after {retries} attempts") from last_error
+
+
 def l1_file_save(export, query, path):
     r"""
     Save the exported data as level 1 FITS files.
@@ -811,10 +847,12 @@ def l1_file_save(export, query, path):
     matching_files = [comp_list(file, existing_files) for file in export.urls["filename"]]
     missing_files = [not value for value in matching_files]
     export.urls["filename"] = path_prefix + export.urls["filename"]
-    if len(export.urls[missing_files].index) > 0:
-        total_files = list(export.urls[matching_files].index) + list(export.urls[missing_files].index)
+    missing_rows = export.urls[missing_files]
+    if len(missing_rows.index) > 0:
+        total_files = list(export.urls[matching_files].index) + list(missing_rows.index)
         total_files = export.urls["filename"][total_files]
-        export.download(directory="", index=export.urls[missing_files].index)
+        for url, fname in zip(missing_rows["url"], missing_rows["filename"]):
+            _atomic_download(url, fname)
     else:
         total_files = export.urls["filename"][matching_files]
     return export, total_files.to_list()

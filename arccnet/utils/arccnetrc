@@ -33,6 +33,9 @@ jsoc_email = ${JSOC_EMAIL}
 quality_retries = 3
 ; Maximum concurrent DRMS query/export sessions.
 max_drms_connections = 6
+; Records prefetched by download threads while the current record is processed.
+; Each in-flight record holds ~60 full-disk maps (~2 GB) in memory.
+download_workers = 3
 
 [timeseries]
 ; Observation window length in hours (one frame per hour).
