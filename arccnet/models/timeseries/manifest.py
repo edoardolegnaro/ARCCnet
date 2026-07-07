@@ -1,4 +1,5 @@
 import re
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -6,6 +7,36 @@ import pandas as pd
 from tqdm import tqdm
 
 REQUIRED_TIMESTEPS = 6
+# Maximum spread allowed between channel timestamps within one timestep. HMI frames may
+# be up to ~24 min from the target hour after quality retries; anything beyond this
+# indicates positional misalignment of the CSV rows.
+TIMESTAMP_TOLERANCE_MINUTES = 35
+
+# AIA-style (2011-02-13T183528Z) and HMI-style (20110213_183600_TAI) filename timestamps.
+_AIA_TIME_RE = re.compile(r"(\d{4}-\d{2}-\d{2}T\d{6})Z")
+_HMI_TIME_RE = re.compile(r"(\d{8}_\d{6})_TAI")
+
+
+def parse_time_from_filename(filename):
+    """Parse the observation time embedded in an AIA/HMI product filename, or None."""
+    name = str(filename)
+    match = _AIA_TIME_RE.search(name)
+    if match:
+        return datetime.strptime(match.group(1), "%Y-%m-%dT%H%M%S")
+    match = _HMI_TIME_RE.search(name)
+    if match:
+        return datetime.strptime(match.group(1), "%Y%m%d_%H%M%S")
+    return None
+
+
+def _timestep_alignment_ok(timestep_paths, tolerance_minutes=TIMESTAMP_TOLERANCE_MINUTES):
+    """Check that all channel timestamps within a timestep agree within tolerance."""
+    times = [parse_time_from_filename(Path(p).name) for p in timestep_paths if p is not None]
+    times = [t for t in times if t is not None]
+    if len(times) < 2:
+        return True
+    spread = max(times) - min(times)
+    return spread.total_seconds() <= tolerance_minutes * 60
 
 
 def parse_sample_dirname(dirname):
@@ -76,6 +107,13 @@ def build_sample_record(sample_dir):
             wavelength_groups[wl] = []
         wavelength_groups[wl].append(sample_dir / file_path)
 
+    # Sort each channel's frames chronologically so timestep grouping does not
+    # depend on CSV row order.
+    for wl, files in wavelength_groups.items():
+        keyed = [(parse_time_from_filename(f.name), f) for f in files]
+        if all(key is not None for key, _ in keyed):
+            wavelength_groups[wl] = [f for _, f in sorted(keyed, key=lambda kv: kv[0])]
+
     timestep_count = min(len(wavelength_groups.get(wl, [])) for wl in channel_order)
     if timestep_count == 0:
         print(f"Warning: No valid timesteps for {sample_id}")
@@ -94,6 +132,12 @@ def build_sample_record(sample_dir):
                 timestep_paths.append(str(wavelength_groups[wl][t]))
             else:
                 timestep_paths.append(None)
+
+        # Channels are grouped positionally from the CSV; verify the filenames' embedded
+        # timestamps actually agree so a patched/out-of-order frame cannot silently mix hours.
+        if not _timestep_alignment_ok(timestep_paths):
+            print(f"Warning: misaligned channel timestamps at timestep {t} for {sample_id}, skipping sample")
+            return None
         paths_grid.append(timestep_paths)
 
         if channel_order[0] in wavelength_groups and t < len(wavelength_groups[channel_order[0]]):

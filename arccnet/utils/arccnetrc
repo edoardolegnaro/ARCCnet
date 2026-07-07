@@ -26,6 +26,42 @@ wavelengths = 171, 193, 304, 211, 335, 94, 131
 patch_height = 400
 patch_width = 800
 cores = 4
+; Email registered with JSOC for DRMS exports (http://jsoc.stanford.edu/ajax/register_email.html).
+; Interpolated from the environment; override in a user arccnetrc if preferred.
+jsoc_email = ${JSOC_EMAIL}
+; Number of retries when patching bad-quality records.
+quality_retries = 3
+; Maximum concurrent DRMS query/export sessions.
+max_drms_connections = 6
+
+[timeseries]
+; Observation window length in hours (one frame per hour).
+duration_hours = 6
+; Number of frames per sample (hourly cadence over duration_hours).
+timesteps = 6
+; Longitudinal limit (degrees from central meridian) for accepted ARs.
+long_lim_degrees = 65
+; Year range of SRS records used to build target runs (inclusive).
+; Covers the full span with both SDO data and flare-catalogue coverage.
+year_start = 2010
+year_end = 2022
+; First date with AIA and HMI science data; SRS records before this are skipped.
+sdo_start_date = 2010-05-13
+; End of flare-catalogue coverage. Samples whose 24 h label window extends
+; past this date are dropped (their labels would be silently truncated).
+catalog_end_date = 2023-01-01
+; Catalogue files, relative to {data_folder}/flare_files.
+hek_file = hek_swpc_1996-01-01T00:00:00-2023-01-01T00:00:00_dev.parq
+srs_file = srs_processed_catalog.parq
+; Keep AR-day samples with no C+ flare in the following 24 h (negatives).
+; Must be true to produce a climatologically representative dataset.
+keep_no_flare = True
+; Samples per year (-1 = all).
+samples_per_year = -1
+; Correct AIA images for time-dependent instrument degradation (aiapy).
+; Required for radiometric consistency across the mission; without it the
+; acquisition epoch is imprinted on image intensities.
+aia_degradation_correction = True
 
 
 ;;;;;;;;;;;;;;;;

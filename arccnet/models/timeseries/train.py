@@ -129,8 +129,8 @@ def _resolve_data_root(data_root):
     candidates.extend(
         [
             Path(ts_config.TIMESERIES_ROOT),
-            Path("/ARCAFF/data/timeseries/04_final/data"),
-            Path("/ARCAFF/data/04_final/data"),
+            Path(ts_config.DATA_FOLDER) / "timeseries" / "04_final" / "data",
+            Path(ts_config.DATA_FOLDER) / "04_final" / "data",
         ]
     )
 
@@ -531,7 +531,7 @@ def main(args):
     loss_fn = LOSS_FUNCTION if task_type == "multiclass" else "mse"
     checkpoint_mgr = CheckpointManager(
         root_name=f"timeseries/{task_type}",
-        data_folder="/ARCAFF/data",
+        data_folder=ts_config.DATA_FOLDER,
         model_name="resnet34_transformer",
         loss_function=loss_fn,
     )

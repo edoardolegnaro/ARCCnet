@@ -38,8 +38,29 @@ qry_log = "bad_queries"
 warnings.simplefilter("ignore", RuntimeWarning)
 reproj_log = logging.getLogger("reproject.common")
 reproj_log.setLevel("ERROR")
-os.environ["JSOC_EMAIL"] = "danielgass192@gmail.com"
 data_path = config["paths"]["data_folder"]
+
+
+def get_jsoc_email():
+    r"""
+    Return the JSOC-registered notification email from config or environment.
+
+    Raises
+    ------
+    ValueError
+        If no email is configured via the ``[drms] jsoc_email`` config entry
+        or the ``JSOC_EMAIL`` environment variable.
+    """
+    email = config["drms"].get("jsoc_email", "") or os.environ.get("JSOC_EMAIL", "")
+    email = email.strip()
+    # Unexpanded interpolation placeholder means the env var was not set.
+    if not email or email.startswith("$"):
+        raise ValueError(
+            "No JSOC export email configured. Set the JSOC_EMAIL environment variable "
+            "or 'jsoc_email' in the [drms] section of your arccnetrc "
+            "(register at http://jsoc.stanford.edu/ajax/register_email.html)."
+        )
+    return email
 
 __all__ = [
     "read_data",
@@ -58,28 +79,28 @@ __all__ = [
 ]
 
 
-def bad_query(qry, data_path, name):
+def bad_query(qstr, data_path, name):
     r"""
     Logs bad drms queries to document for future reference.
 
     Parameters
     ----------
-        qry: `str`
-            Drms query which returns an empty dataframe.
+        qstr: `str`
+            Drms query string which returned an empty dataframe.
         data_path : `str`
             Path to arccnet level 04 data.
         name: `str`
             Log filename.
     """
-    logging.warning(f"Bad Query Detected - {qry}")
-    f_name = f"{data_path}/logs/{name}here.txt"
-    if not os.path.exists(f_name):
-        file = open(f_name, "x")
-    file = open(f_name, "+")
-    entries = [row for row in file]
-    if qry not in entries:
-        file.write(qry)
-    file.close()
+    logging.warning(f"Bad Query Detected - {qstr}")
+    log_dir = Path(data_path) / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    f_name = log_dir / f"{name}.txt"
+    entry = f"{qstr}\n"
+    with open(f_name, "a+") as file:
+        file.seek(0)
+        if entry not in file.readlines():
+            file.write(entry)
 
 
 def rand_select(table, years: list, size):
@@ -141,7 +162,17 @@ def rand_select_old(table, size, types: list):
     return comb_sample
 
 
-def read_data(hek_path: str, srs_path: str, size: int, duration: int, long_lim: int, years: list):
+def read_data(
+    hek_path: str,
+    srs_path: str,
+    size: int,
+    duration: int,
+    long_lim: int,
+    years: list,
+    keep_no_flare: bool = True,
+    start_date: str = None,
+    label_end_date: str = None,
+):
     r"""
     Read and process data from a parquet file containing HEK catalogue information regarding flaring events.
 
@@ -165,6 +196,16 @@ def read_data(hek_path: str, srs_path: str, size: int, duration: int, long_lim: 
             Prediction window for training set for prediction. 6 = six hour window containing flare, etc.
         years : `list[int]`
             List of years
+        keep_no_flare : `bool`
+            Keep AR-day samples with no C+ flare in the following 24 hours (negatives). Negatives
+            must be sampled alongside positives (same years, same procedure) to avoid the class
+            label being confounded with acquisition epoch.
+        start_date : `str`, optional
+            Earliest SRS target date to include (e.g. first date with SDO science data).
+            Defaults to January 1st of the earliest requested year.
+        label_end_date : `str`, optional
+            End of flare-catalogue coverage. Samples whose 24 h label window extends past
+            this date are dropped, since their labels would be silently truncated.
 
     Returns
     -------
@@ -181,21 +222,28 @@ def read_data(hek_path: str, srs_path: str, size: int, duration: int, long_lim: 
     table = Table.read(hek_path)
     srs = Table.read(srs_path)
 
+    catalog_start = f"{min(years)}-01-01"
+    if start_date is None:
+        start_date = catalog_start
     noaa_num_df = table[table["noaa_number"] > 0]
     flares = noaa_num_df[noaa_num_df["event_type"] == "FL"]
-    flares = flares[flares["frm_daterun"] > "2011-01-01"]
+    # Keep flares from before the first sample date so the 6 h "before" windows stay complete.
+    flares = flares[flares["frm_daterun"] > catalog_start]
     flares = flares[
         [flare.startswith("C") or flare.startswith("M") or flare.startswith("X") for flare in flares["goes_class"]]
     ]
 
     srs = srs[srs["number"] > 0]
-    srs = srs[srs["target_time"] > "2011-01-01"]
+    srs = srs[srs["target_time"] > start_date]
     srs = srs[abs(srs["longitude"].value) <= long_lim]
     srs = srs[~srs["filtered"]]
 
     srs["srs_date"] = srs["target_time"].value
     srs["srs_date"] = [date.split("T")[0] for date in srs["srs_date"]]
     srs["target_time"] = srs["target_time"] + 30 * u.min
+    if label_end_date is not None:
+        # Drop samples whose 24 h label window extends past catalogue coverage.
+        srs = srs[(Time(srs["target_time"]) + 24 * u.hour) <= Time(label_end_date)]
     srs["run_start_time"] = [(Time(time) - duration * u.hour) for time in srs["target_time"]]
     srs["c_coord"] = [
         SkyCoord(lon * u.deg, lat * u.deg, obstime=t_time, observer="earth", frame=frames.HeliographicStonyhurst)
@@ -216,7 +264,12 @@ def read_data(hek_path: str, srs_path: str, size: int, duration: int, long_lim: 
     ]
     subset = final["number", "magnetic_class", "mcintosh_class", "target_time", "run_start_time", "srs_date", "c_coord"]
 
-    # only keep sample with flares in next 24 hours
+    if keep_no_flare:
+        return subset, flares_before, flares_after
+
+    # Positives only: keep samples with at least one C+ flare in the next 24 hours.
+    # WARNING: generating positives and negatives in separate runs confounds the class
+    # label with acquisition epoch (e.g. AIA degradation state); prefer keep_no_flare=True.
     only_flares = [i for i, fa in enumerate(flares_after) if len(fa[0]) > 0]
 
     return subset[only_flares], [flares_before[i] for i in only_flares], [flares_after[i] for i in only_flares]
@@ -399,7 +452,7 @@ def comp_list(file: str, file_list: list):
     return any(file in name for name in file_list)
 
 
-def match_files(aia_maps, hmi_maps, table):
+def match_files(aia_maps, hmi_maps, table, correction_table=None):
     r"""
     Matches AIA maps with corresponding HMI maps based on the closest time difference.
 
@@ -411,18 +464,19 @@ def match_files(aia_maps, hmi_maps, table):
             List of HMI maps.
         table : `JSOC Response`
             AIA pointing table as provided by JSOC.
+        correction_table : `astropy.table.Table`, optional
+            AIA degradation correction table (aiapy get_correction_table).
 
     Returns
     -------
         packed_files : `list`
-            A list containing named tuples of paired AIA and HMI maps.
+            A list of [aia_map, matched_hmi_map, pointing_table, correction_table] entries.
     """
-    # matched_maps = namedtuple('matched_maps', ['aia_map', 'hmi_map', 'p_table'])
     packed_files = []
     for aia_map in aia_maps:
         t_d = [abs(aia_map.date - hmi_map.date).to_value(u.s) for hmi_map in hmi_maps]
         hmi_match = hmi_maps[t_d.index(min(t_d))]
-        packed_files.append([aia_map, hmi_match, table])
+        packed_files.append([aia_map, hmi_match, table, correction_table])
     return packed_files
 
 
@@ -516,6 +570,7 @@ def hmi_query_export(time_1, time_2, keys: list, sample: int):
             A tuple containing the query results of the hmi mag and ic_no_limbdark (pandas df) and the export data response (drms export object).
     """
     client = drms.Client()
+    retries = int(config["drms"].get("quality_retries", 3))
     duration = round((time_2 - time_1).to_value(u.hour))
     qstr_m_hmi = f"hmi.M_720s[{time_1.value}/{duration}h@{sample}m]{{magnetogram}}"
     hmi_query = client.query(ds=qstr_m_hmi, key=keys)
@@ -525,8 +580,8 @@ def hmi_query_export(time_1, time_2, keys: list, sample: int):
     bad_result = hmi_query[hmi_query.QUALITY != 0]
 
     qstrs_m_hmi = [f"hmi.M_720s[{time}]{{magnetogram}}" for time in bad_result["T_REC"]]
-    hmi_values = [hmi_rec_find(qstr, keys, 3, 720) for qstr in qstrs_m_hmi]
-    patched_num = [*hmi_values]
+    hmi_values = [hmi_rec_find(qstr, keys, retries, 720) for qstr in qstrs_m_hmi]
+    patched_num = [num for num in hmi_values if num is not None]
 
     joined_num = [*good_num, *patched_num]
     joined_num = [str(num) for num in joined_num]
@@ -534,7 +589,7 @@ def hmi_query_export(time_1, time_2, keys: list, sample: int):
 
     hmi_qstr = f"hmi.M_720s[! recnum in ({hmi_num_str}) !]{{magnetogram}}"
     hmi_query_full = client.query(ds=hmi_qstr, key=keys)
-    hmi_result = client.export(hmi_qstr, method="url", protocol="fits", email=os.environ["JSOC_EMAIL"])
+    hmi_result = client.export(hmi_qstr, method="url", protocol="fits", email=get_jsoc_email())
     hmi_result.wait()
     ic_query_full, ic_result = hmi_continuum_export(hmi_query_full, keys)
     return hmi_query_full, hmi_result, ic_query_full, ic_result
@@ -557,15 +612,17 @@ def hmi_continuum_export(hmi_query, keys):
             A tuple containing the query results of the hmi mag and ic_no_limbdark (pandas df) and the export data response (drms export object).
     """
     client = drms.Client()
+    retries = int(config["drms"].get("quality_retries", 3))
     qstrs_ic = [f"hmi.Ic_noLimbDark_720s[{time}]{{continuum}}" for time in hmi_query["T_REC"]]
-    ic_value = [hmi_rec_find(qstr, keys, 3, 12, cont=True) for qstr in qstrs_ic]
-    joined_num = [str(num) for num in ic_value]
+    # Retry step must match the 720 s series cadence; smaller shifts re-query the same record.
+    ic_value = [hmi_rec_find(qstr, keys, retries, 720, cont=True) for qstr in qstrs_ic]
+    joined_num = [str(num) for num in ic_value if num is not None]
     ic_num_str = str(joined_num).strip("[]")
     ic_comb_qstr = f"hmi.Ic_noLimbDark_720s[! recnum in ({ic_num_str}) !]{{continuum}}"
 
     ic_query_full = client.query(ds=ic_comb_qstr, key=keys)
 
-    ic_result = client.export(ic_comb_qstr, method="url", protocol="fits", email=os.environ["JSOC_EMAIL"])
+    ic_result = client.export(ic_comb_qstr, method="url", protocol="fits", email=get_jsoc_email())
     ic_result.wait()
     return ic_query_full, ic_result
 
@@ -588,12 +645,13 @@ def aia_query_export(hmi_query, keys, wavelength):
         aia_query_full, aia_result (tuple): A tuple containing the query result and the export data response.
     """
     client = drms.Client()
+    retries = int(config["drms"].get("quality_retries", 3))
     qstrs_euv = [f"aia.lev1_euv_12s[{time}][{wavelength}]{{image}}" for time in hmi_query["T_REC"]]
     qstrs_uv = [f"aia.lev1_uv_24s[{time}]{[1600, 1700]}{{image}}" for time in hmi_query["T_REC"]]
-    euv_value = [aia_rec_find(qstr, keys, 3, 12) for qstr in qstrs_euv]
-    uv_value = [aia_rec_find(qstr, keys, 2, 24) for qstr in qstrs_uv]
+    euv_value = [aia_rec_find(qstr, keys, retries, 12) for qstr in qstrs_euv]
+    uv_value = [aia_rec_find(qstr, keys, retries, 24) for qstr in qstrs_uv]
     unpacked_aia = list(itertools.chain(euv_value, uv_value))
-    unpacked_aia = [set for set in unpacked_aia if set is not None]
+    unpacked_aia = [fsn_set for fsn_set in unpacked_aia if fsn_set is not None]
     unpacked_aia = list(itertools.chain.from_iterable(unpacked_aia))
     joined_num = [str(num) for num in unpacked_aia]
     aia_num_str = str(joined_num).strip("[]")
@@ -601,7 +659,7 @@ def aia_query_export(hmi_query, keys, wavelength):
 
     aia_query_full = client.query(ds=aia_comb_qstr, key=keys)
 
-    aia_result = client.export(aia_comb_qstr, method="url", protocol="fits", email=os.environ["JSOC_EMAIL"])
+    aia_result = client.export(aia_comb_qstr, method="url", protocol="fits", email=get_jsoc_email())
     aia_result.wait()
     return aia_query_full, aia_result
 
@@ -616,13 +674,16 @@ def hmi_rec_find(qstr, keys, retries, sample, cont=False):
             A query string.
         keys : `list`
             List of keys to query.
-        resample: `int`
+        retries : `int`
+            Number of later records to try when the target record has bad quality.
+        sample: `int`
+            Time shift between retries in seconds (series cadence).
         cont : `bool`
             indicates whether continuum is needed, searches for magnetogram if false.
     Returns
     -------
-        `int`
-            The HMI record number.
+        `int` or `None`
+            The HMI record number, or `None` if no good-quality record was found.
     """
     seg = "{magnetogram}"
     series = "hmi.M_720s"
@@ -630,31 +691,36 @@ def hmi_rec_find(qstr, keys, retries, sample, cont=False):
         seg = "{continuum}"
         series = "hmi.Ic_noLimbDark_720s"
     client = drms.Client()
-    count = 0
     qry = client.query(ds=qstr, key=keys)
     if qry.empty:
-        time = sunpy.time.parse_time(re.search(r"\[(.*?)\]", qstr).group(1))
-        qry["QUALITY"] = [10000]
         logging.warning("Bad Query - HMI")
-        bad_query(qry, data_path, qry_log)
-
+        bad_query(qstr, data_path, qry_log)
+        time = sunpy.time.parse_time(re.search(r"\[(.*?)\]", qstr).group(1)).fits
     else:
-        time = sunpy.time.parse_time(qry["T_REC"].values[0])
-    while qry["QUALITY"].values[0] != 0 and count <= retries:
-        qry = client.query(ds=f"{series}[{time}]" + seg, key=keys)
-        if qry.empty:
-            time = sunpy.time.parse_time(re.search(r"\[(.*?)\]", qstr).group(1))
-            qry["QUALITY"] = [10000]
-            logging.warning("Bad Query - HMI")
-            bad_query(qry, data_path, qry_log)
+        if qry["QUALITY"].values[0] == 0:
+            return qry["*recnum*"].values[0]
+        time = sunpy.time.parse_time(qry["T_REC"].values[0]).fits
+    for _ in range(retries):
         time = change_time(time, sample)
-        count += 1
-    return qry["*recnum*"].values[0]
+        retry_qstr = f"{series}[{time}]" + seg
+        qry = client.query(ds=retry_qstr, key=keys)
+        if qry.empty:
+            logging.warning("Bad Query - HMI")
+            bad_query(retry_qstr, data_path, qry_log)
+            continue
+        if qry["QUALITY"].values[0] == 0:
+            return qry["*recnum*"].values[0]
+    logging.warning(f"No good-quality HMI record within {retries} retries of {qstr}; dropping frame.")
+    return None
 
 
 def aia_rec_find(qstr, keys, retries, time_add):
     r"""
-    Find the AIA record number for a given query string.
+    Find good-quality AIA FSNs for a given query string.
+
+    Quality is checked per returned record (the EUV queries return one record
+    per wavelength), and bad-quality records are retried individually at later
+    times.
 
     Parameters
     ----------
@@ -662,29 +728,48 @@ def aia_rec_find(qstr, keys, retries, time_add):
             A query string.
         keys : `list`
             List of keys to query.
+        retries : `int`
+            Number of later records to try when a record has bad quality.
+        time_add : `int`
+            Time shift between retries in seconds (series cadence).
 
     Returns
     -------
-        `int` :
-            The AIA FSN.
+        `list` or `None`
+            Good-quality AIA FSNs, or `None` if the query returned nothing.
     """
     client = drms.Client()
-    retry = 0
     qry = client.query(ds=qstr, key=keys)
     qstr_head = qstr.split("[")[0]
-    if not qry.empty:
-        time, wvl = qry["T_REC"].values[0][0:-1], qry["WAVELNTH"].values[0]
-        if wvl == "4500":
-            return qry["FSN"].values
-        while qry["QUALITY"].values[0] != 0 and retry < retries:
-            qry = client.query(ds=f"{qstr_head}[{time}][{wvl}]{{image}}", key=keys)
-            time = change_time(time, time_add)
-            retry += 1
-        if qry["QUALITY"].values[0] == 0:
-            return qry["FSN"].values
-    else:
+    if qry.empty:
         logging.warning("Bad Query - AIA")
-        bad_query(qry, data_path, qry_log)
+        bad_query(qstr, data_path, qry_log)
+        return None
+
+    fsns = []
+    for _, row in qry.iterrows():
+        wvl = row["WAVELNTH"]
+        # 4500 has no reliable quality flagging; accept as-is.
+        if row["QUALITY"] == 0 or str(wvl) == "4500":
+            fsns.append(row["FSN"])
+            continue
+        time = row["T_REC"][0:-1]
+        for _ in range(retries):
+            time = change_time(time, time_add)
+            retry_qstr = f"{qstr_head}[{time}][{wvl}]{{image}}"
+            retry_qry = client.query(ds=retry_qstr, key=keys)
+            if retry_qry.empty:
+                logging.warning("Bad Query - AIA")
+                bad_query(retry_qstr, data_path, qry_log)
+                continue
+            if retry_qry["QUALITY"].values[0] == 0:
+                fsns.append(retry_qry["FSN"].values[0])
+                break
+        else:
+            logging.warning(
+                f"No good-quality AIA {wvl} record within {retries} retries of {row['T_REC']}; dropping frame."
+            )
+    return fsns if fsns else None
 
 
 def l1_file_save(export, query, path):
@@ -709,6 +794,11 @@ def l1_file_save(export, query, path):
     path_prefix = []
     export.urls.drop_duplicates(ignore_index=True, inplace=True)
     query.drop_duplicates(ignore_index=True, inplace=True)
+    if len(export.urls) != len(query):
+        raise ValueError(
+            f"DRMS export URL count ({len(export.urls)}) does not match query record count "
+            f"({len(query)}); cannot safely assign download paths."
+        )
     for time, wvl in zip(query["T_REC"], query["WAVELNTH"]):
         time = sunpy.time.parse_time(time).to_value("ymdhms")
         year, month, day = time["year"], time["month"], time["day"]
@@ -730,7 +820,9 @@ def l1_file_save(export, query, path):
     return export, total_files.to_list()
 
 
-def aia_process(aia_map, table, deconv: bool = False, degcorr: bool = False, exnorm: bool = True):
+def aia_process(
+    aia_map, table, deconv: bool = False, degcorr: bool = False, correction_table=None, exnorm: bool = True
+):
     r"""
     Process an AIA map to level 1.5.
 
@@ -743,24 +835,40 @@ def aia_process(aia_map, table, deconv: bool = False, degcorr: bool = False, exn
         deconv : `bool`
             Whether to deconvolve the PSF.
         degcorr : `bool`
-            Whether to correct for degradation.
+            Whether to correct for instrument degradation. Requires ``correction_table``.
+        correction_table : `astropy.table.Table`, optional
+            Degradation correction table as provided by
+            `aiapy.calibrate.util.get_correction_table`; fetch once per run and reuse.
         exnorm : `bool`
             Whether to normalize exposure.
 
     Returns
     -------
         aia_map : `sunpy.map.Map`
-            Processed AIA map.
+            Processed AIA map. The ``DEGCORR`` FITS keyword records whether
+            degradation correction was applied.
     """
     if deconv:
         aia_map = deconvolve(aia_map)
     aia_map = update_pointing(aia_map, pointing_table=table)
     aia_map = register(aia_map)
+    degcorr_applied = False
     if degcorr:
-        aia_map = correct_degradation(aia_map)
+        if correction_table is None:
+            raise ValueError("degcorr=True requires a correction_table (aiapy get_correction_table).")
+        try:
+            aia_map = correct_degradation(aia_map, correction_table=correction_table)
+            degcorr_applied = True
+        except Exception as error:
+            logging.warning(
+                f"Degradation correction failed for {aia_map.meta.get('wavelnth')} A at "
+                f"{aia_map.meta.get('date-obs')}: {error}; frame left uncorrected."
+            )
+    aia_map.meta["degcorr"] = degcorr_applied
     if exnorm:
-        aiad = aia_map.data / aia_map.exposure_time
-        aia_map = sunpy.map.Map(aiad.astype(int), aia_map.fits_header)
+        # Keep float32: int truncation destroys sub-1 DN/s values (94/131 A quiet regions).
+        aiad = (aia_map.data / aia_map.exposure_time).astype(np.float32)
+        aia_map = sunpy.map.Map(aiad, aia_map.meta)
     return aia_map
 
 
@@ -787,6 +895,7 @@ def aia_reproject(aia_map, hmi_map):
     rpr_aia_map.meta["t_rec"] = aia_map.meta["t_rec"]
     rpr_aia_map.meta["instrume"] = aia_map.meta["instrume"]
     rpr_aia_map.meta["fname"] = aia_map.meta["fname"]
+    rpr_aia_map.meta["degcorr"] = aia_map.meta.get("degcorr", False)
     rpr_aia_map.nickname = aia_map.nickname
 
     return rpr_aia_map
@@ -852,9 +961,8 @@ def aia_l2(packed_maps):
     Parameters
     ----------
         packed_maps : `list`
-            List containing the AIA map and its corresponding HMI map.
-        overwrite : `bool`
-            Flag which determines if l2 files are reproduced and overwritten.
+            [aia_map, matched_hmi_map, pointing_table, correction_table] as packed
+            by `match_files`.
 
     Returns
     -------
@@ -862,7 +970,7 @@ def aia_l2(packed_maps):
             Path to the processed AIA map.
     """
     path = config["paths"]["data_folder"]
-    sdo_map, hmi_match, table = packed_maps
+    sdo_map, hmi_match, table, correction_table = packed_maps
     if sdo_map.nickname == "HMI":
         proc_path = hmi_l2(sdo_map)
     else:
@@ -870,10 +978,22 @@ def aia_l2(packed_maps):
         year, month, day = time[0], time[1], time[2]
         map_path = f"{path}/02_intermediate/{year}/{month}/{day}/SDO/{sdo_map.nickname}"
         proc_path = f"{map_path}/02_{sdo_map.meta['fname']}"
-        if not os.path.exists(proc_path):
-            sdo_map = aia_process(sdo_map, table)
+        degcorr = config["timeseries"].getboolean("aia_degradation_correction", fallback=True)
+        stale = False
+        if os.path.exists(proc_path):
+            # Files produced with different calibration settings (e.g. before degradation
+            # correction was enabled) must be reprocessed, not silently reused.
+            try:
+                existing_degcorr = bool(fits.getheader(proc_path, ext=1).get("DEGCORR", False))
+                stale = existing_degcorr != degcorr
+            except Exception:
+                stale = True
+        if stale or not os.path.exists(proc_path):
+            if stale:
+                logging.info(f"Reprocessing stale L2 file (calibration settings changed): {proc_path}")
+            sdo_map = aia_process(sdo_map, table, degcorr=degcorr, correction_table=correction_table)
             sdo_map = aia_reproject(sdo_map, hmi_match)
-            proc_path = l2_file_save(sdo_map, path)
+            proc_path = l2_file_save(sdo_map, path, overwrite=stale)
         # This updates process status for tqdm more effectively.
         sys.stdout.flush()
 
@@ -928,21 +1048,23 @@ def table_match(aia_maps, hmi_maps):
     aia_paths = []
     aia_quality = []
     hmi_paths = []
-    hmi_times = [Time(fits.open(hmi_map)[1].header["date-obs"]) for hmi_map in hmi_maps]
+    hmi_headers = [fits.getheader(hmi_map, ext=1) for hmi_map in hmi_maps]
+    hmi_times = [Time(header["date-obs"]) for header in hmi_headers]
     paired_times = []
     aia_times = []
     hmi_quality = []
 
     for aia_map in aia_maps:
-        date = fits.open(aia_map)[1].header["date-obs"]
+        aia_header = fits.getheader(aia_map, ext=1)
+        date = aia_header["date-obs"]
         t_d = [abs((Time(date) - hmi_time).value) for hmi_time in hmi_times]
-        hmi_match = hmi_maps[t_d.index(min(t_d))]
+        match_idx = t_d.index(min(t_d))
         aia_paths.append(aia_map)
-        hmi_paths.append(hmi_match)
-        paired_times.append(fits.open(hmi_match)[1].header["date-obs"])
-        hmi_quality.append(fits.open(hmi_match)[1].header["quality"])
-        aia_quality.append(fits.open(aia_map)[1].header["quality"])
-        aia_wavelnth.append(fits.open(aia_map)[1].header["wavelnth"])
+        hmi_paths.append(hmi_maps[match_idx])
+        paired_times.append(hmi_headers[match_idx]["date-obs"])
+        hmi_quality.append(hmi_headers[match_idx]["quality"])
+        aia_quality.append(aia_header["quality"])
+        aia_wavelnth.append(aia_header["wavelnth"])
         aia_times.append(date)
     paired_table = Table(
         {
@@ -1017,6 +1139,7 @@ def map_reproject(hmi_origin_wcs, sdo_path, ar_num):
     sdo_rpr.meta["quality"] = sdo_map.meta["quality"]
     sdo_rpr.meta["wavelnth"] = sdo_map.meta["wavelnth"]
     sdo_rpr.meta["date-obs"] = sdo_map.meta["date-obs"]
+    sdo_rpr.meta["degcorr"] = sdo_map.meta.get("degcorr", False)
     if sdo_rpr.dimensions[0].value < int(config["drms"]["patch_width"]):
         sdo_rpr = pad_map(sdo_rpr, config["drms"]["patch_width"])
     save_compressed_map(sdo_rpr, fits_path, hdu_type=CompImageHDU, overwrite=True)

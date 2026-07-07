@@ -2,7 +2,6 @@ import logging
 from time import perf_counter
 from pathlib import Path
 from itertools import repeat
-from collections import namedtuple
 from multiprocessing import Semaphore
 from concurrent.futures import ProcessPoolExecutor
 
@@ -12,6 +11,7 @@ from tqdm import tqdm
 import astropy.units as u
 from astropy import log as astropy_log
 from astropy.table import Table
+from astropy.time import Time
 
 from arccnet import config
 from arccnet.data_generation.timeseries.sdo_processing import (
@@ -32,7 +32,6 @@ if __name__ == "__main__":
 
     ss = perf_counter()
 
-    drms_limit = Semaphore(6)
     # Logging settings here.
     drms_log = logging.getLogger("drms")
     drms_log.setLevel("ERROR")
@@ -41,22 +40,72 @@ if __name__ == "__main__":
     astropy_log.setLevel("ERROR")
     data_path = config["paths"]["data_folder"]
     wavelengths = config["drms"]["wavelengths"]
-    packed_maps = namedtuple("packed_maps", ["hmi_origin", "l2_map"])
+    num_wavelengths = len([wvl for wvl in wavelengths.split(",") if wvl.strip()])
+    cores = int(config["drms"]["cores"])
+    drms_limit = Semaphore(int(config["drms"].get("max_drms_connections", 6)))
+    duration = int(config["timeseries"].get("duration_hours", 6))
+    timesteps = int(config["timeseries"].get("timesteps", 6))
+    long_lim = int(config["timeseries"].get("long_lim_degrees", 65))
+    year_start = int(config["timeseries"].get("year_start", 2010))
+    year_end = int(config["timeseries"].get("year_end", 2022))
+    keep_no_flare = config["timeseries"].getboolean("keep_no_flare", fallback=True)
+    samples_per_year = int(config["timeseries"].get("samples_per_year", -1))
+    sdo_start_date = config["timeseries"].get("sdo_start_date", "2010-05-13")
+    catalog_end_date = config["timeseries"].get("catalog_end_date", "2023-01-01")
+    hek_file = config["timeseries"].get("hek_file", "hek_swpc_1996-01-01T00:00:00-2023-01-01T00:00:00_dev.parq")
+    srs_file = config["timeseries"].get("srs_file", "srs_processed_catalog.parq")
+    # AIA wavelengths plus the HMI continuum frame per timestep.
+    expected_frames = (num_wavelengths + 1) * timesteps
+
     starts, before_fl_tables, after_fl_tables = read_data(
-        hek_path=Path(f"{data_path}/flare_files/hek_swpc_1996-01-01T00:00:00-2023-01-01T00:00:00_dev.parq"),
-        srs_path=Path(f"{data_path}/flare_files/srs_processed_catalog.parq"),
-        # Set size to -1 for all AR's in a year
-        size=-1,
-        duration=6,
-        long_lim=65,
-        # Use these instead of years if generating old flare target data.
-        # types=["F1", "F2", "N1", "N2"],
-        years=list(range(2011, 2023)),
+        hek_path=Path(f"{data_path}/flare_files/{hek_file}"),
+        srs_path=Path(f"{data_path}/flare_files/{srs_file}"),
+        size=samples_per_year,
+        duration=duration,
+        long_lim=long_lim,
+        # Use read_data_old with types=["F1", "F2", "N1", "N2"] to generate old flare target data.
+        years=list(range(year_start, year_end + 1)),
+        keep_no_flare=keep_no_flare,
+        start_date=sdo_start_date,
+        label_end_date=catalog_end_date,
+    )
+    logging.info(
+        f"Generation run: {len(starts)} AR-day samples, {sdo_start_date} to {catalog_end_date}, "
+        f"keep_no_flare={keep_no_flare}, degradation_correction="
+        f"{config['timeseries'].getboolean('aia_degradation_correction', fallback=True)}"
     )
 
-    cores = int(config["drms"]["cores"])
+    # Fetch the AIA pointing table once for the full run span instead of once per record:
+    # it is metadata-only, and per-record fetches add a JSOC round-trip and a failure mode
+    # that previously skipped the whole record.
+    run_start = Time(starts["run_start_time"]).min() - 6 * u.hour
+    run_end = Time(starts["target_time"]).max()
+    pointing_table = None
+    for attempt in range(3):
+        try:
+            pointing_table = calibrate.util.get_pointing_table(source="jsoc", time_range=[run_start, run_end])
+            break
+        except Exception:
+            logging.warning(f"Pointing table fetch failed (attempt {attempt + 1}/3)")
+    if pointing_table is None:
+        raise RuntimeError("Could not fetch AIA pointing table from JSOC; aborting run.")
 
-    with ProcessPoolExecutor(20) as executor:
+    # Degradation correction table: fetched once per run and passed to every AIA frame.
+    correction_table = None
+    if config["timeseries"].getboolean("aia_degradation_correction", fallback=True):
+        for attempt in range(3):
+            try:
+                correction_table = calibrate.util.get_correction_table(source="jsoc")
+                break
+            except Exception:
+                logging.warning(f"Degradation correction table fetch failed (attempt {attempt + 1}/3)")
+        if correction_table is None:
+            raise RuntimeError(
+                "Could not fetch AIA degradation correction table from JSOC; aborting run. "
+                "Set aia_degradation_correction = False in [timeseries] to skip correction."
+            )
+
+    with ProcessPoolExecutor(cores) as executor:
         for rec_num in range(len(starts)):
             print(f" {rec_num}/{len(starts)} ".center(70, "!"))
             record = starts[rec_num]
@@ -65,11 +114,6 @@ if __name__ == "__main__":
             after_fls = after_fl_tables[rec_num]
             b_x, b_m, b_c = before_fls[1]["X"], before_fls[1]["M"], before_fls[1]["C"]
             a_x, a_m, a_c = after_fls[1]["X"], after_fls[1]["M"], after_fls[1]["C"]
-            try:
-                pointing_table = calibrate.util.get_pointing_table(source="jsoc", time_range=[start - 6 * u.hour, end])
-            except Exception:
-                logging.error("Could not fetch pointing table for this run.")
-                continue
             start_split = end.value.split("T")[0]
             file_name = (
                 f"{start_split}_{noaa_ar}_{mag_class}_{mcintosh}_Xb{b_x}_Mb{b_m}_Cb{b_c}_Xa{a_x}_Ma{a_m}_Ca{a_c}"
@@ -88,9 +132,10 @@ if __name__ == "__main__":
                     sample=config["drms"]["sample"],
                     drms_limit=drms_limit,
                 )
-                # WILL NEED TO ADJUST IF USING MORE/LESS THAN 6 TIME STEPS
-                if len(aia_maps) != (60):
-                    logging.info("Bad run - missing frames, skipping.")
+                if len(aia_maps) != expected_frames:
+                    logging.info(
+                        f"Bad run - expected {expected_frames} frames, got {len(aia_maps)}, skipping."
+                    )
                     continue
 
                 hmi_proc = list(
@@ -100,16 +145,9 @@ if __name__ == "__main__":
                     )
                 )
 
-                packed_files = match_files(aia_maps, hmi_maps, pointing_table)
+                packed_files = match_files(aia_maps, hmi_maps, pointing_table, correction_table)
                 aia_proc = tqdm(executor.map(aia_l2, packed_files), total=len(aia_maps), desc="AIA prep")
-                packed_maps = namedtuple("packed_maps", ["hmi_origin", "l2_map", "ar_num"])
                 hmi_origin_patch = crop_map(hmi_proc[0], center, patch_height, patch_width, date)
-                # l2_hmi_packed = ((hmi_origin_patch, hmi_map, noaa_ar, center) for hmi_map in hmi_proc)
-                # l2_aia_packed = ((hmi_origin_patch, aia_map, noaa_ar, center) for aia_map in aia_proc)
-
-                # Went back to tuples because this was failing in a weird way - something to do with pickle and concurrent futures. Left for future debugging.
-                # l2_hmi_packed = [packed_maps(hmi_origin_patch, hmi_map, noaa_ar) for hmi_map in hmi_proc]
-                # l2_aia_packed = [packed_maps(hmi_origin_patch, aia_map, noaa_ar) for aia_map in aia_proc]
 
                 hmi_patch_paths = tqdm(
                     executor.map(map_reproject, repeat(hmi_origin_patch.wcs), hmi_proc, repeat(noaa_ar)),

@@ -9,6 +9,7 @@ from torch.utils.data import Dataset
 from astropy.io import fits
 
 from .config import (
+    DATA_FOLDER,
     NORM_STATS_MAX_PIXELS_PER_IMAGE,
     NORM_STATS_MAX_SAMPLES,
     NORM_STATS_MAX_TIMESTEPS,
@@ -104,8 +105,11 @@ class SDOTimeseriesDataset(Dataset):
                     channels.append(np.zeros(image_shape, dtype=np.float32))
                 else:
                     img = self._load_fits(c_path)
-                    channels.append(img)
-                    has_valid_channel = True
+                    if img is None:
+                        channels.append(np.zeros(image_shape, dtype=np.float32))
+                    else:
+                        channels.append(img)
+                        has_valid_channel = True
             while len(channels) < NUM_CHANNELS:
                 channels.append(np.zeros(image_shape, dtype=np.float32))
             timesteps.append(np.stack(channels, axis=0))
@@ -210,8 +214,8 @@ class SDOTimeseriesDataset(Dataset):
             if candidate.exists():
                 roots.append(candidate)
 
-        # Broader fallback search under /ARCAFF/data for relocated processed archives.
-        data_root = Path("/ARCAFF/data")
+        # Broader fallback search under the data folder for relocated processed archives.
+        data_root = Path(DATA_FOLDER)
         if data_root.exists():
             for pattern in ("*/03_processed", "*/*/03_processed"):
                 for candidate in sorted(data_root.glob(pattern)):
@@ -271,7 +275,7 @@ class SDOTimeseriesDataset(Dataset):
         return None
 
     def _load_fits(self, path):
-        """Load FITS file and return 2D array."""
+        """Load FITS file and return 2D array, or None if the file could not be read."""
         resolved_path = self._resolve_existing_path(path)
         try:
             with fits.open(resolved_path) as hdul:
@@ -291,9 +295,7 @@ class SDOTimeseriesDataset(Dataset):
                 self._missing_file_log_count += 1
                 if self._missing_file_log_count == self._missing_file_log_limit:
                     print("Further FITS load errors suppressed for this dataset instance.")
-            if self.resize:
-                return np.zeros((self.resize[0], self.resize[1]), dtype=np.float32)
-            return np.zeros((400, 800), dtype=np.float32)
+            return None
 
     def _compute_norm_stats(self, max_samples=None, max_timesteps=None, max_pixels_per_image=None):
         """Compute per-channel mean/std using a representative subset of samples and timesteps."""
@@ -327,6 +329,8 @@ class SDOTimeseriesDataset(Dataset):
                 for t_paths in selected_paths:
                     if c < len(t_paths) and t_paths[c] and t_paths[c] != "None":
                         img = self._load_fits(t_paths[c])
+                        if img is None:
+                            continue
                         pixels = img.reshape(-1)
                         if max_pixels_per_image is not None and pixels.size > max_pixels_per_image:
                             sel = rng.choice(pixels.size, max_pixels_per_image, replace=False)
