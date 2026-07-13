@@ -13,7 +13,7 @@ from sunpy.net import attrs as a
 from sunpy.net.attr import AttrOr
 from sunpy.net.dataretriever import QueryResponse, SRSClient
 from sunpy.net.fido_factory import UnifiedResponse
-from sunpy.physics.differential_rotation import diff_rot
+from sunpy.sun.models import differential_rotation
 
 import astropy.units as u
 from astropy.table import MaskedColumn, QTable, join, vstack
@@ -416,6 +416,10 @@ class SWPCCatalog:
 
     @staticmethod
     def _parse_srs(filepath: str) -> tuple[str, bool | QTable]:
+        filepath = Path(filepath)
+        if filepath.is_dir():
+            return filepath, False
+
         expected_colnames = [
             "ID",
             "Number",
@@ -527,7 +531,7 @@ def filter_srs(
 
         # account for differential rotation
         dt = (group.target_time - group.target_time.min()).dt.days << u.day
-        expected_diff_rot = diff_rot(dt, mean_lat, frame_time="synodic")
+        expected_diff_rot = differential_rotation(dt, mean_lat, frame_time="synodic")
         corrected_lon = group.longitude.values * u.deg - expected_diff_rot
         mean_lon = np.mean(corrected_lon)
 

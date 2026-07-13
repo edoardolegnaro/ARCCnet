@@ -13,12 +13,13 @@ Defaults:
   END_DATE   = 2026-07-07T00:00:00
 
 Environment:
-  ARCAFF_DATA_FOLDER  Data root. Defaults to /ARCAFF/data.
-  DATA_ROOT           Alias for ARCAFF_DATA_FOLDER if set.
+  ARCAFF_DATA_FOLDER  Base data folder. Defaults to /ARCAFF/data.
+  RUN_NAME            Dataset folder name under ${ARCAFF_DATA_FOLDER}/timeseries.
+  DATA_ROOT           Exact output root. Overrides ARCAFF_DATA_FOLDER/RUN_NAME.
 
 Output:
-  ${ARCAFF_DATA_FOLDER}/03_processed/metadata/noaa_srs/srs_processed_catalog.parq
-  ${ARCAFF_DATA_FOLDER}/flare_files/srs_processed_catalog.parq -> ../03_processed/metadata/noaa_srs/srs_processed_catalog.parq
+  ${DATA_ROOT}/03_processed/metadata/noaa_srs/srs_processed_catalog.parq
+  ${DATA_ROOT}/flare_files/srs_processed_catalog.parq -> ../03_processed/metadata/noaa_srs/srs_processed_catalog.parq
 EOF
 }
 
@@ -32,7 +33,18 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 START_DATE="${1:-2010-05-13T00:00:00}"
 END_DATE="${2:-2026-07-07T00:00:00}"
-DATA_DIR="${DATA_ROOT:-${ARCAFF_DATA_FOLDER:-/ARCAFF/data}}"
+BASE_DATA_DIR="${ARCAFF_DATA_FOLDER:-/ARCAFF/data}"
+
+date_tag() {
+    local value="${1%%T*}"
+    value="${value//-/}"
+    echo "${value}"
+}
+
+START_TAG="$(date_tag "${START_DATE}")"
+END_TAG="$(date_tag "${END_DATE}")"
+RUN_NAME="${RUN_NAME:-arcaff-timeseries-${START_TAG}-${END_TAG}}"
+DATA_DIR="${DATA_ROOT:-${BASE_DATA_DIR}/timeseries/${RUN_NAME}}"
 
 export ARCAFF_DATA_FOLDER="${DATA_DIR}"
 

@@ -501,6 +501,7 @@ def add_fnames(maps, paths):
     named_maps = []
     for map, fname in zip(maps, paths):
         map.meta["fname"] = Path(fname).name
+        map._arcaff_raw_path = str(Path(fname))
         named_maps.append(map)
     return named_maps
 
