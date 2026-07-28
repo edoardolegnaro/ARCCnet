@@ -27,8 +27,9 @@ patch_height = 400
 patch_width = 800
 cores = 4
 ; Email registered with JSOC for DRMS exports (http://jsoc.stanford.edu/ajax/register_email.html).
-; Interpolated from the environment; override in a user arccnetrc if preferred.
-jsoc_email = ${JSOC_EMAIL}
+; Leave blank to read JSOC_EMAIL from the environment at runtime, or override
+; this value in a user arccnetrc.
+jsoc_email =
 ; Number of retries when patching bad-quality records.
 quality_retries = 3
 ; Maximum concurrent DRMS query/export sessions.
