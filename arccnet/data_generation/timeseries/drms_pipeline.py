@@ -1,15 +1,15 @@
 import csv
-import fcntl
 import json
+import fcntl
 import hashlib
 import logging
-from time import perf_counter, sleep
+from time import sleep, perf_counter
 from pathlib import Path
+from datetime import UTC, datetime
 from itertools import islice, repeat
 from collections import deque
 from multiprocessing import Semaphore
-from datetime import datetime, timezone
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 
 import sunpy.map
 from aiapy import calibrate
@@ -34,6 +34,8 @@ from arccnet.data_generation.timeseries.sdo_processing import (
     table_match,
     vid_match,
 )
+
+__all__ = []
 
 
 def get_pointing_table_chunked(run_start, run_end, chunk_days=180, attempts=3):
@@ -63,7 +65,9 @@ def get_pointing_table_chunked(run_start, run_end, chunk_days=180, attempts=3):
                 )
 
         if table is None:
-            raise RuntimeError(f"Could not fetch AIA pointing table from JSOC for {chunk_start.isot} to {chunk_end.isot}")
+            raise RuntimeError(
+                f"Could not fetch AIA pointing table from JSOC for {chunk_start.isot} to {chunk_end.isot}"
+            )
 
         if len(table) > 0:
             tables.append(table)
@@ -102,7 +106,7 @@ def append_status_log(status_path, meta, status, expected_frames="", observed_fr
         "error",
     ]
     row = {
-        "logged_at_utc": datetime.now(timezone.utc).isoformat(),
+        "logged_at_utc": datetime.now(UTC).isoformat(),
         "sample_id": meta["file_name"],
         "noaa_ar": meta["noaa_ar"],
         "run_start_time": getattr(meta["start"], "isot", str(meta["start"])),
@@ -183,7 +187,13 @@ def manifest_path(data_path, group, sample, wavelengths, hmi_keys, aia_keys):
     digest = hashlib.sha1(cache_key.encode("utf-8")).hexdigest()[:16]
     start_tag = start.replace("-", "").replace(":", "").replace(".", "")
     end_tag = end.replace("-", "").replace(":", "").replace(".", "")
-    return Path(data_path) / "02_intermediate" / "metadata" / "timeseries_manifests" / f"{start_tag}_{end_tag}_{digest}.json"
+    return (
+        Path(data_path)
+        / "02_intermediate"
+        / "metadata"
+        / "timeseries_manifests"
+        / f"{start_tag}_{end_tag}_{digest}.json"
+    )
 
 
 def map_paths(maps):
@@ -236,7 +246,7 @@ def write_group_manifest(manifest, group, aia_maps, hmi_maps, sample, wavelength
         return
     manifest.parent.mkdir(parents=True, exist_ok=True)
     payload = {
-        "created_at_utc": datetime.now(timezone.utc).isoformat(),
+        "created_at_utc": datetime.now(UTC).isoformat(),
         "start": Time(group["start"]).isot,
         "end": Time(group["end"]).isot,
         "sample": str(sample),
@@ -244,15 +254,13 @@ def write_group_manifest(manifest, group, aia_maps, hmi_maps, sample, wavelength
         "image_paths": image_paths,
         "hmi_paths": hmi_paths,
     }
-    tmp = manifest.with_name(f".{manifest.name}.{datetime.now(timezone.utc).timestamp()}.tmp")
+    tmp = manifest.with_name(f".{manifest.name}.{datetime.now(UTC).timestamp()}.tmp")
     with tmp.open("w") as handle:
         json.dump(payload, handle, indent=2)
     tmp.replace(manifest)
 
 
 if __name__ == "__main__":
-    __all__ = []
-
     ss = perf_counter()
 
     # Logging settings here.
@@ -386,7 +394,9 @@ if __name__ == "__main__":
                     drms_limit=drms_limit,
                 )
                 if use_time_window_manifest:
-                    write_group_manifest(group_manifest, group, aia_maps, hmi_maps, config["drms"]["sample"], wavelengths)
+                    write_group_manifest(
+                        group_manifest, group, aia_maps, hmi_maps, config["drms"]["sample"], wavelengths
+                    )
                 return group, aia_maps, hmi_maps, None
             except Exception as error:
                 if is_jsoc_pending_export_error(error) and attempt < jsoc_pending_retries:
@@ -428,6 +438,7 @@ if __name__ == "__main__":
     # mode, all AR samples with the same acquisition window reuse one JSOC
     # export/download and one set of full-disk L2 files.
     with ProcessPoolExecutor(cores) as executor, ThreadPoolExecutor(download_workers) as dl_pool:
+
         def process_sample(meta, hmi_proc, aia_proc):
             """Crop, reproject, and package one AR sample from shared L2 files."""
             if resume and sample_complete(final_root, meta):
@@ -510,9 +521,7 @@ if __name__ == "__main__":
             done_groups += 1
             group_size = len(group["metas"])
             print(
-                f" group {done_groups}/{len(groups)} samples {done_samples + group_size}/{len(metas)} ".center(
-                    70, "!"
-                )
+                f" group {done_groups}/{len(groups)} samples {done_samples + group_size}/{len(metas)} ".center(70, "!")
             )
             if dl_error is not None:
                 logging.error("Download failed for %s: %s", group_label(group), dl_error)
@@ -564,7 +573,9 @@ if __name__ == "__main__":
             except Exception as error:
                 logging.error(f"Shared processing failed for {group_label(group)}", exc_info=True)
                 for meta in group["metas"]:
-                    append_status_log(status_log, meta, "processing_failed", expected_frames=expected_frames, error=error)
+                    append_status_log(
+                        status_log, meta, "processing_failed", expected_frames=expected_frames, error=error
+                    )
                     done_samples += 1
                 continue
             finally:
@@ -575,7 +586,9 @@ if __name__ == "__main__":
                     process_sample(meta, hmi_proc, aia_proc)
                 except Exception as error:
                     logging.error(error, exc_info=True)
-                    append_status_log(status_log, meta, "processing_failed", expected_frames=expected_frames, error=error)
+                    append_status_log(
+                        status_log, meta, "processing_failed", expected_frames=expected_frames, error=error
+                    )
                 finally:
                     done_samples += 1
 
